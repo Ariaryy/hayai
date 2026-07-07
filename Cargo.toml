@@ -2,6 +2,7 @@
 name = "hayai"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 # Pinned to the exact rev gpui-component (0.5.x) itself depends on, so our

@@ -23,6 +23,22 @@ use crate::plugins::PluginRegistry;
 const LAUNCHER_WIDTH: f32 = 720.0;
 const LAUNCHER_HEIGHT: f32 = 400.0;
 
+/// Run a query through the delegate, then reset `ListState`'s own selection
+/// to the first row. `ListState::render_list_item` reads its *own*
+/// `selected_index` (not the delegate's copy) to decide row highlighting, so
+/// without this every fresh result set (a new query, a reopen, or a recents
+/// re-rank) renders with nothing highlighted until an arrow key is pressed.
+fn perform_search_and_select_first(
+    list: &mut ListState<ResultListDelegate>,
+    query: &str,
+    window: &mut Window,
+    cx: &mut Context<ListState<ResultListDelegate>>,
+) {
+    let _ = list.delegate_mut().perform_search(query, window, cx);
+    let ix = (list.delegate().items_count(0, cx) > 0).then(IndexPath::default);
+    list.set_selected_index(ix, window, cx);
+}
+
 #[derive(Clone)]
 pub struct LauncherGlobal {
     state: Rc<RefCell<LauncherState>>,
@@ -67,18 +83,26 @@ impl LauncherState {
         {
             let shown = handle
                 .update(cx, |_, window, cx| {
-                    // Win32 focus first (this re-shows the hidden window via SW_SHOW and
-                    // calls SetForegroundWindow etc.), then GPUI focus. Reversed order
-                    // would have GPUI's WM_SETFOCUS handler clobber our focus state.
-                    native::focus_launcher_window(window);
+                    // Reset the query and rerun the search (picks up any recents
+                    // reordering from apps launched since the window was last hidden)
+                    // *before* the Win32 show below. The window is still hidden here,
+                    // so GPUI paints the final, reordered frame while off-screen —
+                    // doing this after ShowWindow would let the stale frame flash on
+                    // screen for one frame before the reorder lands.
+                    //
                     // `InputState::set_value` is a programmatic change and does not
                     // itself emit `InputEvent::Change`, so the results must be reset
                     // explicitly here too — otherwise the box goes blank but the
                     // previous query's results stay on screen.
                     search_input.update(cx, |input, cx| input.set_value("", window, cx));
                     list.update(cx, |list, cx| {
-                        let _ = list.delegate_mut().perform_search("", window, cx);
+                        perform_search_and_select_first(list, "", window, cx);
                     });
+                    // Win32 focus next (this re-shows the hidden window via SW_SHOW and
+                    // calls SetForegroundWindow etc.), then GPUI focus. Reversed order
+                    // (GPUI focus before Win32 focus) would have GPUI's WM_SETFOCUS
+                    // handler clobber our focus state.
+                    native::focus_launcher_window(window);
                     search_input.update(cx, |input, cx| input.focus(window, cx));
                 })
                 .is_ok();
@@ -120,6 +144,10 @@ impl LauncherState {
                     let list = cx.new(|cx| {
                         ListState::new(ResultListDelegate::new(registry, catalog), window, cx)
                             .searchable(false)
+                    });
+                    list.update(cx, |list, cx| {
+                        let ix = (list.delegate().items_count(0, cx) > 0).then(IndexPath::default);
+                        list.set_selected_index(ix, window, cx);
                     });
                     let search_input = cx.new(|cx| {
                         InputState::new(window, cx)
@@ -187,7 +215,7 @@ impl LauncherState {
         let _ = handle.update(cx, |_, window, cx| {
             let query = search_input.read(cx).value().to_string();
             list.update(cx, |list, cx| {
-                let _ = list.delegate_mut().perform_search(&query, window, cx);
+                perform_search_and_select_first(list, &query, window, cx);
             });
         });
     }
@@ -287,7 +315,7 @@ impl LauncherRoot {
             InputEvent::Change => {
                 let query = input.read(cx).value().to_string();
                 self.list.update(cx, |list, cx| {
-                    let _ = list.delegate_mut().perform_search(&query, window, cx);
+                    perform_search_and_select_first(list, &query, window, cx);
                 });
             }
             InputEvent::PressEnter { .. } => {
