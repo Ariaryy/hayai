@@ -184,21 +184,24 @@ impl Catalog {
         self.icons.insert(path, IconCache::Ready(icon));
     }
 
-    /// Launch the app at `index` and record it as most-recent.
-    pub fn launch(&mut self, index: usize) {
-        let Some(app) = self.apps.get(index) else {
-            return;
-        };
-        let path = app.path.clone();
-        native::launch_path(&path);
-        self.record_recent(path);
-    }
-
-    fn record_recent(&mut self, path: PathBuf) {
+    /// Record `index`'s app as most-recently-launched and hand back what the
+    /// caller needs to finish the launch off the UI thread: the launch path
+    /// and the serialized recents file contents. The actual ShellExecuteW
+    /// call and the recents write are too slow for the UI thread (they held
+    /// the window open after Enter), so the caller runs them via
+    /// `background_spawn`.
+    pub fn mark_launched(&mut self, index: usize) -> Option<(PathBuf, String)> {
+        let path = self.apps.get(index)?.path.clone();
         self.recents.retain(|existing| existing != &path);
-        self.recents.insert(0, path);
+        self.recents.insert(0, path.clone());
         self.recents.truncate(MAX_RECENTS);
-        self.save_recents();
+        let serialized = self
+            .recents
+            .iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect::<Vec<_>>()
+            .join("\n");
+        Some((path, serialized))
     }
 
     fn load_recents(&mut self) {
@@ -215,21 +218,18 @@ impl Catalog {
         }
     }
 
-    fn save_recents(&self) {
-        let Some(file) = recents_file() else {
-            return;
-        };
-        if let Some(parent) = file.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let contents = self
-            .recents
-            .iter()
-            .map(|path| path.to_string_lossy().into_owned())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let _ = std::fs::write(&file, contents);
+}
+
+/// Write pre-serialized recents contents to disk. Free function on purpose:
+/// runs on the background pool, must not touch the (non-Send) catalog.
+pub fn write_recents_file(contents: &str) {
+    let Some(file) = recents_file() else {
+        return;
+    };
+    if let Some(parent) = file.parent() {
+        let _ = std::fs::create_dir_all(parent);
     }
+    let _ = std::fs::write(&file, contents);
 }
 
 /// Scan Start Menu shortcuts + `shell:AppsFolder` into a fresh app list.

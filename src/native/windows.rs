@@ -139,6 +139,11 @@ pub fn focus_launcher_window(window: &gpui::Window) {
 pub fn launch_path(path: &Path) {
     let file = wide_null(&path.to_string_lossy());
     unsafe {
+        // Now called from gpui's background pool: ShellExecuteW wants COM
+        // initialized on its calling thread (per its docs); repeat calls on
+        // an already-initialized thread are harmless, same pattern as
+        // resolve_shortcut_info above.
+        let _ = CoInitializeEx(null(), COINIT_APARTMENTTHREADED as u32);
         ShellExecuteW(
             null_mut_hwnd(),
             null(),

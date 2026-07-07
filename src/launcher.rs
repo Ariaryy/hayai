@@ -467,12 +467,22 @@ impl ListDelegate for AppListDelegate {
     }
 
     fn confirm(&mut self, _secondary: bool, window: &mut Window, cx: &mut Context<ListState<Self>>) {
-        if let Some(ix) = self.selected_index
-            && let Some(&index) = self.results.get(ix.row)
-        {
-            self.catalog.borrow_mut().launch(index);
-        }
+        // Bookkeeping first (cheap, in-memory), then hide the window
+        // *immediately* — ShellExecuteW can take hundreds of ms and must not
+        // hold the launcher on screen after Enter. Both the shell call and
+        // the recents write happen on the background pool.
+        let launch = self
+            .selected_index
+            .and_then(|ix| self.results.get(ix.row).copied())
+            .and_then(|index| self.catalog.borrow_mut().mark_launched(index));
         LauncherState::dismiss(window, cx);
+        if let Some((path, recents)) = launch {
+            cx.background_spawn(async move {
+                native::launch_path(&path);
+                crate::apps::write_recents_file(&recents);
+            })
+            .detach();
+        }
     }
 
     fn cancel(&mut self, window: &mut Window, cx: &mut Context<ListState<Self>>) {
