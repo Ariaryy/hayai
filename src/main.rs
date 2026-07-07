@@ -6,105 +6,79 @@ mod launcher;
 mod native;
 mod plugins;
 
-use std::sync::mpsc;
-use std::time::Duration;
-
-use gpui::{App, Application, KeyBinding, Timer, actions};
+use futures::StreamExt;
+use gpui::{App, rgb};
+use gpui_component::{Theme, ThemeMode, ThemeTokens};
 use apps::Catalog;
 use launcher::{LauncherGlobal, LauncherState};
 use native::{NativeCommand, NativeRuntime};
 
-actions!(
-    hayai,
-    [
-        Backspace,
-        DeleteWordLeft,
-        CloseLauncher,
-        SelectNext,
-        SelectPrev,
-        Activate,
-        SelectAll,
-        Copy,
-        Cut,
-        Paste,
-        MoveLeft,
-        MoveRight,
-        MoveWordLeft,
-        MoveWordRight,
-        SelectLeft,
-        SelectRight,
-        SelectWordLeft,
-        SelectWordRight,
-    ]
-);
-
 fn main() {
-    let (native_tx, native_rx) = mpsc::channel();
+    let (native_tx, native_rx) = futures::channel::mpsc::unbounded();
     let native_runtime = NativeRuntime::start(native_tx);
 
-    Application::new().run(move |cx: &mut App| {
+    gpui_platform::application().run(move |cx: &mut App| {
+        // Must be called before using any gpui-component features.
+        gpui_component::init(cx);
+        Theme::change(ThemeMode::Dark, None, cx);
+        apply_raycast_theme(cx);
+
         LauncherState::install(cx);
         // Scan the Start Menu up front so the first open is instant; icons are
         // still decoded lazily on render.
         Catalog::install(cx);
 
-        // `escape` dispatches `CloseLauncher`, which the focused `LauncherView`
-        // handles via its `on_action(Self::close)` listener. We intentionally do
-        // NOT register a global `cx.on_action` handler for it: that handler would
-        // run with a bare `&mut App` and re-enter `handle.update`, which fails
-        // while the window is mid-update (see `LauncherState::dismiss`).
-        // All bindings are scoped to the "Launcher" key context so they only
-        // fire while the launcher is focused.
-        cx.bind_keys([
-            KeyBinding::new("backspace", Backspace, Some("Launcher")),
-            KeyBinding::new("escape", CloseLauncher, Some("Launcher")),
-            KeyBinding::new("down", SelectNext, Some("Launcher")),
-            KeyBinding::new("up", SelectPrev, Some("Launcher")),
-            KeyBinding::new("enter", Activate, Some("Launcher")),
-            KeyBinding::new("ctrl-a", SelectAll, Some("Launcher")),
-            KeyBinding::new("ctrl-c", Copy, Some("Launcher")),
-            KeyBinding::new("ctrl-x", Cut, Some("Launcher")),
-            KeyBinding::new("ctrl-v", Paste, Some("Launcher")),
-            KeyBinding::new("ctrl-backspace", DeleteWordLeft, Some("Launcher")),
-            KeyBinding::new("left", MoveLeft, Some("Launcher")),
-            KeyBinding::new("right", MoveRight, Some("Launcher")),
-            KeyBinding::new("shift-left", SelectLeft, Some("Launcher")),
-            KeyBinding::new("shift-right", SelectRight, Some("Launcher")),
-            KeyBinding::new("ctrl-left", MoveWordLeft, Some("Launcher")),
-            KeyBinding::new("ctrl-right", MoveWordRight, Some("Launcher")),
-            KeyBinding::new("ctrl-shift-left", SelectWordLeft, Some("Launcher")),
-            KeyBinding::new("ctrl-shift-right", SelectWordRight, Some("Launcher")),
-        ]);
-
-        poll_native_commands(cx, native_rx, native_runtime);
+        drive_native_commands(cx, native_rx, native_runtime);
     });
 }
 
-fn poll_native_commands(
+/// Override gpui-component's default (blue-accented) dark theme with a
+/// neutral, Raycast-like grey palette — in particular, the selected-row
+/// highlight and its border both become the same grey so there's no blue
+/// outline on selection.
+fn apply_raycast_theme(cx: &mut App) {
+    let theme = Theme::global_mut(cx);
+
+    let surface = rgb(0x2f2f34).into();
+    theme.background = rgb(0x1c1c1e).into();
+    theme.foreground = rgb(0xf2f2f2).into();
+    theme.border = rgb(0x343437).into();
+    theme.muted_foreground = rgb(0x9a9a9e).into();
+    theme.accent = surface;
+    theme.list_active = surface;
+    theme.list_active_border = surface;
+    theme.list_hover = rgb(0x27272a).into();
+    theme.list.active_highlight = true;
+
+    // `tokens` is a derived snapshot of `colors` for hot paths (e.g. the
+    // ListItem hover fill reads `tokens.list_hover`, not `colors.list_hover`
+    // directly), so it must be regenerated after mutating colors above.
+    theme.tokens = ThemeTokens::from(&theme.colors);
+}
+
+fn drive_native_commands(
     cx: &mut App,
-    native_rx: mpsc::Receiver<NativeCommand>,
+    mut native_rx: futures::channel::mpsc::UnboundedReceiver<NativeCommand>,
     native_runtime: NativeRuntime,
 ) {
     cx.spawn(async move |cx| {
         let _native_runtime = native_runtime;
 
-        loop {
-            while let Ok(command) = native_rx.try_recv() {
-                match command {
-                    NativeCommand::ToggleLauncher => {
-                        let _ = cx.update(|cx| {
-                            let launcher = cx.global::<LauncherGlobal>().clone_handle();
-                            launcher.borrow_mut().toggle(cx);
-                        });
-                    }
-                    NativeCommand::Quit => {
-                        let _ = cx.update(|cx| cx.quit());
-                        return;
-                    }
+        // Wakes only when the native thread actually sends a command — no
+        // periodic polling. Ends when the native thread (sender) goes away.
+        while let Some(command) = native_rx.next().await {
+            match command {
+                NativeCommand::ToggleLauncher => {
+                    let _ = cx.update(|cx| {
+                        let launcher = cx.global::<LauncherGlobal>().clone_handle();
+                        launcher.borrow_mut().toggle(cx);
+                    });
+                }
+                NativeCommand::Quit => {
+                    let _ = cx.update(|cx| cx.quit());
+                    return;
                 }
             }
-
-            Timer::after(Duration::from_millis(40)).await;
         }
     })
     .detach();

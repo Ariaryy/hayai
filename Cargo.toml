@@ -4,7 +4,21 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-gpui = "0.2.2"
+# Pinned to the exact rev gpui-component (0.5.x) itself depends on, so our
+# `gpui` and gpui-component's internal `gpui` resolve to the identical crate
+# instead of two incompatible copies. Bump deliberately, in lockstep with
+# gpui-component, not via `cargo update`.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee39d381ac101b7cf49d3d22451ac1093fe", features = [
+    "font-kit",
+    "runtime_shaders",
+] }
+gpui-component = { git = "https://github.com/longbridge/gpui-component" }
+anyhow = "1"
+# Only the mpsc channel + StreamExt are used, to wake the GPUI side when the
+# native thread sends a command (replaces a 40ms poll loop). Already in the
+# dependency tree via gpui, so this adds no new compiled code.
+futures = "0.3"
 # Only the buffer/frame types are used (to feed BGRA icon pixels into GPUI's
 # RenderImage); no decoders needed, so keep default features off to stay lean.
 image = { version = "0.25", default-features = false }

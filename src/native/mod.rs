@@ -28,7 +28,7 @@ pub struct NativeRuntime;
 
 #[cfg(not(windows))]
 impl NativeRuntime {
-    pub fn start(_sender: std::sync::mpsc::Sender<NativeCommand>) -> Self {
+    pub fn start(_sender: futures::channel::mpsc::UnboundedSender<NativeCommand>) -> Self {
         eprintln!(
             "Hayai native tray and global hotkey support is currently implemented on Windows."
         );

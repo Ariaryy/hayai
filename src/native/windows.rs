@@ -1,8 +1,9 @@
 use std::io;
 use std::ptr::{null, null_mut};
-use std::sync::mpsc::Sender;
-use std::sync::{Mutex, OnceLock};
+use std::sync::OnceLock;
 use std::thread;
+
+use futures::channel::mpsc::UnboundedSender;
 
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
@@ -45,14 +46,17 @@ const HOTKEY_ID: i32 = 1;
 const TRAY_ICON_ID: u32 = 1;
 const WM_TRAY_ICON: u32 = WM_APP + 1;
 
-static COMMAND_SENDER: OnceLock<Mutex<Sender<NativeCommand>>> = OnceLock::new();
+// `UnboundedSender` is `Sync` for `Send` payloads and `unbounded_send` takes
+// `&self` and never blocks, so no `Mutex` is needed — the send must not block
+// the Win32 message loop.
+static COMMAND_SENDER: OnceLock<UnboundedSender<NativeCommand>> = OnceLock::new();
 
 pub struct NativeRuntime {
     thread: Option<thread::JoinHandle<()>>,
 }
 
 impl NativeRuntime {
-    pub fn start(sender: Sender<NativeCommand>) -> Self {
+    pub fn start(sender: UnboundedSender<NativeCommand>) -> Self {
         let thread = thread::spawn(move || {
             if let Err(error) = run_message_window(sender) {
                 eprintln!("Failed to start native Windows runtime: {error}");
@@ -659,8 +663,8 @@ unsafe fn hicon_to_bgra(hicon: windows_sys::Win32::UI::WindowsAndMessaging::HICO
     result
 }
 
-fn run_message_window(sender: Sender<NativeCommand>) -> io::Result<()> {
-    let _ = COMMAND_SENDER.set(Mutex::new(sender));
+fn run_message_window(sender: UnboundedSender<NativeCommand>) -> io::Result<()> {
+    let _ = COMMAND_SENDER.set(sender);
 
     let class_name = wide_null("HayaiNativeMessageWindow");
     let window_name = wide_null("Hayai");
@@ -754,7 +758,7 @@ fn register_hotkey(hwnd: HWND) -> io::Result<()> {
 
 fn send(command: NativeCommand) {
     if let Some(sender) = COMMAND_SENDER.get() {
-        let _ = sender.lock().map(|sender| sender.send(command));
+        let _ = sender.unbounded_send(command);
     }
 }
 
