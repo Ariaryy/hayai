@@ -32,13 +32,15 @@ use windows_sys::Win32::UI::Shell::{
     SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_NORMALDISPLAY, Shell_NotifyIconW, ShellExecuteW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    AllowSetForegroundWindow, BringWindowToTop, CreateWindowExW, DefWindowProcW, DestroyIcon,
-    DestroyWindow, DispatchMessageW, GWL_EXSTYLE, GetCursorPos, GetIconInfo, GetMessageW,
-    GetWindowLongPtrW, GetWindowRect, HWND_MESSAGE, HWND_TOPMOST, ICONINFO, IDI_APPLICATION,
-    LoadIconW, MSG, PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW, SW_SHOWNORMAL,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, WM_APP, WM_DESTROY, WM_HOTKEY,
-    WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
+    AllowSetForegroundWindow, AppendMenuW, BringWindowToTop, CreatePopupMenu, CreateWindowExW,
+    DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GWL_EXSTYLE,
+    GetCursorPos, GetIconInfo, GetMessageW, GetWindowLongPtrW, GetWindowRect, HWND_MESSAGE,
+    HWND_TOPMOST, ICONINFO, IDI_APPLICATION, LoadIconW, MF_STRING, MSG, PostMessageW,
+    PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+    ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP,
+    WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_EX_APPWINDOW,
+    WS_EX_TOOLWINDOW, WS_OVERLAPPED,
 };
 
 use super::{IconImage, NativeCommand};
@@ -169,6 +171,42 @@ pub fn focus_launcher_window(window: &gpui::Window) {
             SetActiveWindow(hwnd);
             SetFocus(hwnd);
         }
+    }
+}
+
+const TRAY_MENU_TOGGLE: usize = 1;
+const TRAY_MENU_QUIT: usize = 2;
+
+/// Show the tray icon's right-click context menu and return the chosen
+/// command id (0 if dismissed without a selection). `PostMessageW(WM_NULL)`
+/// after `TrackPopupMenu` is the documented workaround for the menu failing
+/// to dismiss when the click lands outside it.
+unsafe fn show_tray_menu(hwnd: HWND) -> u32 {
+    unsafe {
+        let menu = CreatePopupMenu();
+        if menu.is_null() {
+            return 0;
+        }
+        let toggle_label = wide_null("Toggle Hayai");
+        let quit_label = wide_null("Quit");
+        AppendMenuW(menu, MF_STRING, TRAY_MENU_TOGGLE, toggle_label.as_ptr());
+        AppendMenuW(menu, MF_STRING, TRAY_MENU_QUIT, quit_label.as_ptr());
+
+        let mut cursor = POINT { x: 0, y: 0 };
+        GetCursorPos(&mut cursor);
+        SetForegroundWindow(hwnd);
+        let chosen = TrackPopupMenu(
+            menu,
+            TPM_RETURNCMD | TPM_RIGHTBUTTON,
+            cursor.x,
+            cursor.y,
+            0,
+            hwnd,
+            null(),
+        );
+        PostMessageW(hwnd, WM_NULL, 0, 0);
+        DestroyMenu(menu);
+        chosen as u32
     }
 }
 
@@ -909,12 +947,16 @@ unsafe extern "system" fn window_proc(
         WM_TRAY_ICON => {
             match lparam as u32 {
                 WM_LBUTTONUP => send(NativeCommand::ToggleLauncher),
-                WM_RBUTTONUP => {
-                    send(NativeCommand::Quit);
-                    unsafe {
-                        DestroyWindow(hwnd);
+                WM_RBUTTONUP => match unsafe { show_tray_menu(hwnd) } as usize {
+                    TRAY_MENU_TOGGLE => send(NativeCommand::ToggleLauncher),
+                    TRAY_MENU_QUIT => {
+                        send(NativeCommand::Quit);
+                        unsafe {
+                            DestroyWindow(hwnd);
+                        }
                     }
-                }
+                    _ => {}
+                },
                 _ => {}
             }
             0
