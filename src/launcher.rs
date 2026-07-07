@@ -1,25 +1,22 @@
 use std::cell::RefCell;
-use std::ops::Range;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyWindowHandle, App, Bounds, ClipboardItem, Context, Element, ElementId, ElementInputHandler,
-    Entity, EntityInputHandler, FocusHandle, Focusable, GlobalElementId, IntoElement, LayoutId,
-    MouseButton, MouseDownEvent, MouseMoveEvent, PaintQuad, Pixels, Render, RenderImage,
-    ShapedLine, SharedString, Style, TextRun, UTF16Selection, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowKind, WindowOptions, div, fill, img, point, px, relative, rgb, size,
+    AnyWindowHandle, App, Bounds, Context, Entity, FocusHandle, Focusable, Half, IntoElement,
+    RenderImage, SharedString, Subscription, Task, Window, WindowBackgroundAppearance,
+    WindowBounds, WindowKind, WindowOptions, div, img, px, relative, size,
+};
+use gpui_component::{
+    ActiveTheme, IndexPath, Root, Selectable, Sizable, Size, h_flex,
+    input::{Escape, Input, InputEvent, InputState, MoveDown, MoveUp},
+    list::{List, ListDelegate, ListItem, ListState},
 };
 
 use crate::apps::{Catalog, CatalogGlobal, IconRequest};
 use crate::native;
-use crate::{
-    Activate, Backspace, CloseLauncher, Copy, Cut, DeleteWordLeft, MoveLeft, MoveRight,
-    MoveWordLeft, MoveWordRight, Paste, SelectAll, SelectLeft, SelectNext, SelectPrev, SelectRight,
-    SelectWordLeft, SelectWordRight,
-};
 
 const LAUNCHER_WIDTH: f32 = 720.0;
 const LAUNCHER_HEIGHT: f32 = 400.0;
@@ -40,6 +37,8 @@ impl gpui::Global for LauncherGlobal {}
 #[derive(Default)]
 pub struct LauncherState {
     window: Option<AnyWindowHandle>,
+    list: Option<Entity<ListState<AppListDelegate>>>,
+    search_input: Option<Entity<InputState>>,
     visible: bool,
 }
 
@@ -61,30 +60,43 @@ impl LauncherState {
     }
 
     pub fn show(&mut self, cx: &mut App) {
-        if let Some(handle) = self.window {
-            if handle
-                .update(cx, |root, window, cx| {
+        if let (Some(handle), Some(list), Some(search_input)) =
+            (self.window, self.list.clone(), self.search_input.clone())
+        {
+            let shown = handle
+                .update(cx, |_, window, cx| {
                     // Win32 focus first (this re-shows the hidden window via SW_SHOW and
                     // calls SetForegroundWindow etc.), then GPUI focus. Reversed order
                     // would have GPUI's WM_SETFOCUS handler clobber our focus state.
                     native::focus_launcher_window(window);
-                    if let Ok(view) = root.downcast::<LauncherView>() {
-                        view.update(cx, |view, cx| {
-                            view.reset(cx);
-                            window.focus(&view.focus_handle(cx));
-                        });
-                    }
+                    // `InputState::set_value` is a programmatic change and does not
+                    // itself emit `InputEvent::Change`, so the results must be reset
+                    // explicitly here too — otherwise the box goes blank but the
+                    // previous query's results stay on screen.
+                    search_input.update(cx, |input, cx| input.set_value("", window, cx));
+                    list.update(cx, |list, cx| {
+                        let _ = list.delegate_mut().perform_search("", window, cx);
+                    });
+                    search_input.update(cx, |input, cx| input.focus(window, cx));
                 })
-                .is_ok()
-            {
+                .is_ok();
+            if shown {
                 self.visible = true;
                 return;
             }
 
             self.window = None;
+            self.list = None;
+            self.search_input = None;
         }
 
         let bounds = Bounds::centered(None, size(px(LAUNCHER_WIDTH), px(LAUNCHER_HEIGHT)), cx);
+
+        // `open_window`'s closure returns the window's root view (a `Root`), so we
+        // stash the inner entities here to read back out afterward.
+        type OpenedEntities = (Entity<ListState<AppListDelegate>>, Entity<InputState>);
+        let entities_slot: Rc<RefCell<Option<OpenedEntities>>> = Rc::new(RefCell::new(None));
+        let entities_slot_for_window = entities_slot.clone();
 
         let handle = cx
             .open_window(
@@ -100,22 +112,20 @@ impl LauncherState {
                     window_background: WindowBackgroundAppearance::Opaque,
                     ..Default::default()
                 },
-                |window, cx| {
-                    let view = cx.new(|cx| {
-                        let mut view = LauncherView {
-                            focus_handle: cx.focus_handle(),
-                            query: String::new(),
-                            selected_range: 0..0,
-                            select_anchor: None,
-                            last_layout: None,
-                            last_bounds: None,
-                            results: Vec::new(),
-                            selected: 0,
-                        };
-                        // Populate the recents view so the first open isn't blank.
-                        view.update_results(cx);
-                        view
+                move |window, cx| {
+                    let catalog = cx.global::<CatalogGlobal>().clone_handle();
+                    let list = cx.new(|cx| {
+                        ListState::new(AppListDelegate::new(catalog), window, cx).searchable(false)
                     });
+                    let search_input = cx.new(|cx| {
+                        InputState::new(window, cx)
+                            .placeholder("Search apps, files, commands...")
+                    });
+                    *entities_slot_for_window.borrow_mut() =
+                        Some((list.clone(), search_input.clone()));
+
+                    let view =
+                        cx.new(|cx| LauncherRoot::new(list.clone(), search_input.clone(), window, cx));
 
                     // Close on focus loss (clicking elsewhere, Alt+Tab, etc.).
                     // The observer fires for both activation and deactivation, so we
@@ -139,19 +149,43 @@ impl LauncherState {
                         .detach();
                     });
 
-                    view
+                    cx.new(|cx| Root::new(view, window, cx))
                 },
             )
             .expect("failed to open launcher window");
 
+        let (list, search_input) = entities_slot
+            .borrow_mut()
+            .take()
+            .expect("entities created during open_window");
+
         // Win32 focus first, then GPUI focus (same ordering as the re-show path above).
-        let _ = handle.update(cx, |view, window, cx| {
+        let _ = handle.update(cx, |_, window, cx| {
             native::focus_launcher_window(window);
-            window.focus(&view.focus_handle(cx));
+            search_input.update(cx, |input, cx| input.focus(window, cx));
         });
 
         self.window = Some(handle.into());
+        self.list = Some(list);
+        self.search_input = Some(search_input);
         self.visible = true;
+    }
+
+    /// Re-run the current query against the (possibly just-rescanned) catalog.
+    /// Called from a bare `&mut App` context (the scan-completion task), which
+    /// is NOT mid-window-update, so `handle.update` is safe here (pitfall #1).
+    pub fn refresh_results(&self, cx: &mut App) {
+        let (Some(handle), Some(list), Some(search_input)) =
+            (self.window, self.list.clone(), self.search_input.clone())
+        else {
+            return;
+        };
+        let _ = handle.update(cx, |_, window, cx| {
+            let query = search_input.read(cx).value().to_string();
+            list.update(cx, |list, cx| {
+                let _ = list.delegate_mut().perform_search(&query, window, cx);
+            });
+        });
     }
 
     pub fn hide(&mut self, cx: &mut App) {
@@ -166,17 +200,17 @@ impl LauncherState {
         let _ = handle.update(cx, |_, window, _| native::hide_launcher_window(window));
     }
 
-    /// Dismiss the launcher from *inside* a window update (e.g. an action handler
-    /// or a window-activation observer).
+    /// Dismiss the launcher from *inside* a window update (e.g. a list delegate
+    /// callback or a window-activation observer).
     ///
     /// We hide rather than destroy the window: on Windows GPUI quits the whole app
     /// when its last window closes, but we want to stay resident in the tray.
     ///
-    /// We also must not re-enter `handle.update` here: action handlers and
-    /// observers already run while the window has been taken out of `App::windows`,
-    /// so a nested update would fail with "window not found" and silently do
-    /// nothing. Instead we hide through the `Window` we already hold and update the
-    /// shared `visible` flag directly.
+    /// We also must not re-enter `handle.update` here: callbacks and observers
+    /// already run while the window has been taken out of `App::windows`, so a
+    /// nested update would fail with "window not found" and silently do nothing.
+    /// Instead we hide through the `Window` we already hold and update the shared
+    /// `visible` flag directly.
     fn dismiss(window: &mut Window, cx: &mut App) {
         cx.global::<LauncherGlobal>()
             .clone_handle()
@@ -186,482 +220,275 @@ impl LauncherState {
     }
 }
 
-pub struct LauncherView {
-    focus_handle: FocusHandle,
-    query: String,
-    selected_range: Range<usize>,
-    /// The fixed end of an in-progress selection (mouse drag or a chain of
-    /// Shift+arrow presses). `None` means the next shift-select or drag
-    /// should start fresh from the current (collapsed) cursor position.
-    select_anchor: Option<usize>,
-    last_layout: Option<ShapedLine>,
-    last_bounds: Option<Bounds<Pixels>>,
-    /// Catalog indices of the currently-displayed results.
-    results: Vec<usize>,
-    /// Index into `results` of the highlighted row.
-    selected: usize,
+/// A keycap badge for the Enter key, styled like `gpui_component::kbd::Kbd`
+/// but showing the return-arrow glyph instead of the word "Enter" — `Kbd`'s
+/// own text comes from a fixed, non-overridable platform format (the literal
+/// word "Enter" on Windows).
+fn enter_kbd(cx: &App) -> impl IntoElement {
+    div()
+        .text_color(cx.theme().muted_foreground)
+        .bg(cx.theme().tokens.muted)
+        .py_0p5()
+        .px_1()
+        .min_w_5()
+        .text_center()
+        .rounded(cx.theme().radius.half())
+        .line_height(relative(1.0))
+        .text_xs()
+        .flex_shrink_0()
+        .child("⏎")
 }
 
-impl LauncherView {
-    fn close(&mut self, _: &CloseLauncher, window: &mut Window, cx: &mut Context<Self>) {
-        // We are inside a window update; dismiss via the held `Window`, never by
-        // re-entering `LauncherState::hide`. See `LauncherState::dismiss`.
-        LauncherState::dismiss(window, cx);
-    }
-
-    /// Clear the query so the launcher opens fresh on the next toggle.
-    fn reset(&mut self, cx: &mut Context<Self>) {
-        self.query.clear();
-        self.selected_range = 0..0;
-        self.select_anchor = None;
-        self.update_results(cx);
-        cx.notify();
-    }
-
-    /// Recompute the results list from the current query and reset the
-    /// highlighted row to the top. An empty query yields the recents view.
-    fn update_results(&mut self, cx: &mut App) {
-        let catalog = cx.global::<CatalogGlobal>().clone_handle();
-        self.results = catalog.borrow().search(&self.query);
-        self.selected = 0;
-    }
-
-    fn select_next(&mut self, _: &SelectNext, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.results.is_empty() {
-            return;
-        }
-        self.selected = (self.selected + 1).min(self.results.len() - 1);
-        cx.notify();
-    }
-
-    fn select_prev(&mut self, _: &SelectPrev, _window: &mut Window, cx: &mut Context<Self>) {
-        self.selected = self.selected.saturating_sub(1);
-        cx.notify();
-    }
-
-    fn activate(&mut self, _: &Activate, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(&index) = self.results.get(self.selected) {
-            self.activate_index(index, window, cx);
-        }
-    }
-
-    /// Launch the catalog app at `index` and dismiss the launcher.
-    fn activate_index(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        let catalog = cx.global::<CatalogGlobal>().clone_handle();
-        catalog.borrow_mut().launch(index);
-        LauncherState::dismiss(window, cx);
-    }
-
-    // `use<>`: the returned element is fully owned (the click listener captures a
-    // weak entity handle, not `cx`), so it borrows neither `self` nor `cx`.
-    // Without this, edition 2024's default RPIT capture would tie the element's
-    // lifetime to `cx`, and it couldn't escape the `FnMut` map closure in render.
-    fn render_row(&self, row: ResultRow, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        let ResultRow {
-            index,
-            name,
-            icon,
-            selected,
-        } = row;
-
-        div()
-            // Stable id keyed on the catalog index so click routing is correct.
-            .id(("app-row", index))
-            .flex()
-            .items_center()
-            .gap_3()
-            .px_2()
-            .py_1p5()
-            .rounded(px(6.0))
-            .when(selected, |row| row.bg(rgb(0x2f2f34)))
-            .child(
-                div()
-                    .w(px(22.0))
-                    .h(px(22.0))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .when_some(icon, |slot, image| slot.child(img(image).size(px(22.0)))),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .text_color(rgb(0xf2f2f2))
-                    .child(SharedString::from(name)),
-            )
-            .on_click(cx.listener(move |view, _event, window, cx| {
-                view.activate_index(index, window, cx);
-            }))
-    }
-
-    fn select_all(&mut self, _: &SelectAll, _window: &mut Window, cx: &mut Context<Self>) {
-        self.selected_range = 0..self.query.len();
-        cx.notify();
-    }
-
-    fn copy(&mut self, _: &Copy, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
-            return;
-        }
-        let text = self.query[self.selected_range.clone()].to_string();
-        cx.write_to_clipboard(ClipboardItem::new_string(text));
-    }
-
-    fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
-        if self.selected_range.is_empty() {
-            return;
-        }
-        let text = self.query[self.selected_range.clone()].to_string();
-        cx.write_to_clipboard(ClipboardItem::new_string(text));
-        self.replace_text_in_range(None, "", window, cx);
-    }
-
-    fn paste(&mut self, _: &Paste, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) else {
-            return;
-        };
-        self.replace_text_in_range(None, &text, window, cx);
-    }
-
-    fn backspace(&mut self, _: &Backspace, window: &mut Window, cx: &mut Context<Self>) {
-        if self.query.is_empty() {
-            return;
-        }
-
-        if self.selected_range.is_empty() {
-            self.selected_range =
-                self.previous_boundary(self.cursor_offset())..self.cursor_offset();
-        }
-
-        self.replace_text_in_range(None, "", window, cx);
-    }
-
-    fn delete_word_left(&mut self, _: &DeleteWordLeft, window: &mut Window, cx: &mut Context<Self>) {
-        if self.query.is_empty() {
-            return;
-        }
-
-        if self.selected_range.is_empty() {
-            self.selected_range =
-                self.previous_word_boundary(self.cursor_offset())..self.cursor_offset();
-        }
-
-        self.replace_text_in_range(None, "", window, cx);
-    }
-
-    fn move_left(&mut self, _: &MoveLeft, _window: &mut Window, cx: &mut Context<Self>) {
-        let target = if self.selected_range.is_empty() {
-            self.previous_boundary(self.cursor_offset())
-        } else {
-            self.selected_range.start
-        };
-        self.collapse_to(target);
-        cx.notify();
-    }
-
-    fn move_right(&mut self, _: &MoveRight, _window: &mut Window, cx: &mut Context<Self>) {
-        let target = if self.selected_range.is_empty() {
-            self.next_boundary(self.cursor_offset())
-        } else {
-            self.selected_range.end
-        };
-        self.collapse_to(target);
-        cx.notify();
-    }
-
-    fn move_word_left(&mut self, _: &MoveWordLeft, _window: &mut Window, cx: &mut Context<Self>) {
-        let target = self.previous_word_boundary(self.cursor_offset());
-        self.collapse_to(target);
-        cx.notify();
-    }
-
-    fn move_word_right(&mut self, _: &MoveWordRight, _window: &mut Window, cx: &mut Context<Self>) {
-        let target = self.next_word_boundary(self.cursor_offset());
-        self.collapse_to(target);
-        cx.notify();
-    }
-
-    fn select_left(&mut self, _: &SelectLeft, _window: &mut Window, cx: &mut Context<Self>) {
-        let head = self.previous_boundary(self.selection_head());
-        self.extend_selection_to(head);
-        cx.notify();
-    }
-
-    fn select_right(&mut self, _: &SelectRight, _window: &mut Window, cx: &mut Context<Self>) {
-        let head = self.next_boundary(self.selection_head());
-        self.extend_selection_to(head);
-        cx.notify();
-    }
-
-    fn select_word_left(&mut self, _: &SelectWordLeft, _window: &mut Window, cx: &mut Context<Self>) {
-        let head = self.previous_word_boundary(self.selection_head());
-        self.extend_selection_to(head);
-        cx.notify();
-    }
-
-    fn select_word_right(
-        &mut self,
-        _: &SelectWordRight,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let head = self.next_word_boundary(self.selection_head());
-        self.extend_selection_to(head);
-        cx.notify();
-    }
-
-    /// The end of the selection that a shift/drag gesture should move: the
-    /// non-anchor bound if a selection is active, otherwise the cursor.
-    fn selection_head(&self) -> usize {
-        match self.select_anchor {
-            Some(anchor) if anchor == self.selected_range.start => self.selected_range.end,
-            Some(anchor) if anchor == self.selected_range.end => self.selected_range.start,
-            _ => self.cursor_offset(),
-        }
-    }
-
-    fn collapse_to(&mut self, offset: usize) {
-        self.selected_range = offset..offset;
-        self.select_anchor = None;
-    }
-
-    /// Move the selection's head to `offset`, establishing a fresh anchor at
-    /// the current (collapsed) cursor if one isn't already active.
-    fn extend_selection_to(&mut self, offset: usize) {
-        let anchor = self.select_anchor.unwrap_or_else(|| self.cursor_offset());
-        self.selected_range = anchor.min(offset)..anchor.max(offset);
-        self.select_anchor = Some(anchor);
-    }
-
-    fn cursor_offset(&self) -> usize {
-        self.selected_range.end
-    }
-
-    fn previous_boundary(&self, offset: usize) -> usize {
-        self.query
-            .char_indices()
-            .rev()
-            .find_map(|(index, _)| (index < offset).then_some(index))
-            .unwrap_or(0)
-    }
-
-    fn next_boundary(&self, offset: usize) -> usize {
-        self.query
-            .char_indices()
-            .find_map(|(index, ch)| (index >= offset).then_some(index + ch.len_utf8()))
-            .unwrap_or(self.query.len())
-    }
-
-    /// Skip back over any whitespace immediately before `offset`, then over
-    /// one run of the same character class (word chars or punctuation).
-    fn previous_word_boundary(&self, offset: usize) -> usize {
-        let is_word = |c: char| c.is_alphanumeric() || c == '_';
-        let before: Vec<(usize, char)> = self.query[..offset].char_indices().collect();
-        let mut i = before.len();
-        while i > 0 && before[i - 1].1.is_whitespace() {
-            i -= 1;
-        }
-        if i > 0 {
-            let word_run = is_word(before[i - 1].1);
-            while i > 0 && !before[i - 1].1.is_whitespace() && is_word(before[i - 1].1) == word_run
-            {
-                i -= 1;
-            }
-        }
-        before.get(i).map(|&(byte, _)| byte).unwrap_or(0)
-    }
-
-    /// Skip forward over any whitespace right after `offset`, then over one
-    /// run of the same character class (word chars or punctuation).
-    fn next_word_boundary(&self, offset: usize) -> usize {
-        let is_word = |c: char| c.is_alphanumeric() || c == '_';
-        let after: Vec<(usize, char)> = self.query[offset..]
-            .char_indices()
-            .map(|(index, ch)| (offset + index, ch))
-            .collect();
-        let mut i = 0;
-        while i < after.len() && after[i].1.is_whitespace() {
-            i += 1;
-        }
-        if i < after.len() {
-            let word_run = is_word(after[i].1);
-            while i < after.len() && !after[i].1.is_whitespace() && is_word(after[i].1) == word_run
-            {
-                i += 1;
-            }
-        }
-        after
-            .get(i)
-            .map(|&(byte, _)| byte)
-            .unwrap_or(self.query.len())
-    }
-
-    fn offset_from_utf16(&self, offset: usize) -> usize {
-        let mut utf8_offset = 0;
-        let mut utf16_count = 0;
-
-        for ch in self.query.chars() {
-            if utf16_count >= offset {
-                break;
-            }
-            utf16_count += ch.len_utf16();
-            utf8_offset += ch.len_utf8();
-        }
-
-        utf8_offset
-    }
-
-    fn offset_to_utf16(&self, offset: usize) -> usize {
-        let mut utf16_offset = 0;
-        let mut utf8_count = 0;
-
-        for ch in self.query.chars() {
-            if utf8_count >= offset {
-                break;
-            }
-            utf8_count += ch.len_utf8();
-            utf16_offset += ch.len_utf16();
-        }
-
-        utf16_offset
-    }
-
-    fn range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {
-        self.offset_to_utf16(range.start)..self.offset_to_utf16(range.end)
-    }
-
-    fn range_from_utf16(&self, range: &Range<usize>) -> Range<usize> {
-        self.offset_from_utf16(range.start)..self.offset_from_utf16(range.end)
-    }
+/// The window's root view: hosts our own search `Input` (not the `List`'s
+/// built-in one — that hardcodes a search-icon prefix and clear button with
+/// no way to remove them) plus the results `List`, and gives gpui-component's
+/// `Root` something to wrap.
+///
+/// `List`'s own keyboard nav (Up/Down/Enter/Escape) only works when its
+/// search input is nested inside its own element tree, which we've opted out
+/// of. So this view re-implements that nav by listening for the same action
+/// types (`MoveUp`/`MoveDown`/`Escape` from `gpui_component::input`, plus
+/// `InputEvent::PressEnter`) on an ancestor of our input — `InputState`
+/// already `cx.propagate()`s all of these in single-line mode specifically so
+/// a containing view can do this.
+struct LauncherRoot {
+    list: Entity<ListState<AppListDelegate>>,
+    search_input: Entity<InputState>,
+    _subscriptions: Vec<Subscription>,
 }
 
-impl EntityInputHandler for LauncherView {
-    fn text_for_range(
-        &mut self,
-        range_utf16: Range<usize>,
-        actual_range: &mut Option<Range<usize>>,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> Option<String> {
-        let range = self.range_from_utf16(&range_utf16);
-        actual_range.replace(self.range_to_utf16(&range));
-        Some(self.query[range].to_string())
-    }
-
-    fn selected_text_range(
-        &mut self,
-        _ignore_disabled_input: bool,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> Option<UTF16Selection> {
-        Some(UTF16Selection {
-            range: self.range_to_utf16(&self.selected_range),
-            reversed: false,
-        })
-    }
-
-    fn marked_text_range(
-        &self,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> Option<Range<usize>> {
-        None
-    }
-
-    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {}
-
-    fn replace_text_in_range(
-        &mut self,
-        range_utf16: Option<Range<usize>>,
-        new_text: &str,
-        _window: &mut Window,
+impl LauncherRoot {
+    fn new(
+        list: Entity<ListState<AppListDelegate>>,
+        search_input: Entity<InputState>,
+        window: &mut Window,
         cx: &mut Context<Self>,
-    ) {
-        let range = range_utf16
-            .as_ref()
-            .map(|range| self.range_from_utf16(range))
-            .unwrap_or_else(|| self.selected_range.clone());
-
-        self.query = format!(
-            "{}{}{}",
-            &self.query[..range.start],
-            new_text,
-            &self.query[range.end..]
-        );
-        let cursor = range.start + new_text.len();
-        self.selected_range = cursor..cursor;
-        self.select_anchor = None;
-        self.update_results(cx);
-        cx.notify();
+    ) -> Self {
+        let _subscriptions = vec![cx.subscribe_in(&search_input, window, Self::on_search_event)];
+        Self {
+            list,
+            search_input,
+            _subscriptions,
+        }
     }
 
-    fn replace_and_mark_text_in_range(
+    fn on_search_event(
         &mut self,
-        range_utf16: Option<Range<usize>>,
-        new_text: &str,
-        new_selected_range_utf16: Option<Range<usize>>,
+        input: &Entity<InputState>,
+        event: &InputEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.replace_text_in_range(range_utf16, new_text, window, cx);
-
-        if let Some(range) = new_selected_range_utf16 {
-            let range = self.range_from_utf16(&range);
-            self.selected_range =
-                range.start.min(self.query.len())..range.end.min(self.query.len());
+        match event {
+            InputEvent::Change => {
+                let query = input.read(cx).value().to_string();
+                self.list.update(cx, |list, cx| {
+                    let _ = list.delegate_mut().perform_search(&query, window, cx);
+                });
+            }
+            InputEvent::PressEnter { .. } => {
+                self.list.update(cx, |list, cx| {
+                    list.delegate_mut().confirm(false, window, cx);
+                });
+            }
+            _ => {}
         }
     }
 
-    fn bounds_for_range(
-        &mut self,
-        range_utf16: Range<usize>,
-        bounds: Bounds<Pixels>,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> Option<Bounds<Pixels>> {
-        let line = self.last_layout.as_ref()?;
-        let range = self.range_from_utf16(&range_utf16);
-        Some(Bounds::from_corners(
-            point(bounds.left() + line.x_for_index(range.start), bounds.top()),
-            point(bounds.left() + line.x_for_index(range.end), bounds.bottom()),
-        ))
+    fn move_selection(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
+        self.list.update(cx, |list, cx| {
+            let count = list.delegate().items_count(0, cx);
+            if count == 0 {
+                return;
+            }
+            let current = list.selected_index().map(|ix| ix.row as isize).unwrap_or(-1);
+            let next = (current + delta).rem_euclid(count as isize) as usize;
+            list.set_selected_index(Some(IndexPath::new(next)), window, cx);
+            list.scroll_to_selected_item(window, cx);
+        });
     }
 
-    fn character_index_for_point(
-        &mut self,
-        point: gpui::Point<Pixels>,
-        _window: &mut Window,
-        _cx: &mut Context<Self>,
-    ) -> Option<usize> {
-        let bounds = self.last_bounds?;
-        let line = self.last_layout.as_ref()?;
-        let utf8_index = line.index_for_x(point.x - bounds.left())?;
-        Some(self.offset_to_utf16(utf8_index))
+    fn on_move_up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_selection(-1, window, cx);
     }
-}
 
-impl Focusable for LauncherView {
-    fn focus_handle(&self, _: &App) -> FocusHandle {
-        self.focus_handle.clone()
+    fn on_move_down(&mut self, _: &MoveDown, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_selection(1, window, cx);
+    }
+
+    fn on_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
+        self.list.update(cx, |list, cx| {
+            list.delegate_mut().cancel(window, cx);
+        });
     }
 }
 
-/// Pre-computed display data for one result row (decoupled from the catalog
-/// borrow so rows can be built without holding it).
-struct ResultRow {
-    index: usize,
-    name: String,
-    icon: Option<Arc<RenderImage>>,
-    selected: bool,
+impl Focusable for LauncherRoot {
+    fn focus_handle(&self, cx: &App) -> FocusHandle {
+        self.search_input.read(cx).focus_handle(cx)
+    }
+}
+
+impl gpui::Render for LauncherRoot {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .size_full()
+            .flex()
+            .flex_col()
+            .bg(cx.theme().background)
+            .text_color(cx.theme().foreground)
+            .border_1()
+            .border_color(cx.theme().border)
+            .shadow_lg()
+            .on_action(cx.listener(Self::on_move_up))
+            .on_action(cx.listener(Self::on_move_down))
+            .on_action(cx.listener(Self::on_escape))
+            .child(
+                div()
+                    .flex_none()
+                    .h(px(52.0))
+                    .w_full()
+                    .px_3()
+                    .flex()
+                    .items_center()
+                    .border_b_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        Input::new(&self.search_input)
+                            .appearance(false)
+                            .with_size(Size::Large)
+                            .h(px(52.0))
+                            .text_size(px(16.0))
+                            // `Input`'s own internal render sets a fixed
+                            // `line_height(1.25rem)` unconditionally; that's
+                            // too tight for some glyphs' descenders (e.g. "g")
+                            // at this font size and clips them. Overriding it
+                            // here works because `refine_style` only replaces
+                            // fields we actually set, and unlike `text_size`,
+                            // we weren't setting this one before.
+                            .line_height(relative(1.5)),
+                    ),
+            )
+            .child(
+                List::new(&self.list)
+                    .scrollbar_visible(false)
+                    .with_size(Size::Large)
+                    .p_2()
+                    .flex_1(),
+            )
+            .child(
+                h_flex()
+                    .flex_none()
+                    .h(px(36.0))
+                    .w_full()
+                    .px_3()
+                    .items_center()
+                    .justify_end()
+                    .gap_2()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .text_color(cx.theme().muted_foreground)
+                    .text_xs()
+                    .child("Open Application")
+                    .child(enter_kbd(cx)),
+            )
+    }
+}
+
+/// Drives the results list: fuzzy-searches the catalog on every keystroke,
+/// renders one row per match, and launches the selected app on confirm.
+struct AppListDelegate {
+    catalog: Rc<RefCell<Catalog>>,
+    /// Catalog indices matching the current query, in display order.
+    results: Vec<usize>,
+    selected_index: Option<IndexPath>,
+}
+
+impl AppListDelegate {
+    fn new(catalog: Rc<RefCell<Catalog>>) -> Self {
+        let results = catalog.borrow().search("");
+        Self {
+            catalog,
+            results,
+            selected_index: Some(IndexPath::default()),
+        }
+    }
+}
+
+impl ListDelegate for AppListDelegate {
+    type Item = AppRow;
+
+    fn perform_search(
+        &mut self,
+        query: &str,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> Task<()> {
+        self.results = self.catalog.borrow().search(query);
+        self.selected_index = (!self.results.is_empty()).then(IndexPath::default);
+        cx.notify();
+        Task::ready(())
+    }
+
+    fn items_count(&self, _section: usize, _cx: &App) -> usize {
+        self.results.len()
+    }
+
+    fn render_item(
+        &mut self,
+        ix: IndexPath,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> Option<Self::Item> {
+        let &index = self.results.get(ix.row)?;
+        let mut catalog = self.catalog.borrow_mut();
+        let name = catalog.app(index)?.name.clone();
+        let icon = match catalog.request_icon(index) {
+            IconRequest::Ready(icon) => icon,
+            IconRequest::Loading => None,
+            IconRequest::Load(path) => {
+                drop(catalog);
+                spawn_icon_load(path, self.catalog.clone(), cx);
+                None
+            }
+        };
+        let selected = self.selected_index == Some(ix);
+        Some(AppRow::new(ix, name, icon, selected))
+    }
+
+    fn set_selected_index(
+        &mut self,
+        ix: Option<IndexPath>,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) {
+        self.selected_index = ix;
+        cx.notify();
+    }
+
+    fn confirm(&mut self, _secondary: bool, window: &mut Window, cx: &mut Context<ListState<Self>>) {
+        if let Some(ix) = self.selected_index
+            && let Some(&index) = self.results.get(ix.row)
+        {
+            self.catalog.borrow_mut().launch(index);
+        }
+        LauncherState::dismiss(window, cx);
+    }
+
+    fn cancel(&mut self, window: &mut Window, cx: &mut Context<ListState<Self>>) {
+        LauncherState::dismiss(window, cx);
+    }
 }
 
 /// Decode `path`'s icon on the background thread pool, then hand the result
-/// back to the catalog and repaint. Split out of `request_icon`'s caller so
-/// the (slow, GDI/COM-heavy) decode never runs on the thread handling
-/// keystrokes.
-fn spawn_icon_load(path: PathBuf, catalog: Rc<RefCell<Catalog>>, cx: &Context<LauncherView>) {
-    cx.spawn(async move |view, cx| {
+/// back to the catalog and repaint. GDI/COM icon extraction is too slow to do
+/// synchronously in the render path (it blocks keystrokes).
+fn spawn_icon_load(
+    path: PathBuf,
+    catalog: Rc<RefCell<Catalog>>,
+    cx: &mut Context<ListState<AppListDelegate>>,
+) {
+    cx.spawn(async move |list, cx| {
         let decode_path = path.clone();
         let rendered = cx
             .background_spawn(async move { native::extract_icon_rgba(&decode_path) })
@@ -672,287 +499,71 @@ fn spawn_icon_load(path: PathBuf, catalog: Rc<RefCell<Catalog>>, cx: &Context<La
             });
 
         catalog.borrow_mut().set_icon_ready(path, rendered);
-        let _ = view.update(cx, |_, cx| cx.notify());
+        let _ = list.update(cx, |_, cx| cx.notify());
     })
     .detach();
 }
 
-impl Render for LauncherView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Collect the display data for each result row up front so we don't hold
-        // a borrow of the catalog across element construction. Icons are decoded
-        // off the main thread on a cache miss (GDI/COM icon extraction is too
-        // slow to do synchronously without blocking keystrokes) and cached
-        // inside the catalog once ready.
-        let rows: Vec<ResultRow> = {
-            let catalog_handle = cx.global::<CatalogGlobal>().clone_handle();
-            let mut catalog = catalog_handle.borrow_mut();
-            self.results
-                .iter()
-                .enumerate()
-                .map(|(position, &index)| {
-                    let name = catalog
-                        .app(index)
-                        .map(|app| app.name.clone())
-                        .unwrap_or_default();
-                    let icon = match catalog.request_icon(index) {
-                        IconRequest::Ready(icon) => icon,
-                        IconRequest::Loading => None,
-                        IconRequest::Load(path) => {
-                            spawn_icon_load(path, catalog_handle.clone(), cx);
-                            None
-                        }
-                    };
-                    ResultRow {
-                        index,
-                        name,
-                        icon,
-                        selected: position == self.selected,
-                    }
-                })
-                .collect()
-        };
+#[derive(gpui::IntoElement)]
+struct AppRow {
+    base: ListItem,
+    name: SharedString,
+    icon: Option<Arc<RenderImage>>,
+    selected: bool,
+}
 
-        // Neutral, untinted dark palette (Raycast-like): a single card with a
-        // search row, a full-width hairline divider, and a results list below.
-        div()
-            .key_context("Launcher")
-            .track_focus(&self.focus_handle(cx))
-            .on_action(cx.listener(Self::close))
-            .on_action(cx.listener(Self::backspace))
-            .on_action(cx.listener(Self::select_next))
-            .on_action(cx.listener(Self::select_prev))
-            .on_action(cx.listener(Self::activate))
-            .on_action(cx.listener(Self::select_all))
-            .on_action(cx.listener(Self::copy))
-            .on_action(cx.listener(Self::cut))
-            .on_action(cx.listener(Self::paste))
-            .on_action(cx.listener(Self::delete_word_left))
-            .on_action(cx.listener(Self::move_left))
-            .on_action(cx.listener(Self::move_right))
-            .on_action(cx.listener(Self::move_word_left))
-            .on_action(cx.listener(Self::move_word_right))
-            .on_action(cx.listener(Self::select_left))
-            .on_action(cx.listener(Self::select_right))
-            .on_action(cx.listener(Self::select_word_left))
-            .on_action(cx.listener(Self::select_word_right))
-            .size_full()
-            .flex()
-            .flex_col()
-            .bg(rgb(0x1c1c1e))
-            .text_color(rgb(0xf2f2f2))
-            .border_1()
-            .border_color(rgb(0x343437))
-            .shadow_lg()
-            // Search row
-            .child(
-                div()
-                    .h(px(44.0))
-                    .w_full()
-                    .px_4()
-                    .flex()
-                    .items_center()
-                    .text_lg()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|view, event: &MouseDownEvent, window, cx| {
-                            // `character_index_for_point` answers in UTF-16 offsets (the
-                            // IME contract); `selected_range` is byte-offset based.
-                            if let Some(utf16_index) =
-                                view.character_index_for_point(event.position, window, cx)
-                            {
-                                let index = view.offset_from_utf16(utf16_index);
-                                view.select_anchor = Some(index);
-                                view.selected_range = index..index;
-                                cx.notify();
-                            }
-                        }),
-                    )
-                    .on_mouse_move(cx.listener(|view, event: &MouseMoveEvent, window, cx| {
-                        if !event.dragging() {
-                            return;
-                        }
-                        let Some(anchor) = view.select_anchor else {
-                            return;
-                        };
-                        if let Some(utf16_index) =
-                            view.character_index_for_point(event.position, window, cx)
-                        {
-                            let index = view.offset_from_utf16(utf16_index);
-                            view.selected_range = anchor.min(index)..anchor.max(index);
-                            cx.notify();
-                        }
-                    }))
-                    .child(LauncherInputElement { input: cx.entity() }),
-            )
-            // Divider
-            .child(div().h(px(1.0)).w_full().bg(rgb(0x2c2c2e)))
-            // Results list
-            .child(
-                div()
-                    .flex_1()
-                    .overflow_hidden()
-                    .flex()
-                    .flex_col()
-                    .p_1p5()
-                    .text_sm()
-                    .when(rows.is_empty(), |list| {
-                        list.child(
-                            div()
-                                .px_2()
-                                .py_1p5()
-                                .text_color(rgb(0x7c7c80))
-                                .child("No results"),
-                        )
-                    })
-                    .children(rows.into_iter().map(|row| self.render_row(row, cx))),
-            )
+impl AppRow {
+    fn new(id: IndexPath, name: String, icon: Option<Arc<RenderImage>>, selected: bool) -> Self {
+        Self {
+            base: ListItem::new(id).selected(selected),
+            name: name.into(),
+            icon,
+            selected,
+        }
     }
 }
 
-struct LauncherInputElement {
-    input: Entity<LauncherView>,
-}
-
-struct InputPrepaintState {
-    line: ShapedLine,
-    cursor: PaintQuad,
-    selection: Option<PaintQuad>,
-}
-
-impl IntoElement for LauncherInputElement {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
+impl Selectable for AppRow {
+    fn selected(mut self, selected: bool) -> Self {
+        self.base = self.base.selected(selected);
+        self.selected = selected;
         self
     }
+
+    fn is_selected(&self) -> bool {
+        self.selected
+    }
 }
 
-impl Element for LauncherInputElement {
-    type RequestLayoutState = ();
-    type PrepaintState = InputPrepaintState;
-
-    fn id(&self) -> Option<ElementId> {
-        None
-    }
-
-    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
-        None
-    }
-
-    fn request_layout(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&gpui::InspectorElementId>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> (LayoutId, Self::RequestLayoutState) {
-        let mut style = Style::default();
-        style.size.width = relative(1.0).into();
-        style.size.height = window.line_height().into();
-        (window.request_layout(style, [], cx), ())
-    }
-
-    fn prepaint(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&gpui::InspectorElementId>,
-        bounds: Bounds<Pixels>,
-        _request_layout: &mut Self::RequestLayoutState,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Self::PrepaintState {
-        let input = self.input.read(cx);
-        let display_text: SharedString = if input.query.is_empty() {
-            "Search apps, files, commands...".into()
-        } else {
-            input.query.clone().into()
-        };
-        let text_color = if input.query.is_empty() {
-            rgb(0x767676)
-        } else {
-            rgb(0xf2f2f2)
-        };
-
-        let style = window.text_style();
-        let run = TextRun {
-            len: display_text.len(),
-            font: style.font(),
-            color: text_color.into(),
-            background_color: None,
-            underline: None,
-            strikethrough: None,
-        };
-
-        let font_size = style.font_size.to_pixels(window.rem_size());
-        let line = window
-            .text_system()
-            .shape_line(display_text, font_size, &[run], None);
-        let cursor_x = if input.query.is_empty() {
-            px(0.0)
-        } else {
-            line.x_for_index(input.cursor_offset())
-        };
-        let cursor = fill(
-            Bounds::new(
-                point(bounds.left() + cursor_x, bounds.top()),
-                size(px(2.0), bounds.bottom() - bounds.top()),
-            ),
-            rgb(0xd0d0d0),
-        );
-
-        let selection = (!input.selected_range.is_empty()).then(|| {
-            let start_x = line.x_for_index(input.selected_range.start);
-            let end_x = line.x_for_index(input.selected_range.end);
-            fill(
-                Bounds::new(
-                    point(bounds.left() + start_x, bounds.top()),
-                    size(end_x - start_x, bounds.bottom() - bounds.top()),
-                ),
-                rgb(0x3b5170),
-            )
-        });
-
-        InputPrepaintState {
-            line,
-            cursor,
-            selection,
-        }
-    }
-
-    fn paint(
-        &mut self,
-        _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&gpui::InspectorElementId>,
-        bounds: Bounds<Pixels>,
-        _request_layout: &mut Self::RequestLayoutState,
-        prepaint: &mut Self::PrepaintState,
-        window: &mut Window,
-        cx: &mut App,
-    ) {
-        let focus_handle = self.input.read(cx).focus_handle.clone();
-        window.handle_input(
-            &focus_handle,
-            ElementInputHandler::new(bounds, self.input.clone()),
-            cx,
-        );
-
-        if let Some(selection) = prepaint.selection.clone() {
-            window.paint_quad(selection);
-        }
-
-        prepaint
-            .line
-            .paint(bounds.origin, window.line_height(), window, cx)
-            .unwrap();
-
-        if focus_handle.is_focused(window) && prepaint.selection.is_none() {
-            window.paint_quad(prepaint.cursor.clone());
-        }
-
-        self.input.update(cx, |input, _cx| {
-            input.last_layout = Some(prepaint.line.clone());
-            input.last_bounds = Some(bounds);
-        });
+impl gpui::RenderOnce for AppRow {
+    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+        // `ListItem` wraps whatever we give it in a plain (column-stacking)
+        // `div`, so icon + name must be a single flex-row child, not two
+        // separate children — otherwise they stack on top of each other.
+        //
+        // `rounded` here (rather than on the list itself) is what makes the
+        // hover/selected fill read as an inset card: `ListItem` refines its
+        // own style with ours before painting the highlight, so the radius
+        // applies to that fill too. The list's own `.p_2()` provides the
+        // inset on all four sides uniformly.
+        self.base.py_1p5().rounded(cx.theme().radius).child(
+            h_flex()
+                .items_center()
+                .gap_3()
+                .w_full()
+                .child(
+                    div()
+                        .w(px(22.0))
+                        .h(px(22.0))
+                        .flex_none()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .when_some(self.icon, |slot, image| {
+                            slot.child(img(image).size(px(22.0)))
+                        }),
+                )
+                .child(div().flex_1().child(self.name)),
+        )
     }
 }

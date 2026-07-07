@@ -24,8 +24,8 @@ fn main() {
         apply_raycast_theme(cx);
 
         LauncherState::install(cx);
-        // Scan the Start Menu up front so the first open is instant; icons are
-        // still decoded lazily on render.
+        // Scan runs on the background pool (Catalog::install kicks it off);
+        // icons are decoded lazily on render.
         Catalog::install(cx);
 
         drive_native_commands(cx, native_rx, native_runtime);

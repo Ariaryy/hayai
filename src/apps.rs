@@ -10,12 +10,10 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use gpui::{App, RenderImage};
+use gpui::{App, AppContext, RenderImage};
 
 use crate::native;
 
-/// Max rows shown in the results list (both the recents view and search).
-const MAX_RESULTS: usize = 8;
 /// How many recents we persist across runs.
 const MAX_RECENTS: usize = 30;
 
@@ -70,74 +68,48 @@ impl CatalogGlobal {
 impl gpui::Global for CatalogGlobal {}
 
 impl Catalog {
-    /// Build the catalog (scan + load recents) and install it as a global.
+    /// Install an empty catalog immediately and kick off the (slow) scan on
+    /// the background pool so startup never blocks on it; recents load is a
+    /// tiny file read and stays synchronous.
     pub fn install(cx: &mut App) {
         let mut catalog = Catalog {
             apps: Vec::new(),
             icons: HashMap::new(),
             recents: Vec::new(),
         };
-        catalog.scan();
         catalog.load_recents();
+        let handle = Rc::new(RefCell::new(catalog));
         cx.set_global(CatalogGlobal {
-            catalog: Rc::new(RefCell::new(catalog)),
+            catalog: handle.clone(),
         });
+
+        // The scan walks two directory trees and enumerates shell:AppsFolder
+        // via COM — too slow for the startup path. Run it on the background
+        // pool and publish the result when it lands.
+        cx.spawn(async move |cx| {
+            let apps = cx.background_spawn(async move { scan_apps() }).await;
+            let _ = cx.update(|cx| {
+                cx.global::<CatalogGlobal>()
+                    .clone_handle()
+                    .borrow_mut()
+                    .set_apps(apps);
+                let launcher = cx.global::<crate::launcher::LauncherGlobal>().clone_handle();
+                launcher.borrow().refresh_results(cx);
+            });
+        })
+        .detach();
     }
 
-    fn scan(&mut self) {
-        let mut seen = HashSet::new();
-        for dir in start_menu_dirs() {
-            walk(&dir, &mut |path| {
-                let is_lnk = path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .is_some_and(|e| e.eq_ignore_ascii_case("lnk"));
-                if !is_lnk {
-                    return;
-                }
-                let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
-                    return;
-                };
-                if name.is_empty() {
-                    return;
-                }
-                let name_lower = name.to_lowercase();
-                // De-dup by name (the per-user and all-users Start Menus often
-                // both contain the same shortcut).
-                if seen.insert(name_lower.clone()) {
-                    self.apps.push(AppEntry {
-                        name: name.to_string(),
-                        name_lower,
-                        path: path.to_path_buf(),
-                    });
-                }
-            });
-        }
-
-        // `.lnk` files under the Start Menu miss packaged (MSIX/UWP/Store)
-        // apps entirely — they have no shortcut file on disk. `shell:AppsFolder`
-        // is the virtual namespace Explorer's own Start Menu search reads, and
-        // it's a superset of the `.lnk` scan above, so this only adds apps we
-        // haven't already seen (e.g. NanaZip, other Store-distributed apps).
-        for (name, path) in native::list_apps_folder() {
-            if name.is_empty() {
-                continue;
-            }
-            let name_lower = name.to_lowercase();
-            if seen.insert(name_lower.clone()) {
-                self.apps.push(AppEntry {
-                    name,
-                    name_lower,
-                    path,
-                });
-            }
-        }
-
-        self.apps.sort_by(|a, b| a.name_lower.cmp(&b.name_lower));
+    /// Replace the app list with a fresh scan result. Preserves the icon
+    /// cache (keyed by path, so still valid) and recents.
+    pub fn set_apps(&mut self, apps: Vec<AppEntry>) {
+        self.apps = apps;
     }
 
     /// Return indices (into `apps`) to display for the given query. An empty
-    /// query yields the recents view; otherwise fuzzy-matched apps by score.
+    /// query yields the recents-first view of the whole catalog; otherwise
+    /// fuzzy-matched apps by score. The results list is virtualized, so there's
+    /// no need to cap how many we hand back.
     pub fn search(&self, query: &str) -> Vec<usize> {
         let query = query.trim().to_lowercase();
         if query.is_empty() {
@@ -157,17 +129,13 @@ impl Catalog {
             b.0.cmp(&a.0)
                 .then_with(|| self.apps[a.1].name_lower.cmp(&self.apps[b.1].name_lower))
         });
-        scored
-            .into_iter()
-            .take(MAX_RESULTS)
-            .map(|(_, index)| index)
-            .collect()
+        scored.into_iter().map(|(_, index)| index).collect()
     }
 
-    /// Indices for the pre-typing view: recents first, then padded with
-    /// alphabetically-first apps so the launcher isn't empty on a fresh install.
+    /// Indices for the pre-typing view: recents first, then every remaining
+    /// app alphabetically, so the whole catalog is browsable via scrolling.
     fn recent_indices(&self) -> Vec<usize> {
-        let mut indices = Vec::new();
+        let mut indices = Vec::with_capacity(self.apps.len());
         let mut used = HashSet::new();
 
         for path in &self.recents {
@@ -178,14 +146,10 @@ impl Catalog {
             }
         }
         for index in 0..self.apps.len() {
-            if indices.len() >= MAX_RESULTS {
-                break;
-            }
             if used.insert(index) {
                 indices.push(index);
             }
         }
-        indices.truncate(MAX_RESULTS);
         indices
     }
 
@@ -266,6 +230,63 @@ impl Catalog {
             .join("\n");
         let _ = std::fs::write(&file, contents);
     }
+}
+
+/// Scan Start Menu shortcuts + `shell:AppsFolder` into a fresh app list.
+/// Pure I/O + COM — safe (and intended) to run on a background thread;
+/// `native::list_apps_folder` initializes COM on its calling thread itself.
+fn scan_apps() -> Vec<AppEntry> {
+    let mut apps = Vec::new();
+    let mut seen = HashSet::new();
+    for dir in start_menu_dirs() {
+        walk(&dir, &mut |path| {
+            let is_lnk = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| e.eq_ignore_ascii_case("lnk"));
+            if !is_lnk {
+                return;
+            }
+            let Some(name) = path.file_stem().and_then(|s| s.to_str()) else {
+                return;
+            };
+            if name.is_empty() {
+                return;
+            }
+            let name_lower = name.to_lowercase();
+            // De-dup by name (the per-user and all-users Start Menus often
+            // both contain the same shortcut).
+            if seen.insert(name_lower.clone()) {
+                apps.push(AppEntry {
+                    name: name.to_string(),
+                    name_lower,
+                    path: path.to_path_buf(),
+                });
+            }
+        });
+    }
+
+    // `.lnk` files under the Start Menu miss packaged (MSIX/UWP/Store)
+    // apps entirely — they have no shortcut file on disk. `shell:AppsFolder`
+    // is the virtual namespace Explorer's own Start Menu search reads, and
+    // it's a superset of the `.lnk` scan above, so this only adds apps we
+    // haven't already seen (e.g. NanaZip, other Store-distributed apps).
+    for (name, path) in native::list_apps_folder() {
+        if name.is_empty() {
+            continue;
+        }
+        let name_lower = name.to_lowercase();
+        if seen.insert(name_lower.clone()) {
+            apps.push(AppEntry {
+                name,
+                name_lower,
+                path,
+            });
+        }
+    }
+
+    apps.sort_by(|a, b| a.name_lower.cmp(&b.name_lower));
+    apps
 }
 
 fn start_menu_dirs() -> Vec<PathBuf> {
