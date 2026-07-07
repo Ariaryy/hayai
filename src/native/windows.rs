@@ -8,10 +8,11 @@ use futures::channel::mpsc::UnboundedSender;
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
     BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC, GetDIBits,
-    GetObjectW, ReleaseDC,
+    GetMonitorInfoW, GetObjectW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
+    ReleaseDC,
 };
 use windows_sys::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
@@ -32,12 +33,12 @@ use windows_sys::Win32::UI::Shell::{
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, BringWindowToTop, CreateWindowExW, DefWindowProcW, DestroyIcon,
-    DestroyWindow, DispatchMessageW, GWL_EXSTYLE, GetIconInfo, GetMessageW, GetWindowLongPtrW,
-    HWND_MESSAGE, HWND_TOPMOST, ICONINFO, IDI_APPLICATION, LoadIconW, MSG, PostQuitMessage,
-    RegisterClassW, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE,
-    SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, WM_APP,
-    WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW, WS_EX_APPWINDOW,
-    WS_EX_TOOLWINDOW, WS_OVERLAPPED,
+    DestroyWindow, DispatchMessageW, GWL_EXSTYLE, GetCursorPos, GetIconInfo, GetMessageW,
+    GetWindowLongPtrW, GetWindowRect, HWND_MESSAGE, HWND_TOPMOST, ICONINFO, IDI_APPLICATION,
+    LoadIconW, MSG, PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW, SW_SHOWNORMAL,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, WM_APP, WM_DESTROY, WM_HOTKEY,
+    WM_LBUTTONUP, WM_RBUTTONUP, WNDCLASSW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
 };
 
 use super::{IconImage, NativeCommand};
@@ -101,6 +102,44 @@ pub fn hide_launcher_window(window: &gpui::Window) {
     }
 }
 
+/// Move the (still-hidden) launcher onto the monitor under the cursor,
+/// centered in the work area. Runs before ShowWindow so the window never
+/// paints at its previous monitor's position. Keeps the window's current
+/// pixel size (GPUI sized it at creation for the then-current DPI).
+unsafe fn reposition_on_cursor_monitor(hwnd: HWND) {
+    unsafe {
+        let mut cursor = POINT { x: 0, y: 0 };
+        if GetCursorPos(&mut cursor) == 0 {
+            return; // leave the window where it was
+        }
+        let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..std::mem::zeroed()
+        };
+        if GetMonitorInfoW(monitor, &mut info) == 0 {
+            return;
+        }
+        let mut rect = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        if GetWindowRect(hwnd, &mut rect) == 0 {
+            return;
+        }
+        let win_w = rect.right - rect.left;
+        let win_h = rect.bottom - rect.top;
+        let work = info.rcWork; // excludes the taskbar
+        let x = work.left + ((work.right - work.left) - win_w) / 2;
+        // True vertical center of the work area — Raycast's 1/3-down ratio
+        // (and the 2/5 tried in between) both sat too high per user feedback.
+        let y = work.top + ((work.bottom - work.top) - win_h) / 2;
+        SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+}
+
 pub fn focus_launcher_window(window: &gpui::Window) {
     if let Some(hwnd) = hwnd_of(window) {
         unsafe {
@@ -113,6 +152,7 @@ pub fn focus_launcher_window(window: &gpui::Window) {
                 (ex | WS_EX_TOOLWINDOW as isize) & !(WS_EX_APPWINDOW as isize),
             );
 
+            reposition_on_cursor_monitor(hwnd);
             ShowWindow(hwnd, SW_SHOW);
             // Apply the exstyle change and push to top of Z-order in one call.
             SetWindowPos(
