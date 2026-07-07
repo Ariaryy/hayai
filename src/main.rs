@@ -9,9 +9,10 @@ mod plugins;
 use futures::StreamExt;
 use gpui::{App, rgb};
 use gpui_component::{Theme, ThemeMode, ThemeTokens};
-use apps::Catalog;
+use apps::{AppsProvider, Catalog, CatalogGlobal};
 use launcher::{LauncherGlobal, LauncherState};
 use native::{NativeCommand, NativeRuntime};
+use plugins::{PluginRegistry, RegistryGlobal};
 
 fn main() {
     let (native_tx, native_rx) = futures::channel::mpsc::unbounded();
@@ -27,6 +28,11 @@ fn main() {
         // Scan runs on the background pool (Catalog::install kicks it off);
         // icons are decoded lazily on render.
         Catalog::install(cx);
+
+        let catalog = cx.global::<CatalogGlobal>().clone_handle();
+        let mut registry = PluginRegistry::new();
+        registry.register(AppsProvider::new(catalog));
+        RegistryGlobal::install(cx, registry);
 
         drive_native_commands(cx, native_rx, native_runtime);
     });

@@ -16,7 +16,9 @@ use gpui_component::{
 };
 
 use crate::apps::{Catalog, CatalogGlobal, IconRequest};
+use crate::commands::{CommandAction, CommandItem, IconSource};
 use crate::native;
+use crate::plugins::PluginRegistry;
 
 const LAUNCHER_WIDTH: f32 = 720.0;
 const LAUNCHER_HEIGHT: f32 = 400.0;
@@ -37,7 +39,7 @@ impl gpui::Global for LauncherGlobal {}
 #[derive(Default)]
 pub struct LauncherState {
     window: Option<AnyWindowHandle>,
-    list: Option<Entity<ListState<AppListDelegate>>>,
+    list: Option<Entity<ListState<ResultListDelegate>>>,
     search_input: Option<Entity<InputState>>,
     visible: bool,
 }
@@ -94,7 +96,7 @@ impl LauncherState {
 
         // `open_window`'s closure returns the window's root view (a `Root`), so we
         // stash the inner entities here to read back out afterward.
-        type OpenedEntities = (Entity<ListState<AppListDelegate>>, Entity<InputState>);
+        type OpenedEntities = (Entity<ListState<ResultListDelegate>>, Entity<InputState>);
         let entities_slot: Rc<RefCell<Option<OpenedEntities>>> = Rc::new(RefCell::new(None));
         let entities_slot_for_window = entities_slot.clone();
 
@@ -114,8 +116,10 @@ impl LauncherState {
                 },
                 move |window, cx| {
                     let catalog = cx.global::<CatalogGlobal>().clone_handle();
+                    let registry = cx.global::<crate::plugins::RegistryGlobal>().clone_handle();
                     let list = cx.new(|cx| {
-                        ListState::new(AppListDelegate::new(catalog), window, cx).searchable(false)
+                        ListState::new(ResultListDelegate::new(registry, catalog), window, cx)
+                            .searchable(false)
                     });
                     let search_input = cx.new(|cx| {
                         InputState::new(window, cx)
@@ -252,14 +256,14 @@ fn enter_kbd(cx: &App) -> impl IntoElement {
 /// already `cx.propagate()`s all of these in single-line mode specifically so
 /// a containing view can do this.
 struct LauncherRoot {
-    list: Entity<ListState<AppListDelegate>>,
+    list: Entity<ListState<ResultListDelegate>>,
     search_input: Entity<InputState>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl LauncherRoot {
     fn new(
-        list: Entity<ListState<AppListDelegate>>,
+        list: Entity<ListState<ResultListDelegate>>,
         search_input: Entity<InputState>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -395,28 +399,46 @@ impl gpui::Render for LauncherRoot {
     }
 }
 
-/// Drives the results list: fuzzy-searches the catalog on every keystroke,
-/// renders one row per match, and launches the selected app on confirm.
-struct AppListDelegate {
+/// Drives the results list: dispatches each query through the
+/// [`PluginRegistry`], renders one row per [`CommandItem`], and runs the
+/// selected item's action on confirm. Provider-agnostic — apps are just the
+/// current default provider.
+struct ResultListDelegate {
+    registry: Rc<RefCell<PluginRegistry>>,
+    /// Catalog handle retained ONLY for the icon cache (`IconSource::Path`).
     catalog: Rc<RefCell<Catalog>>,
-    /// Catalog indices matching the current query, in display order.
-    results: Vec<usize>,
+    results: Vec<CommandItem>,
+    /// Generation the current `results` belong to (see `PluginRegistry`).
+    results_generation: u64,
     selected_index: Option<IndexPath>,
 }
 
-impl AppListDelegate {
-    fn new(catalog: Rc<RefCell<Catalog>>) -> Self {
-        let results = catalog.borrow().search("");
+impl ResultListDelegate {
+    fn new(registry: Rc<RefCell<PluginRegistry>>, catalog: Rc<RefCell<Catalog>>) -> Self {
+        let dispatch = registry.borrow_mut().dispatch("");
+        let results = registry.borrow().search(&dispatch);
         Self {
+            registry,
             catalog,
+            selected_index: (!results.is_empty()).then(IndexPath::default),
             results,
-            selected_index: Some(IndexPath::default()),
+            results_generation: dispatch.generation,
         }
+    }
+
+    fn apply_results(&mut self, generation: u64, items: Vec<CommandItem>, cx: &mut Context<ListState<Self>>) {
+        if crate::plugins::is_stale(self.results_generation, generation) {
+            return;
+        }
+        self.results_generation = generation;
+        self.results = items;
+        self.selected_index = (!self.results.is_empty()).then(IndexPath::default);
+        cx.notify();
     }
 }
 
-impl ListDelegate for AppListDelegate {
-    type Item = AppRow;
+impl ListDelegate for ResultListDelegate {
+    type Item = ResultRow;
 
     fn perform_search(
         &mut self,
@@ -424,9 +446,13 @@ impl ListDelegate for AppListDelegate {
         _window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Task<()> {
-        self.results = self.catalog.borrow().search(query);
-        self.selected_index = (!self.results.is_empty()).then(IndexPath::default);
-        cx.notify();
+        let dispatch = self.registry.borrow_mut().dispatch(query);
+        // All current providers are synchronous & in-memory: run inline.
+        // (When an async/debounced provider lands, this branches on
+        // dispatch.debounce: spawn, sleep ~50ms, run, then apply only if
+        // dispatch.generation == registry.current_generation().)
+        let items = self.registry.borrow().search(&dispatch);
+        self.apply_results(dispatch.generation, items, cx);
         Task::ready(())
     }
 
@@ -440,20 +466,24 @@ impl ListDelegate for AppListDelegate {
         _window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Option<Self::Item> {
-        let &index = self.results.get(ix.row)?;
-        let mut catalog = self.catalog.borrow_mut();
-        let name = catalog.app(index)?.name.clone();
-        let icon = match catalog.request_icon(index) {
-            IconRequest::Ready(icon) => icon,
-            IconRequest::Loading => None,
-            IconRequest::Load(path) => {
-                drop(catalog);
-                spawn_icon_load(path, self.catalog.clone(), cx);
-                None
+        let item = self.results.get(ix.row)?.clone();
+        let icon = match &item.icon {
+            IconSource::Path(path) => {
+                let mut catalog = self.catalog.borrow_mut();
+                match catalog.request_icon(path) {
+                    IconRequest::Ready(icon) => icon,
+                    IconRequest::Loading => None,
+                    IconRequest::Load(path) => {
+                        drop(catalog);
+                        spawn_icon_load(path, self.catalog.clone(), cx);
+                        None
+                    }
+                }
             }
+            IconSource::None => None,
         };
         let selected = self.selected_index == Some(ix);
-        Some(AppRow::new(ix, name, icon, selected))
+        Some(ResultRow::new(ix, item.title, item.subtitle, icon, selected))
     }
 
     fn set_selected_index(
@@ -468,20 +498,39 @@ impl ListDelegate for AppListDelegate {
 
     fn confirm(&mut self, _secondary: bool, window: &mut Window, cx: &mut Context<ListState<Self>>) {
         // Bookkeeping first (cheap, in-memory), then hide the window
-        // *immediately* — ShellExecuteW can take hundreds of ms and must not
-        // hold the launcher on screen after Enter. Both the shell call and
-        // the recents write happen on the background pool.
-        let launch = self
+        // *immediately* — a shell call can take hundreds of ms and must not
+        // hold the launcher on screen after Enter.
+        let action = self
             .selected_index
-            .and_then(|ix| self.results.get(ix.row).copied())
-            .and_then(|index| self.catalog.borrow_mut().mark_launched(index));
-        LauncherState::dismiss(window, cx);
-        if let Some((path, recents)) = launch {
-            cx.background_spawn(async move {
-                native::launch_path(&path);
-                crate::apps::write_recents_file(&recents);
-            })
-            .detach();
+            .and_then(|ix| self.results.get(ix.row))
+            .map(|item| item.action.clone());
+        match action {
+            Some(CommandAction::LaunchApplication(path)) => {
+                let recents = self.catalog.borrow_mut().mark_launched_path(path.clone());
+                LauncherState::dismiss(window, cx);
+                cx.background_spawn(async move {
+                    native::launch_path(&path);
+                    crate::apps::write_recents_file(&recents);
+                })
+                .detach();
+            }
+            Some(CommandAction::OpenFile(path)) => {
+                LauncherState::dismiss(window, cx);
+                cx.background_spawn(async move {
+                    native::launch_path(&path);
+                })
+                .detach();
+            }
+            Some(CommandAction::CopyToClipboard(text)) => {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                LauncherState::dismiss(window, cx);
+            }
+            Some(CommandAction::ShowText(_)) => {
+                // Stays on screen; no-op.
+            }
+            None => {
+                LauncherState::dismiss(window, cx);
+            }
         }
     }
 
@@ -496,7 +545,7 @@ impl ListDelegate for AppListDelegate {
 fn spawn_icon_load(
     path: PathBuf,
     catalog: Rc<RefCell<Catalog>>,
-    cx: &mut Context<ListState<AppListDelegate>>,
+    cx: &mut Context<ListState<ResultListDelegate>>,
 ) {
     cx.spawn(async move |list, cx| {
         let decode_path = path.clone();
@@ -515,25 +564,33 @@ fn spawn_icon_load(
 }
 
 #[derive(gpui::IntoElement)]
-struct AppRow {
+struct ResultRow {
     base: ListItem,
-    name: SharedString,
+    title: SharedString,
+    subtitle: Option<SharedString>,
     icon: Option<Arc<RenderImage>>,
     selected: bool,
 }
 
-impl AppRow {
-    fn new(id: IndexPath, name: String, icon: Option<Arc<RenderImage>>, selected: bool) -> Self {
+impl ResultRow {
+    fn new(
+        id: IndexPath,
+        title: String,
+        subtitle: Option<String>,
+        icon: Option<Arc<RenderImage>>,
+        selected: bool,
+    ) -> Self {
         Self {
             base: ListItem::new(id).selected(selected),
-            name: name.into(),
+            title: title.into(),
+            subtitle: subtitle.map(Into::into),
             icon,
             selected,
         }
     }
 }
 
-impl Selectable for AppRow {
+impl Selectable for ResultRow {
     fn selected(mut self, selected: bool) -> Self {
         self.base = self.base.selected(selected);
         self.selected = selected;
@@ -545,7 +602,7 @@ impl Selectable for AppRow {
     }
 }
 
-impl gpui::RenderOnce for AppRow {
+impl gpui::RenderOnce for ResultRow {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         // `ListItem` wraps whatever we give it in a plain (column-stacking)
         // `div`, so icon + name must be a single flex-row child, not two
@@ -573,7 +630,19 @@ impl gpui::RenderOnce for AppRow {
                             slot.child(img(image).size(px(22.0)))
                         }),
                 )
-                .child(div().flex_1().child(self.name)),
+                .child(
+                    div().flex_1().flex().flex_col().child(self.title).when_some(
+                        self.subtitle,
+                        |col, subtitle| {
+                            col.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(subtitle),
+                            )
+                        },
+                    ),
+                ),
         )
     }
 }

@@ -28,6 +28,12 @@ pub struct AppEntry {
     path: PathBuf,
 }
 
+impl AppEntry {
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 pub struct Catalog {
     apps: Vec<AppEntry>,
     /// Decoded icons keyed by app path, or `Loading` while a background
@@ -164,16 +170,13 @@ impl Catalog {
     /// to do synchronously in the render path (it was blocking keystrokes),
     /// so callers must decode `path` off the main thread and hand the result
     /// back via `set_icon_ready`.
-    pub fn request_icon(&mut self, index: usize) -> IconRequest {
-        let Some(path) = self.apps.get(index).map(|app| app.path.clone()) else {
-            return IconRequest::Ready(None);
-        };
-        match self.icons.get(&path) {
+    pub fn request_icon(&mut self, path: &Path) -> IconRequest {
+        match self.icons.get(path) {
             Some(IconCache::Ready(icon)) => IconRequest::Ready(icon.clone()),
             Some(IconCache::Loading) => IconRequest::Loading,
             None => {
-                self.icons.insert(path.clone(), IconCache::Loading);
-                IconRequest::Load(path)
+                self.icons.insert(path.to_path_buf(), IconCache::Loading);
+                IconRequest::Load(path.to_path_buf())
             }
         }
     }
@@ -190,18 +193,15 @@ impl Catalog {
     /// call and the recents write are too slow for the UI thread (they held
     /// the window open after Enter), so the caller runs them via
     /// `background_spawn`.
-    pub fn mark_launched(&mut self, index: usize) -> Option<(PathBuf, String)> {
-        let path = self.apps.get(index)?.path.clone();
+    pub fn mark_launched_path(&mut self, path: PathBuf) -> String {
         self.recents.retain(|existing| existing != &path);
-        self.recents.insert(0, path.clone());
+        self.recents.insert(0, path);
         self.recents.truncate(MAX_RECENTS);
-        let serialized = self
-            .recents
+        self.recents
             .iter()
             .map(|p| p.to_string_lossy().into_owned())
             .collect::<Vec<_>>()
-            .join("\n");
-        Some((path, serialized))
+            .join("\n")
     }
 
     fn load_recents(&mut self) {
@@ -366,4 +366,41 @@ fn fuzzy_score(haystack: &str, needle: &str) -> Option<i32> {
         score += 15;
     }
     Some(score)
+}
+
+use crate::commands::{CommandAction, CommandItem, CommandProvider, IconSource};
+
+/// The default (no-keyword) provider: fuzzy app search over the catalog.
+pub struct AppsProvider {
+    catalog: Rc<RefCell<Catalog>>,
+}
+
+impl AppsProvider {
+    pub fn new(catalog: Rc<RefCell<Catalog>>) -> Self {
+        Self { catalog }
+    }
+}
+
+impl CommandProvider for AppsProvider {
+    fn namespace(&self) -> &'static str {
+        "apps"
+    }
+
+    fn search(&self, query: &str) -> Vec<CommandItem> {
+        let catalog = self.catalog.borrow();
+        catalog
+            .search(query)
+            .into_iter()
+            .filter_map(|index| {
+                let app = catalog.app(index)?;
+                Some(CommandItem {
+                    id: format!("app:{}", app.path().display()),
+                    title: app.name.clone(),
+                    subtitle: None,
+                    icon: IconSource::Path(app.path().to_path_buf()),
+                    action: CommandAction::LaunchApplication(app.path().to_path_buf()),
+                })
+            })
+            .collect()
+    }
 }
