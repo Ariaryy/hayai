@@ -25,11 +25,11 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows_sys::Win32::UI::Shell::{
-    ExtractIconExW, ILCombine, ILFree, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE,
-    NOTIFYICONDATAW, SHBindToObject, SHCONTF_FOLDERS, SHCONTF_INCLUDEHIDDEN, SHCONTF_NONFOLDERS,
-    SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON, SHGFI_PIDL, SHGetDesktopFolder, SHGetFileInfoW,
-    SHGetNameFromIDList, SHParseDisplayName, SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_NORMALDISPLAY,
-    Shell_NotifyIconW, ShellExecuteW,
+    ILCombine, ILFree, NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW,
+    SHBindToObject, SHCONTF_FOLDERS, SHCONTF_INCLUDEHIDDEN, SHCONTF_NONFOLDERS, SHDefExtractIconW,
+    SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON, SHGFI_PIDL, SHGFI_SYSICONINDEX, SHGetDesktopFolder,
+    SHGetFileInfoW, SHGetImageList, SHGetNameFromIDList, SHParseDisplayName,
+    SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_NORMALDISPLAY, Shell_NotifyIconW, ShellExecuteW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, BringWindowToTop, CreateWindowExW, DefWindowProcW, DestroyIcon,
@@ -375,6 +375,46 @@ type EnumNextFn = unsafe extern "system" fn(
     fetched: *mut u32,
 ) -> HRESULT;
 
+// IImageList (CommCtrl.h): IUnknown(0-2), then Add(0) ReplaceIcon(1)
+// SetOverlayImage(2) Replace(3) AddMasked(4) Draw(5) Remove(6) GetIcon(7)...
+// so GetIcon is absolute slot 3 + 7 = 10.
+const IMAGE_LIST_GET_ICON: usize = 10;
+const IID_IIMAGE_LIST: GUID = GUID::from_u128(0x46EB5926_582E_4017_9FDF_E8998DAA0950);
+/// SHIL_EXTRALARGE: the 48px system image list — crisp when our 22px logical
+/// row icon maps to up to 44 physical px at 200% scaling.
+const SHIL_EXTRALARGE: i32 = 0x2;
+const ILD_TRANSPARENT: u32 = 0x1;
+
+type ImageListGetIconFn = unsafe extern "system" fn(
+    this: *mut c_void,
+    i: i32,
+    flags: u32,
+    picon: *mut windows_sys::Win32::UI::WindowsAndMessaging::HICON,
+) -> HRESULT;
+
+/// Fetch icon `index` from the 48px (SHIL_EXTRALARGE) system image list.
+/// The image list is a process-wide shell singleton; we Release our ref but
+/// the list itself persists — cheap to re-query per call.
+unsafe fn icon_from_system_image_list(index: i32) -> Option<IconImage> {
+    unsafe {
+        let mut image_list: *mut c_void = null_mut();
+        let hr = SHGetImageList(SHIL_EXTRALARGE, &IID_IIMAGE_LIST, &mut image_list);
+        if hr < 0 || image_list.is_null() {
+            return None;
+        }
+        let get_icon: ImageListGetIconFn = com_vtbl_slot(image_list, IMAGE_LIST_GET_ICON);
+        let mut hicon: windows_sys::Win32::UI::WindowsAndMessaging::HICON = null_mut();
+        let hr = get_icon(image_list, index, ILD_TRANSPARENT, &mut hicon);
+        com_release(image_list);
+        if hr < 0 || hicon.is_null() {
+            return None;
+        }
+        let image = hicon_to_bgra(hicon);
+        DestroyIcon(hicon);
+        image
+    }
+}
+
 /// Enumerate `shell:AppsFolder` — the virtual namespace Explorer's own Start
 /// Menu search reads from. Unlike the `.lnk` scan, this also surfaces
 /// packaged (MSIX/UWP/Store) apps, which never get a physical shortcut file
@@ -540,26 +580,20 @@ pub fn extract_icon_rgba(path: &Path) -> Option<IconImage> {
     })
 }
 
-/// Extract an icon by index from an ico/exe/dll file, as `ExtractIconExW`
-/// (not `SHGetFileInfoW`) understands `IconLocation` strings.
+/// Extract an icon by index from an ico/exe/dll at 48px. SHDefExtractIconW
+/// (unlike ExtractIconExW) takes an explicit pixel size; 48px matches the
+/// SHIL_EXTRALARGE class used by the shell paths so all icons render at the
+/// same crispness. Returns S_FALSE with a null icon when the file has none.
 fn extract_icon_by_index(path: &Path, index: i32) -> Option<IconImage> {
     let wide = wide_null(&path.to_string_lossy());
     unsafe {
-        let mut large: windows_sys::Win32::UI::WindowsAndMessaging::HICON = std::ptr::null_mut();
-        let mut small: windows_sys::Win32::UI::WindowsAndMessaging::HICON = std::ptr::null_mut();
-        let extracted = ExtractIconExW(wide.as_ptr(), index, &mut large, &mut small, 1);
-        if extracted == 0 || large.is_null() {
-            if !small.is_null() {
-                DestroyIcon(small);
-            }
+        let mut hicon: windows_sys::Win32::UI::WindowsAndMessaging::HICON = null_mut();
+        let hr = SHDefExtractIconW(wide.as_ptr(), index, 0, &mut hicon, null_mut(), 48);
+        if hr != 0 || hicon.is_null() {
             return None;
         }
-
-        let image = hicon_to_bgra(large);
-        DestroyIcon(large);
-        if !small.is_null() {
-            DestroyIcon(small);
-        }
+        let image = hicon_to_bgra(hicon);
+        DestroyIcon(hicon);
         image
     }
 }
@@ -576,6 +610,26 @@ fn extract_icon_via_shell(path: &Path) -> Option<IconImage> {
 
     let wide = wide_null(&path_str);
     unsafe {
+        // SYSICONINDEX (not SHGFI_ICON): we want the icon's index in the
+        // system image list so we can pull the 48px (SHIL_EXTRALARGE)
+        // rendition — SHGFI_ICON|SHGFI_LARGEICON caps out at 32px, which
+        // upscales blurrily into our 22px-logical row at >100% DPI.
+        let mut info: SHFILEINFOW = std::mem::zeroed();
+        let list = SHGetFileInfoW(
+            wide.as_ptr(),
+            0,
+            &mut info,
+            std::mem::size_of::<SHFILEINFOW>() as u32,
+            SHGFI_SYSICONINDEX,
+        );
+        if list == 0 {
+            return None;
+        }
+        if let Some(image) = icon_from_system_image_list(info.iIcon) {
+            return Some(image);
+        }
+
+        // Fall back to the old 32px path if the image-list route failed.
         let mut info: SHFILEINFOW = std::mem::zeroed();
         let ok = SHGetFileInfoW(
             wide.as_ptr(),
@@ -595,6 +649,36 @@ fn extract_icon_via_shell(path: &Path) -> Option<IconImage> {
 }
 
 fn extract_icon_via_shell_pidl(shell_path: &str) -> Option<IconImage> {
+    extract_icon_via_shell_pidl_sized(shell_path) // 48px attempt
+        .or_else(|| extract_icon_via_shell_pidl_legacy(shell_path)) // old 32px body
+}
+
+fn extract_icon_via_shell_pidl_sized(shell_path: &str) -> Option<IconImage> {
+    let wide = wide_null(shell_path);
+    unsafe {
+        let mut pidl: *mut ITEMIDLIST = null_mut();
+        let hr = SHParseDisplayName(wide.as_ptr(), null_mut(), &mut pidl, 0, null_mut());
+        if hr < 0 || pidl.is_null() {
+            return None;
+        }
+
+        let mut info: SHFILEINFOW = std::mem::zeroed();
+        let list = SHGetFileInfoW(
+            pidl as *const u16,
+            0,
+            &mut info,
+            std::mem::size_of::<SHFILEINFOW>() as u32,
+            SHGFI_PIDL | SHGFI_SYSICONINDEX,
+        );
+        ILFree(pidl);
+        if list == 0 {
+            return None;
+        }
+        icon_from_system_image_list(info.iIcon)
+    }
+}
+
+fn extract_icon_via_shell_pidl_legacy(shell_path: &str) -> Option<IconImage> {
     let wide = wide_null(shell_path);
     unsafe {
         let mut pidl: *mut ITEMIDLIST = null_mut();
