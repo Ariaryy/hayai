@@ -330,32 +330,34 @@ fn fuzzy_score(haystack: &str, needle: &str) -> Option<i32> {
         return Some(0);
     }
 
-    let hay: Vec<char> = haystack.chars().collect();
-    let mut hay_index = 0;
+    // Walks the haystack exactly once, tracking the previous character
+    // instead of materializing a Vec<char>: this runs per catalog entry per
+    // keystroke, so a heap allocation here multiplies by the app count.
+    let mut hay = haystack.chars();
+    let mut prev_char: Option<char> = None;
     let mut score = 0;
     let mut prev_matched = false;
 
     for needle_char in needle.chars() {
         let mut found = false;
-        while hay_index < hay.len() {
-            let hay_char = hay[hay_index];
+        for hay_char in hay.by_ref() {
             if hay_char == needle_char {
-                if hay_index == 0 {
-                    score += 10;
-                } else if !hay[hay_index - 1].is_alphanumeric() {
-                    score += 8; // word boundary
+                match prev_char {
+                    None => score += 10, // match at the very start
+                    Some(prev) if !prev.is_alphanumeric() => score += 8, // word boundary
+                    _ => {}
                 }
                 if prev_matched {
                     score += 5; // consecutive run
                 }
                 score += 1;
-                hay_index += 1;
                 prev_matched = true;
+                prev_char = Some(hay_char);
                 found = true;
                 break;
             }
-            hay_index += 1;
             prev_matched = false;
+            prev_char = Some(hay_char);
         }
         if !found {
             return None;
@@ -402,5 +404,74 @@ impl CommandProvider for AppsProvider {
                 })
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fuzzy_score;
+
+    #[test]
+    fn empty_needle_matches_anything_with_zero() {
+        assert_eq!(fuzzy_score("visual studio code", ""), Some(0));
+        assert_eq!(fuzzy_score("", ""), Some(0));
+    }
+
+    #[test]
+    fn non_subsequence_is_none() {
+        assert_eq!(fuzzy_score("notepad", "xyz"), None);
+        assert_eq!(fuzzy_score("", "a"), None);
+        // Subsequence must be in order:
+        assert_eq!(fuzzy_score("ab", "ba"), None);
+    }
+
+    #[test]
+    fn subsequence_matches() {
+        assert!(fuzzy_score("visual studio code", "vsc").is_some());
+        assert!(fuzzy_score("notepad", "npd").is_some());
+    }
+
+    #[test]
+    fn prefix_beats_scattered() {
+        // "note" as a literal prefix of "notepad" must outrank the same
+        // letters scattered through another candidate.
+        let prefix = fuzzy_score("notepad", "note").unwrap();
+        let scattered = fuzzy_score("network operations terminal e", "note").unwrap();
+        assert!(prefix > scattered, "prefix {prefix} vs scattered {scattered}");
+    }
+
+    #[test]
+    fn word_boundary_beats_mid_word() {
+        // 'c' at a word boundary ("visual studio code") vs mid-word ("arc").
+        let boundary = fuzzy_score("studio code", "c").unwrap();
+        let mid_word = fuzzy_score("arc", "c").unwrap();
+        assert!(boundary > mid_word, "boundary {boundary} vs mid-word {mid_word}");
+    }
+
+    #[test]
+    fn consecutive_run_beats_gaps() {
+        // Same needle, same haystack length; consecutive letters score higher.
+        let consecutive = fuzzy_score("xcodex", "code").unwrap();
+        let gappy = fuzzy_score("cxoxdxex", "code").unwrap();
+        assert!(consecutive > gappy, "consecutive {consecutive} vs gappy {gappy}");
+    }
+
+    #[test]
+    fn first_char_bonus() {
+        let at_start = fuzzy_score("code", "c").unwrap();
+        let not_at_start = fuzzy_score("xcode", "c").unwrap();
+        assert!(at_start > not_at_start);
+    }
+
+    #[test]
+    fn exact_scores() {
+        // Pin exact values so the rewrite is provably score-identical:
+        // "code" vs "code": start(10) + 4 matches(4) + 3 consecutive(15) + prefix(15) = 44
+        assert_eq!(fuzzy_score("code", "code"), Some(44));
+        // "xcode" vs "c": no start, 'x' before 'c' is alphanumeric (no
+        // boundary), 1 match = 1
+        assert_eq!(fuzzy_score("xcode", "c"), Some(1));
+        // "studio code" vs "c": boundary after space (8) + 1 match = 9
+        assert_eq!(fuzzy_score("studio code", "c"), Some(9));
     }
 }

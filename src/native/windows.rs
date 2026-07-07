@@ -593,7 +593,8 @@ unsafe fn pwstr_to_string(ptr: *mut u16) -> String {
 /// `SHGetFileInfoW`'s shortcut-arrow overlay, which is composited into the
 /// bitmap and can't otherwise be turned off), then to the original path.
 ///
-/// Runs on the GPUI/main thread and is meant to be called lazily + cached;
+/// Runs on gpui's background thread pool (via spawn_icon_load's
+/// background_spawn) and is meant to be called lazily + cached;
 /// each call touches GDI and must clean up every handle it creates or we
 /// leak kernel objects.
 pub fn extract_icon_rgba(path: &Path) -> Option<IconImage> {
