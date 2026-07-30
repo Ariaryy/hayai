@@ -2,12 +2,14 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{
-    AnyWindowHandle, App, Bounds, Context, Entity, FocusHandle, Focusable, Half, IntoElement,
-    RenderImage, SharedString, Subscription, Task, Window, WindowBackgroundAppearance,
-    WindowBounds, WindowKind, WindowOptions, div, img, px, relative, size,
+    AnyElement, AnyWindowHandle, App, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight,
+    Half, IntoElement, MouseButton, RenderImage, SharedString, Subscription, Task, Window,
+    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, img, px, relative,
+    size,
 };
 use gpui_component::{
     ActiveTheme, IndexPath, Root, Selectable, Sizable, Size, h_flex,
@@ -57,6 +59,11 @@ pub struct LauncherState {
     window: Option<AnyWindowHandle>,
     list: Option<Entity<ListState<ResultListDelegate>>>,
     search_input: Option<Entity<InputState>>,
+    /// Held so `show` can reset file mode / folder scope along with the
+    /// query text — without this, re-showing a window that was left in file
+    /// mode reset only the visible list (to apps) while the pill and mode
+    /// flag stayed stuck on "Files", desyncing the two.
+    view: Option<Entity<LauncherRoot>>,
     visible: bool,
 }
 
@@ -78,26 +85,27 @@ impl LauncherState {
     }
 
     pub fn show(&mut self, cx: &mut App) {
-        if let (Some(handle), Some(list), Some(search_input)) =
-            (self.window, self.list.clone(), self.search_input.clone())
-        {
+        if let (Some(handle), Some(_list), Some(search_input), Some(view)) = (
+            self.window,
+            self.list.clone(),
+            self.search_input.clone(),
+            self.view.clone(),
+        ) {
             let shown = handle
                 .update(cx, |_, window, cx| {
-                    // Reset the query and rerun the search (picks up any recents
-                    // reordering from apps launched since the window was last hidden)
-                    // *before* the Win32 show below. The window is still hidden here,
-                    // so GPUI paints the final, reordered frame while off-screen —
-                    // doing this after ShowWindow would let the stale frame flash on
-                    // screen for one frame before the reorder lands.
+                    // Reset all the way back to the default apps view (picks up
+                    // any recents reordering from apps launched since the window
+                    // was last hidden) *before* the Win32 show below. The window
+                    // is still hidden here, so GPUI paints the final, reset frame
+                    // while off-screen — doing this after ShowWindow would let
+                    // the stale frame flash on screen for one frame first.
                     //
-                    // `InputState::set_value` is a programmatic change and does not
-                    // itself emit `InputEvent::Change`, so the results must be reset
-                    // explicitly here too — otherwise the box goes blank but the
-                    // previous query's results stay on screen.
-                    search_input.update(cx, |input, cx| input.set_value("", window, cx));
-                    list.update(cx, |list, cx| {
-                        perform_search_and_select_first(list, "", window, cx);
-                    });
+                    // Routed through the view (rather than poking search_input /
+                    // list directly) so file mode and folder scope get reset too
+                    // — otherwise a window hidden mid file-search reopened with
+                    // the "Files" pill still showing while the list underneath
+                    // had silently gone back to apps.
+                    view.update(cx, |view, cx| view.reset_to_apps(window, cx));
                     // Win32 focus next (this re-shows the hidden window via SW_SHOW and
                     // calls SetForegroundWindow etc.), then GPUI focus. Reversed order
                     // (GPUI focus before Win32 focus) would have GPUI's WM_SETFOCUS
@@ -114,13 +122,18 @@ impl LauncherState {
             self.window = None;
             self.list = None;
             self.search_input = None;
+            self.view = None;
         }
 
         let bounds = Bounds::centered(None, size(px(LAUNCHER_WIDTH), px(LAUNCHER_HEIGHT)), cx);
 
         // `open_window`'s closure returns the window's root view (a `Root`), so we
         // stash the inner entities here to read back out afterward.
-        type OpenedEntities = (Entity<ListState<ResultListDelegate>>, Entity<InputState>);
+        type OpenedEntities = (
+            Entity<ListState<ResultListDelegate>>,
+            Entity<InputState>,
+            Entity<LauncherRoot>,
+        );
         let entities_slot: Rc<RefCell<Option<OpenedEntities>>> = Rc::new(RefCell::new(None));
         let entities_slot_for_window = entities_slot.clone();
 
@@ -153,11 +166,11 @@ impl LauncherState {
                         InputState::new(window, cx)
                             .placeholder("Search apps, files, commands...")
                     });
-                    *entities_slot_for_window.borrow_mut() =
-                        Some((list.clone(), search_input.clone()));
-
                     let view =
                         cx.new(|cx| LauncherRoot::new(list.clone(), search_input.clone(), window, cx));
+
+                    *entities_slot_for_window.borrow_mut() =
+                        Some((list.clone(), search_input.clone(), view.clone()));
 
                     // Close on focus loss (clicking elsewhere, Alt+Tab, etc.).
                     // The observer fires for both activation and deactivation, so we
@@ -186,7 +199,7 @@ impl LauncherState {
             )
             .expect("failed to open launcher window");
 
-        let (list, search_input) = entities_slot
+        let (list, search_input, view) = entities_slot
             .borrow_mut()
             .take()
             .expect("entities created during open_window");
@@ -200,6 +213,7 @@ impl LauncherState {
         self.window = Some(handle.into());
         self.list = Some(list);
         self.search_input = Some(search_input);
+        self.view = Some(view);
         self.visible = true;
     }
 
@@ -286,8 +300,26 @@ fn enter_kbd(cx: &App) -> impl IntoElement {
 struct LauncherRoot {
     list: Entity<ListState<ResultListDelegate>>,
     search_input: Entity<InputState>,
+    /// Whether the input is in " f " (file search) mode — rendered as a pill
+    /// instead of literal prefix text in the box, per the keyword the same
+    /// prefix routes to in `PluginRegistry::dispatch`.
+    file_mode: bool,
+    /// Stack of folders entered via Tab-on-a-folder-result, outermost first.
+    /// Empty means file mode is searching everywhere; the last entry scopes
+    /// the query under it using Everything's trailing-backslash folder-browse
+    /// syntax. Each Tab push descends one level further; Backspace/Escape on
+    /// an empty box pop one level back off, mirroring how you got there.
+    folder_scope: Vec<PathBuf>,
+    /// Session-only query history, most recent first, capped to
+    /// `HISTORY_LIMIT` — recorded on Enter (see `on_search_event`), recalled
+    /// with Up/Down when the search box is empty (see `on_move_up`).
+    history: Vec<String>,
+    /// `None` while typing live; `Some(i)` while browsing `history[i]`.
+    history_cursor: Option<usize>,
     _subscriptions: Vec<Subscription>,
 }
+
+const HISTORY_LIMIT: usize = 50;
 
 impl LauncherRoot {
     fn new(
@@ -296,12 +328,97 @@ impl LauncherRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let _subscriptions = vec![cx.subscribe_in(&search_input, window, Self::on_search_event)];
+        let this = cx.entity();
+        // `InputState` owns Backspace and Tab as key *bindings* (its "Input"
+        // key context is more specific than any context we could put on an
+        // ancestor div), so a normal `on_key_down`/`on_action` listener up
+        // here never sees them once InputState's handler consumes the event.
+        // `intercept_keystrokes` runs before action dispatch entirely (see
+        // its doc comment), so it's the only hook that can steal these two
+        // keys away from the input while it still holds focus.
+        let intercept = cx.intercept_keystrokes(move |event, window, cx| {
+            let key = event.keystroke.key.as_str();
+            if key != "backspace" && key != "tab" {
+                return;
+            }
+            this.update(cx, |this, cx| {
+                this.on_intercepted_key(key, window, cx);
+            });
+        });
+        let _subscriptions = vec![
+            cx.subscribe_in(&search_input, window, Self::on_search_event),
+            intercept,
+        ];
         Self {
             list,
             search_input,
+            file_mode: false,
+            folder_scope: Vec::new(),
+            history: Vec::new(),
+            history_cursor: None,
             _subscriptions,
         }
+    }
+
+    /// The raw query actually dispatched to `PluginRegistry`, reconstructed
+    /// from the visible remainder text plus whatever mode/scope state the
+    /// pill and folder navigation have accumulated (neither of which is
+    /// visible in the input box itself).
+    fn build_query(&self, remainder: &str) -> String {
+        match self.folder_scope.last() {
+            Some(folder) if remainder.is_empty() => format!(" f {}\\", folder.display()),
+            Some(folder) => format!(" f {}\\{}", folder.display(), remainder),
+            None => format!(" f {}", remainder),
+        }
+    }
+
+    fn enter_file_mode(&mut self, raw: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.file_mode = true;
+        self.folder_scope.clear();
+        let remainder = raw.strip_prefix(" f").unwrap_or("").trim_start().to_string();
+        self.search_input.update(cx, |input, cx| {
+            input.set_value(&remainder, window, cx);
+            input.set_placeholder("Search files and folders...", window, cx);
+        });
+        let query = self.build_query(&remainder);
+        self.list.update(cx, |list, cx| {
+            perform_search_and_select_first(list, &query, window, cx);
+        });
+    }
+
+    /// Reset all the way back to the default apps view: not in file mode, no
+    /// folder scope, empty box, default placeholder. Does *not* focus the
+    /// input — callers that re-show a hidden window handle OS-vs-GPUI focus
+    /// ordering themselves (see `LauncherState::show`).
+    fn reset_to_apps(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.file_mode = false;
+        self.folder_scope.clear();
+        self.search_input.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.set_placeholder("Search apps, files, commands...", window, cx);
+        });
+        self.list.update(cx, |list, cx| {
+            perform_search_and_select_first(list, "", window, cx);
+        });
+    }
+
+    fn exit_file_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reset_to_apps(window, cx);
+        self.search_input.update(cx, |input, cx| input.focus(window, cx));
+    }
+
+    /// Pop one level off the folder-scope stack (Tab's inverse) and re-run
+    /// the search at whatever level that leaves — the empty root of file
+    /// mode if the stack is now empty. Clears the box too: whatever filter
+    /// text was typed at the level we're leaving doesn't carry over.
+    fn pop_folder_scope(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.folder_scope.pop();
+        self.search_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        let query = self.build_query("");
+        self.list.update(cx, |list, cx| {
+            perform_search_and_select_first(list, &query, window, cx);
+        });
     }
 
     fn on_search_event(
@@ -313,18 +430,95 @@ impl LauncherRoot {
     ) {
         match event {
             InputEvent::Change => {
-                let query = input.read(cx).value().to_string();
+                // Only real user edits reach this arm — our own history-recall
+                // `set_value` calls below drive `perform_search_and_select_first`
+                // directly and don't emit `Change`, so this can't clobber a
+                // recall in progress.
+                self.history_cursor = None;
+                let raw = input.read(cx).value().to_string();
+                if !self.file_mode && (raw == " f" || raw.starts_with(" f ")) {
+                    self.enter_file_mode(&raw, window, cx);
+                    return;
+                }
+                let query = if self.file_mode {
+                    self.build_query(&raw)
+                } else {
+                    raw
+                };
                 self.list.update(cx, |list, cx| {
                     perform_search_and_select_first(list, &query, window, cx);
                 });
             }
             InputEvent::PressEnter { .. } => {
+                let text = input.read(cx).value().to_string();
+                if !text.is_empty() && self.history.first().map(String::as_str) != Some(text.as_str()) {
+                    self.history.insert(0, text);
+                    self.history.truncate(HISTORY_LIMIT);
+                }
+                self.history_cursor = None;
                 self.list.update(cx, |list, cx| {
                     list.delegate_mut().confirm(false, window, cx);
                 });
             }
             _ => {}
         }
+    }
+
+    /// Tab on a folder result enters it: scope subsequent queries under it
+    /// (via Everything's folder-browse syntax in `build_query`) without
+    /// leaving the launcher, so the same key can descend further into
+    /// nested folders.
+    ///
+    /// Called from the app-wide `intercept_keystrokes` hook registered in
+    /// `new` — `InputState` consumes Backspace and Tab itself as key
+    /// bindings (with no `cx.propagate()`), so an ordinary `on_key_down`
+    /// listener on an ancestor div never sees them while the input holds
+    /// focus. Interception runs before action/keymap dispatch entirely, so
+    /// it's the only hook that can steal these two keys away first.
+    fn on_intercepted_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.file_mode {
+            return;
+        }
+
+        // Backspace on an already-empty box steps back out instead of
+        // being a no-op: pop the folder scope first if we're inside one
+        // (mirrors Escape), only exiting file mode entirely once there's
+        // no scope left to back out of.
+        if key == "backspace" && self.search_input.read(cx).value().is_empty() {
+            cx.stop_propagation();
+            if self.folder_scope.is_empty() {
+                self.exit_file_mode(window, cx);
+            } else {
+                self.pop_folder_scope(window, cx);
+            }
+            return;
+        }
+
+        if key != "tab" {
+            return;
+        }
+        let selected_dir = self.list.read(cx).selected_index().and_then(|ix| {
+            self.list
+                .read(cx)
+                .delegate()
+                .results
+                .get(ix.row)
+                .and_then(|item| match &item.action {
+                    CommandAction::OpenFile(path) if path.is_dir() => Some(path.clone()),
+                    _ => None,
+                })
+        });
+        let Some(dir) = selected_dir else {
+            return;
+        };
+        cx.stop_propagation();
+        self.folder_scope.push(dir);
+        self.search_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        let query = self.build_query("");
+        self.list.update(cx, |list, cx| {
+            perform_search_and_select_first(list, &query, window, cx);
+        });
     }
 
     fn move_selection(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
@@ -341,17 +535,95 @@ impl LauncherRoot {
     }
 
     fn on_move_up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
+        let at_top = self.list.read(cx).selected_index().map(|ix| ix.row).unwrap_or(0) == 0;
+        if self.search_input.read(cx).value().is_empty() && at_top {
+            // Empty query *and* already on the top result: Up is history
+            // recall (even when there's no history yet, so it never falls
+            // through to `move_selection`, which would wrap Up on the first
+            // row around to the last row and look like backwards nav).
+            // Below the top result, Up should just move the selection up
+            // like normal list navigation.
+            self.recall_history(1, window, cx);
+            return;
+        }
         self.move_selection(-1, window, cx);
     }
 
     fn on_move_down(&mut self, _: &MoveDown, window: &mut Window, cx: &mut Context<Self>) {
+        if self.history_cursor.is_some()
+            && self.search_input.read(cx).value().is_empty()
+            && self.recall_history(-1, window, cx)
+        {
+            return;
+        }
         self.move_selection(1, window, cx);
     }
 
+    /// Shell-history-style Up/Down: `delta = 1` steps to an older query,
+    /// `delta = -1` to a newer one (or back to empty). Only engages while
+    /// the search box is empty (see callers), so it never fights normal
+    /// list navigation once the user is typing or browsing results.
+    /// Returns `false` when there's nowhere to go, so the caller can fall
+    /// back to ordinary list-selection movement.
+    fn recall_history(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let next = match (self.history_cursor, delta) {
+            (None, 1) if !self.history.is_empty() => Some(0),
+            (Some(i), 1) if i + 1 < self.history.len() => Some(i + 1),
+            (Some(i), -1) if i > 0 => Some(i - 1),
+            (Some(_), -1) => None,
+            _ => return false,
+        };
+        self.history_cursor = next;
+        let text = next.and_then(|i| self.history.get(i)).cloned().unwrap_or_default();
+        self.search_input.update(cx, |input, cx| input.set_value(&text, window, cx));
+        let query = if self.file_mode { self.build_query(&text) } else { text };
+        self.list.update(cx, |list, cx| {
+            perform_search_and_select_first(list, &query, window, cx);
+        });
+        true
+    }
+
     fn on_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
+        // Escape backs out one level at a time: folder scope first (same
+        // stack as Backspace), then file mode entirely, then a non-empty
+        // query just gets cleared, and only once all of those are already
+        // clear does it fall through to dismissing the launcher.
+        if !self.folder_scope.is_empty() {
+            self.pop_folder_scope(window, cx);
+            return;
+        }
+        if self.file_mode {
+            self.exit_file_mode(window, cx);
+            return;
+        }
+        if !self.search_input.read(cx).value().is_empty() {
+            self.history_cursor = None;
+            self.search_input.update(cx, |input, cx| input.set_value("", window, cx));
+            self.list.update(cx, |list, cx| {
+                perform_search_and_select_first(list, "", window, cx);
+            });
+            return;
+        }
         self.list.update(cx, |list, cx| {
             list.delegate_mut().cancel(window, cx);
         });
+    }
+
+    /// Footer hint text for the currently selected row's Enter action —
+    /// e.g. "Copy" for calculator rows instead of the app-launch default.
+    fn selected_action_label(&self, cx: &App) -> &'static str {
+        let delegate = self.list.read(cx).delegate();
+        let action = delegate
+            .selected_index
+            .and_then(|ix| delegate.results.get(ix.row))
+            .map(|item| &item.action);
+        match action {
+            Some(CommandAction::CopyToClipboard(_)) => "Copy",
+            Some(CommandAction::OpenFile(path)) if path.is_dir() => "Open Folder",
+            Some(CommandAction::OpenFile(_)) => "Open File",
+            Some(CommandAction::ShowText(_)) => "Show",
+            Some(CommandAction::LaunchApplication(_)) | None => "Open Application",
+        }
     }
 }
 
@@ -380,11 +652,42 @@ impl gpui::Render for LauncherRoot {
                     .flex_none()
                     .h(px(52.0))
                     .w_full()
-                    .px_3()
                     .flex()
                     .items_center()
                     .border_b_1()
                     .border_color(cx.theme().border)
+                    .when(self.file_mode, |el| {
+                        let label = match self.folder_scope.last() {
+                            Some(dir) => dir
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| dir.to_string_lossy().into_owned()),
+                            None => "Files".to_string(),
+                        };
+                        el.child(
+                            div()
+                                .flex_none()
+                                .ml_3()
+                                .flex()
+                                .items_center()
+                                .gap_1()
+                                .h(px(28.0))
+                                .px_2()
+                                .rounded(cx.theme().radius.half())
+                                .bg(cx.theme().tokens.muted)
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .cursor_pointer()
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|this, _, window, cx| {
+                                        this.exit_file_mode(window, cx);
+                                    }),
+                                )
+                                .child(label)
+                                .child(div().child("×")),
+                        )
+                    })
                     .child(
                         Input::new(&self.search_input)
                             .appearance(false)
@@ -421,7 +724,7 @@ impl gpui::Render for LauncherRoot {
                     .border_color(cx.theme().border)
                     .text_color(cx.theme().muted_foreground)
                     .text_xs()
-                    .child("Open Application")
+                    .child(self.selected_action_label(cx))
                     .child(enter_kbd(cx)),
             )
     }
@@ -471,14 +774,34 @@ impl ListDelegate for ResultListDelegate {
     fn perform_search(
         &mut self,
         query: &str,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Task<()> {
         let dispatch = self.registry.borrow_mut().dispatch(query);
-        // All current providers are synchronous & in-memory: run inline.
-        // (When an async/debounced provider lands, this branches on
-        // dispatch.debounce: spawn, sleep ~50ms, run, then apply only if
-        // dispatch.generation == registry.current_generation().)
+        if dispatch.debounce
+            && let Some(job) = self.registry.borrow().background_search(&dispatch)
+        {
+            let generation = dispatch.generation;
+            let registry = self.registry.clone();
+            cx.spawn_in(window, async move |list, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(50))
+                    .await;
+                // Foreground again after the await: the query may have moved
+                // on while we slept, so drop this result set if so.
+                if registry.borrow().current_generation() != generation {
+                    return;
+                }
+                let items = cx.background_spawn(async move { job() }).await;
+                let _ = list.update(cx, |list, cx| {
+                    list.delegate_mut().apply_results(generation, items, cx);
+                });
+            })
+            .detach();
+            return Task::ready(());
+        }
+        // Synchronous & in-memory providers (including debounced ones with
+        // nothing to debounce, e.g. an empty query) run inline.
         let items = self.registry.borrow().search(&dispatch);
         self.apply_results(dispatch.generation, items, cx);
         Task::ready(())
@@ -511,7 +834,11 @@ impl ListDelegate for ResultListDelegate {
             IconSource::None => None,
         };
         let selected = self.selected_index == Some(ix);
-        Some(ResultRow::new(ix, item.title, item.subtitle, icon, selected))
+        // Only `CalcProvider` produces `CopyToClipboard` today, so this
+        // doubles as "is this a calculator result" without adding a field
+        // to `CommandItem` that every other provider would have to fill in.
+        let calculator = matches!(item.action, CommandAction::CopyToClipboard(_));
+        Some(ResultRow::new(ix, item.title, item.subtitle, icon, selected, calculator))
     }
 
     fn set_selected_index(
@@ -543,9 +870,12 @@ impl ListDelegate for ResultListDelegate {
                 .detach();
             }
             Some(CommandAction::OpenFile(path)) => {
+                let recents = cx.global::<crate::files::FileRecentsGlobal>().clone_handle();
+                let contents = recents.borrow_mut().mark_opened(path.clone());
                 LauncherState::dismiss(window, cx);
                 cx.background_spawn(async move {
                     native::launch_path(&path);
+                    crate::files::write_file_recents_file(&contents);
                 })
                 .detach();
             }
@@ -598,6 +928,10 @@ struct ResultRow {
     subtitle: Option<SharedString>,
     icon: Option<Arc<RenderImage>>,
     selected: bool,
+    /// Calculator results (see `ResultListDelegate::render_item`) render as
+    /// a distinct "question small / answer big" card rather than the plain
+    /// icon+title+subtitle row every other provider uses.
+    calculator: bool,
 }
 
 impl ResultRow {
@@ -607,6 +941,7 @@ impl ResultRow {
         subtitle: Option<String>,
         icon: Option<Arc<RenderImage>>,
         selected: bool,
+        calculator: bool,
     ) -> Self {
         Self {
             base: ListItem::new(id).selected(selected),
@@ -614,6 +949,7 @@ impl ResultRow {
             subtitle: subtitle.map(Into::into),
             icon,
             selected,
+            calculator,
         }
     }
 }
@@ -641,36 +977,109 @@ impl gpui::RenderOnce for ResultRow {
         // own style with ours before painting the highlight, so the radius
         // applies to that fill too. The list's own `.p_2()` provides the
         // inset on all four sides uniformly.
-        self.base.py_1p5().rounded(cx.theme().radius).child(
-            h_flex()
-                .items_center()
-                .gap_3()
-                .w_full()
-                .child(
-                    div()
-                        .w(px(22.0))
-                        .h(px(22.0))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .when_some(self.icon, |slot, image| {
-                            slot.child(img(image).size(px(22.0)))
-                        }),
-                )
-                .child(
-                    div().flex_1().flex().flex_col().child(self.title).when_some(
-                        self.subtitle,
-                        |col, subtitle| {
-                            col.child(
+        let ResultRow { base, title, subtitle, icon, selected: _, calculator } = self;
+        let content: AnyElement = if calculator {
+            ResultRow::render_calculator(title, subtitle, cx)
+        } else {
+            ResultRow::render_plain(title, subtitle, icon, cx)
+        };
+        base.py_1p5().rounded(cx.theme().radius).child(content)
+    }
+}
+
+impl ResultRow {
+    /// The plain icon + title + subtitle row every non-calculator provider
+    /// uses.
+    fn render_plain(
+        title: SharedString,
+        subtitle: Option<SharedString>,
+        icon: Option<Arc<RenderImage>>,
+        cx: &mut App,
+    ) -> AnyElement {
+        h_flex()
+            .items_center()
+            .gap_3()
+            .w_full()
+            .child(
+                div()
+                    .w(px(22.0))
+                    .h(px(22.0))
+                    .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .when_some(icon, |slot, image| slot.child(img(image).size(px(22.0)))),
+            )
+            .child(
+                div().flex_1().flex().flex_col().child(title).when_some(
+                    subtitle,
+                    |col, subtitle| {
+                        col.child(
+                            div()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(subtitle),
+                        )
+                    },
+                ),
+            )
+            .into_any_element()
+    }
+
+    /// A featured calculator card: small "Calculator" label + the
+    /// question in muted text on the left, the answer large and bold on the
+    /// right — visually distinct from a normal search result row.
+    fn render_calculator(title: SharedString, subtitle: Option<SharedString>, cx: &mut App) -> AnyElement {
+        h_flex()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .w_full()
+            .child(
+                h_flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .w(px(22.0))
+                            .h(px(22.0))
+                            .flex_none()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(cx.theme().radius)
+                            .bg(cx.theme().accent)
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("="),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .child(
                                 div()
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(subtitle),
+                                    .child("Calculator"),
                             )
-                        },
+                            .when_some(subtitle, |col, subtitle| {
+                                col.child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(subtitle),
+                                )
+                            }),
                     ),
-                ),
-        )
+            )
+            .child(
+                div()
+                    .text_lg()
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(cx.theme().foreground)
+                    .child(title),
+            )
+            .into_any_element()
     }
 }
