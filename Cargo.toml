@@ -20,17 +20,32 @@ anyhow = "1"
 # native thread sends a command (replaces a 40ms poll loop). Already in the
 # dependency tree via gpui, so this adds no new compiled code.
 futures = "0.3"
-# Only the buffer/frame types are used (to feed BGRA icon pixels into GPUI's
-# RenderImage); no decoders needed, so keep default features off to stay lean.
-image = { version = "0.25", default-features = false }
+# The buffer/frame types feed BGRA icon pixels into GPUI's RenderImage; "png"
+# is also on for clipboard-history image blobs (encode captured bitmaps to
+# disk, decode thumbnails back) — still far lighter than the full default
+# feature set (no jpeg/webp/tiff/etc decoders we never use).
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Clipboard-history index (text/image entries, capped by count/bytes/age).
+# "bundled" links SQLite in rather than depending on a system install.
+rusqlite = { version = "0.31", features = ["bundled"] }
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6.2"
+# Installer/updater framework and its startup-registration hooks
+# (`VelopackApp::build()...run()` in `main.rs`); `winreg` backs
+# `native::startup` for the `HKCU\...\Run` entry it writes/removes.
+velopack = "0.0.1298"
+winreg = "0.55"
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
+    "Win32_Globalization",
     "Win32_Graphics_Gdi",
+    "Win32_Networking_WinHttp",
     "Win32_System_Com",
+    "Win32_System_DataExchange",
     "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_SystemInformation",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
