@@ -5,8 +5,7 @@ use std::path::PathBuf;
 /// icon-decode cache keeps doing the work.
 #[derive(Clone, Debug)]
 pub enum IconSource {
-    // Unused until a provider without an icon (e.g. calculator) lands.
-    #[allow(dead_code)]
+    /// No icon (e.g. the "Everything not running" hint row).
     None,
     /// Resolve through the catalog's path-keyed icon cache (apps today;
     /// files later — same extraction machinery).
@@ -14,11 +13,10 @@ pub enum IconSource {
 }
 
 // Unused variants below are the extension surface for future providers
-// (file search, clipboard history, calculator) — see `ROADMAP.md`.
+// (clipboard history, calculator) — see `ROADMAP.md`.
 #[derive(Clone, Debug)]
 pub enum CommandAction {
     LaunchApplication(PathBuf),
-    #[allow(dead_code)]
     OpenFile(PathBuf),
     #[allow(dead_code)]
     CopyToClipboard(String),
@@ -37,6 +35,11 @@ pub struct CommandItem {
     pub action: CommandAction,
 }
 
+/// A debounced provider's search job: captures its query, runs on the
+/// background pool, and hands back the finished result set. `Send` because
+/// the pipeline runs it off the (non-`Send`) `Rc<RefCell<PluginRegistry>>`.
+pub type BackgroundSearch = Box<dyn FnOnce() -> Vec<CommandItem> + Send>;
+
 pub trait CommandProvider {
     // Unused until a second provider makes namespace disambiguation useful.
     #[allow(dead_code)]
@@ -51,7 +54,24 @@ pub trait CommandProvider {
     fn wants_debounce(&self) -> bool {
         false
     }
+    /// NL auto-detection: tried against every provider, in registration
+    /// order, before keyword-prefix routing (see `PluginRegistry::dispatch`).
+    /// Runs on every keystroke on the UI thread, so implementations must stay
+    /// cheap — bail out on a first-character check before attempting any
+    /// real parse. `query` is the raw, untrimmed dispatch input.
+    fn auto_claim(&self, _query: &str) -> bool {
+        false
+    }
     /// `query` is pre-trimmed of the keyword prefix (and surrounding
     /// whitespace) by the dispatcher.
     fn search(&self, query: &str) -> Vec<CommandItem>;
+
+    /// Debounced providers (`wants_debounce() == true`) return a job here
+    /// capturing `query`; the pipeline runs it on the background pool after
+    /// the debounce delay instead of calling `search` inline. Returning
+    /// `None` (e.g. for an empty query) falls back to the synchronous
+    /// `search` path.
+    fn background_search(&self, _query: &str) -> Option<BackgroundSearch> {
+        None
+    }
 }

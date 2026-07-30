@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::commands::{CommandItem, CommandProvider};
+use crate::commands::{BackgroundSearch, CommandItem, CommandProvider};
 
 #[derive(Clone)]
 pub struct RegistryGlobal {
@@ -54,9 +54,6 @@ impl PluginRegistry {
         self.providers.push(Box::new(provider));
     }
 
-    // Unused until the first async/debounced provider needs to check
-    // whether its dispatch is still current before applying results.
-    #[allow(dead_code)]
     pub fn current_generation(&self) -> u64 {
         self.generation
     }
@@ -110,15 +107,22 @@ impl PluginRegistry {
         }
     }
 
-    /// NL auto-detection stub: math/conversion providers will claim
-    /// shape-matched queries here (see `PLANS.md` §3). Tried before keyword
-    /// dispatch per `PLANS.md` § "Pipeline shape".
-    fn auto_detect(&self, _query: &str) -> Option<usize> {
-        None
+    /// NL auto-detection: the first provider whose `auto_claim` accepts this
+    /// query wins, in registration order. Tried before keyword dispatch.
+    fn auto_detect(&self, query: &str) -> Option<usize> {
+        self.providers
+            .iter()
+            .position(|p| p.auto_claim(query))
     }
 
     pub fn search(&self, dispatch: &Dispatch) -> Vec<CommandItem> {
         self.providers[dispatch.provider].search(&dispatch.query)
+    }
+
+    /// The dispatched provider's background job, if it wants one for this
+    /// query (see `CommandProvider::background_search`).
+    pub fn background_search(&self, dispatch: &Dispatch) -> Option<BackgroundSearch> {
+        self.providers[dispatch.provider].background_search(&dispatch.query)
     }
 }
 
@@ -126,9 +130,6 @@ pub struct Dispatch {
     pub generation: u64,
     pub provider: usize,
     pub query: String,
-    // Unused until the first async/debounced provider branches on it in
-    // `perform_search` (see `src/launcher.rs`'s comment there).
-    #[allow(dead_code)]
     pub debounce: bool,
 }
 
@@ -174,6 +175,39 @@ mod tests {
         FakeProvider {
             keyword,
             queries: RefCell::new(Vec::new()),
+        }
+    }
+
+    struct FakeDebouncedProvider;
+
+    impl CommandProvider for FakeDebouncedProvider {
+        fn namespace(&self) -> &'static str {
+            "fake-debounced"
+        }
+
+        fn keyword(&self) -> Option<&'static str> {
+            Some("d")
+        }
+
+        fn wants_debounce(&self) -> bool {
+            true
+        }
+
+        fn search(&self, _query: &str) -> Vec<CommandItem> {
+            Vec::new()
+        }
+
+        fn background_search(&self, query: &str) -> Option<crate::commands::BackgroundSearch> {
+            let query = query.to_string();
+            Some(Box::new(move || {
+                vec![CommandItem {
+                    id: "fake-debounced".into(),
+                    title: query,
+                    subtitle: None,
+                    icon: crate::commands::IconSource::None,
+                    action: CommandAction::ShowText(String::new()),
+                }]
+            }))
         }
     }
 
@@ -236,5 +270,31 @@ mod tests {
         assert!(is_stale(5, 3));
         assert!(!is_stale(5, 5));
         assert!(!is_stale(5, 7));
+    }
+
+    #[test]
+    fn debounced_provider_dispatch_yields_background_job() {
+        let mut registry = PluginRegistry::new();
+        registry.register(provider(None));
+        registry.register(FakeDebouncedProvider);
+
+        let dispatch = registry.dispatch(" d report");
+        assert!(dispatch.debounce);
+        let job = registry
+            .background_search(&dispatch)
+            .expect("debounced provider should return a job");
+        let items = job();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].title, "report");
+    }
+
+    #[test]
+    fn non_debounced_provider_dispatch_has_no_background_job() {
+        let mut registry = PluginRegistry::new();
+        registry.register(provider(None));
+
+        let dispatch = registry.dispatch("hello");
+        assert!(!dispatch.debounce);
+        assert!(registry.background_search(&dispatch).is_none());
     }
 }
