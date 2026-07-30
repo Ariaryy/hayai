@@ -1,7 +1,9 @@
 use std::io;
 use std::ptr::{null, null_mut};
-use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
+use std::time::Duration;
 
 use futures::channel::mpsc::UnboundedSender;
 
@@ -31,16 +33,17 @@ use windows_sys::Win32::UI::Shell::{
     SHGetFileInfoW, SHGetImageList, SHGetNameFromIDList, SHParseDisplayName,
     SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_NORMALDISPLAY, Shell_NotifyIconW, ShellExecuteW,
 };
+use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, AppendMenuW, BringWindowToTop, CreatePopupMenu, CreateWindowExW,
-    DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GWL_EXSTYLE,
-    GetCursorPos, GetIconInfo, GetMessageW, GetWindowLongPtrW, GetWindowRect, HWND_MESSAGE,
-    HWND_TOPMOST, ICONINFO, IDI_APPLICATION, LoadIconW, MF_STRING, MSG, PostMessageW,
-    PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP,
-    WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_EX_APPWINDOW,
-    WS_EX_TOOLWINDOW, WS_OVERLAPPED,
+    DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, FindWindowW,
+    GWL_EXSTYLE, GetCursorPos, GetIconInfo, GetMessageW, GetWindowLongPtrW, GetWindowRect,
+    HWND_MESSAGE, HWND_TOPMOST, ICONINFO, IDI_APPLICATION, LoadIconW, MF_STRING, MSG,
+    PostMessageW, PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW, SW_SHOWNORMAL,
+    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendMessageW, SetForegroundWindow,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
+    TranslateMessage, WM_APP, WM_COPYDATA, WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP, WM_NULL,
+    WM_RBUTTONUP, WNDCLASSW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
 };
 
 use super::{IconImage, NativeCommand};
@@ -53,6 +56,57 @@ const WM_TRAY_ICON: u32 = WM_APP + 1;
 // `&self` and never blocks, so no `Mutex` is needed — the send must not block
 // the Win32 message loop.
 static COMMAND_SENDER: OnceLock<UnboundedSender<NativeCommand>> = OnceLock::new();
+
+/// HWND of our message-only window, stashed as `isize` (not `HWND`, which
+/// isn't `Send`/`Sync`) so `everything_query` — called from the background
+/// pool — can address it as the IPC reply target.
+static MESSAGE_HWND: OnceLock<isize> = OnceLock::new();
+
+/// `EVERYTHING_IPC_QUERYW`'s `dwData` value for a query `WM_COPYDATA`, from
+/// the Everything SDK's `Everything_IPC.h`.
+const EVERYTHING_IPC_COPYDATAQUERYW: usize = 2;
+/// `EVERYTHING_IPC_ITEMW.flags` bit for folder results (files have neither
+/// bit set).
+const EVERYTHING_IPC_FOLDER: u32 = 0x1;
+/// `EVERYTHING_IPC_ITEMW.flags` bit for drive results.
+const EVERYTHING_IPC_DRIVE: u32 = 0x2;
+
+struct PendingQuery {
+    request_id: u32,
+    reply: std::sync::mpsc::SyncSender<Vec<FileHit>>,
+}
+
+/// The one in-flight Everything query's reply slot. `everything_query` holds
+/// `QUERY_LOCK` for its whole round trip, so at most one entry is ever live
+/// here — `window_proc` just needs somewhere to hand results back across
+/// threads.
+static PENDING_QUERY: Mutex<Option<PendingQuery>> = Mutex::new(None);
+/// Serializes `everything_query` calls: Everything's IPC is a single
+/// request/reply exchange per `WM_COPYDATA`, and overlapping calls would
+/// stomp each other's `PENDING_QUERY` slot.
+static QUERY_LOCK: Mutex<()> = Mutex::new(());
+static NEXT_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
+/// Bumped on every `everything_query` call. Lets a call that's been sitting
+/// in `QUERY_LOCK`'s queue notice, once it finally acquires the lock, that a
+/// newer call has since been issued — its own result would just be discarded
+/// by the caller's generation check anyway, so it skips the (up to 2s) IPC
+/// round trip instead of doing it pointlessly. Without this, typing quickly
+/// piles up several full round trips back-to-back on the lock, and the
+/// keystroke that actually matters ends up waiting behind all of them —
+/// which is what made file search feel unresponsive / empty under fast typing.
+static QUERY_SEQ: AtomicU32 = AtomicU32::new(0);
+
+/// One Everything search result.
+pub struct FileHit {
+    pub name: String,
+    pub parent: PathBuf,
+    // Unused: folders and files both resolve through `CommandAction::OpenFile`
+    // today (`ShellExecuteW` "open" on a directory opens Explorer, same as a
+    // file). Kept for a future folder-specific affordance (e.g. a distinct
+    // icon or action).
+    #[allow(dead_code)]
+    pub is_folder: bool,
+}
 
 pub struct NativeRuntime {
     thread: Option<thread::JoinHandle<()>>,
@@ -135,8 +189,8 @@ unsafe fn reposition_on_cursor_monitor(hwnd: HWND) {
         let win_h = rect.bottom - rect.top;
         let work = info.rcWork; // excludes the taskbar
         let x = work.left + ((work.right - work.left) - win_w) / 2;
-        // True vertical center of the work area — Raycast's 1/3-down ratio
-        // (and the 2/5 tried in between) both sat too high per user feedback.
+        // True vertical center of the work area — the 1/3-down and 2/5-down
+        // ratios tried earlier both sat too high per user feedback.
         let y = work.top + ((work.bottom - work.top) - win_h) / 2;
         SetWindowPos(hwnd, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
     }
@@ -231,6 +285,149 @@ pub fn launch_path(path: &Path) {
             SW_SHOWNORMAL,
         );
     }
+}
+
+/// Query a running Everything (voidtools) instance over its `WM_COPYDATA`
+/// IPC. Blocking; call ONLY from the background pool, never the GPUI thread
+/// (a round trip can take up to the 2s timeout below).
+///
+/// Returns `None` if Everything's IPC window isn't found (not running).
+pub fn everything_query(query: &str, max_results: u32) -> Option<Vec<FileHit>> {
+    // Registered up front so a call still queued behind `QUERY_LOCK` can
+    // notice, once it's this call's turn, that it's since been superseded.
+    let my_seq = QUERY_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+
+    let everything_hwnd = unsafe {
+        FindWindowW(
+            wide_null("EVERYTHING_TASKBAR_NOTIFICATION").as_ptr(),
+            null(),
+        )
+    };
+    if everything_hwnd.is_null() {
+        return None;
+    }
+    let message_hwnd = *MESSAGE_HWND.get()?;
+
+    // Holds for the whole round trip: only one Everything IPC exchange may
+    // be in flight, since PENDING_QUERY has room for exactly one reply slot.
+    let _guard = QUERY_LOCK.lock().unwrap();
+
+    // A newer call was issued while this one waited for the lock — its
+    // result would only be thrown away by the caller's generation check, so
+    // skip the (up to 2s) round trip and free the lock immediately instead
+    // of making the query that actually matters wait behind it too.
+    if QUERY_SEQ.load(Ordering::SeqCst) != my_seq {
+        return Some(Vec::new());
+    }
+
+    let request_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    *PENDING_QUERY.lock().unwrap() = Some(PendingQuery {
+        request_id,
+        reply: tx,
+    });
+
+    // EVERYTHING_IPC_QUERYW header: reply_hwnd, reply_copydata_message,
+    // search_flags, offset, max_results (5 x DWORD), followed by the
+    // null-terminated UTF-16 search string.
+    let wide_query: Vec<u16> = query.encode_utf16().chain([0]).collect();
+    const HEADER_LEN: usize = 20;
+    let mut buffer = vec![0u8; HEADER_LEN + wide_query.len() * 2];
+    buffer[0..4].copy_from_slice(&(message_hwnd as u32).to_ne_bytes());
+    buffer[4..8].copy_from_slice(&request_id.to_ne_bytes());
+    buffer[8..12].copy_from_slice(&0u32.to_ne_bytes()); // search_flags: none
+    buffer[12..16].copy_from_slice(&0u32.to_ne_bytes()); // offset
+    buffer[16..20].copy_from_slice(&max_results.to_ne_bytes());
+    let query_bytes = unsafe {
+        std::slice::from_raw_parts(wide_query.as_ptr() as *const u8, wide_query.len() * 2)
+    };
+    buffer[HEADER_LEN..].copy_from_slice(query_bytes);
+
+    let cds = COPYDATASTRUCT {
+        dwData: EVERYTHING_IPC_COPYDATAQUERYW,
+        cbData: buffer.len() as u32,
+        lpData: buffer.as_mut_ptr() as *mut c_void,
+    };
+
+    unsafe {
+        SendMessageW(
+            everything_hwnd,
+            WM_COPYDATA,
+            message_hwnd as usize,
+            &cds as *const COPYDATASTRUCT as isize,
+        );
+    }
+
+    match rx.recv_timeout(Duration::from_secs(2)) {
+        Ok(hits) => Some(hits),
+        Err(_) => {
+            *PENDING_QUERY.lock().unwrap() = None;
+            Some(Vec::new())
+        }
+    }
+}
+
+/// Parse an `EVERYTHING_IPC_LISTW` reply buffer (as delivered via
+/// `WM_COPYDATA`'s `lpData`/`cbData`) into `FileHit`s. `data` is
+/// untrusted-shaped (it comes from another process over IPC), so every
+/// offset is bounds-checked before use.
+fn parse_everything_reply(data: &[u8]) -> Vec<FileHit> {
+    // totfolders, totfiles, totitems, numfolders, numfiles, numitems, offset
+    // (7 x DWORD) -- see EVERYTHING_IPC_LISTW in Everything-SDK/ipc/everything_ipc.h.
+    const LIST_HEADER: usize = 28;
+    const ITEM_SIZE: usize = 12; // flags, filename_offset, path_offset (3 x DWORD)
+
+    if data.len() < LIST_HEADER {
+        return Vec::new();
+    }
+    let numitems = u32::from_ne_bytes(data[20..24].try_into().unwrap()) as usize;
+
+    // Cap the up-front allocation independent of the untrusted `numitems`
+    // field; the loop below still bounds-checks every item regardless.
+    let mut hits = Vec::with_capacity(numitems.min(256));
+    for i in 0..numitems {
+        let item_off = LIST_HEADER + i * ITEM_SIZE;
+        let Some(item) = data.get(item_off..item_off + ITEM_SIZE) else {
+            break;
+        };
+        let flags = u32::from_ne_bytes(item[0..4].try_into().unwrap());
+        let filename_offset = u32::from_ne_bytes(item[4..8].try_into().unwrap()) as usize;
+        let path_offset = u32::from_ne_bytes(item[8..12].try_into().unwrap()) as usize;
+
+        let (Some(name), Some(parent)) = (
+            read_utf16_cstr(data, filename_offset),
+            read_utf16_cstr(data, path_offset),
+        ) else {
+            continue;
+        };
+        let is_folder = flags & (EVERYTHING_IPC_FOLDER | EVERYTHING_IPC_DRIVE) != 0;
+        hits.push(FileHit {
+            name,
+            parent: PathBuf::from(parent),
+            is_folder,
+        });
+    }
+    hits
+}
+
+/// Read a null-terminated UTF-16 string starting at byte offset
+/// `byte_offset` within `data`. Returns `None` on any out-of-range or
+/// misaligned offset instead of panicking — `data` is untrusted IPC input.
+fn read_utf16_cstr(data: &[u8], byte_offset: usize) -> Option<String> {
+    if byte_offset % 2 != 0 {
+        return None;
+    }
+    let tail = data.get(byte_offset..)?;
+    let mut units = Vec::new();
+    let mut pairs = tail.chunks_exact(2);
+    for pair in &mut pairs {
+        let unit = u16::from_ne_bytes([pair[0], pair[1]]);
+        if unit == 0 {
+            break;
+        }
+        units.push(unit);
+    }
+    Some(String::from_utf16_lossy(&units))
 }
 
 const CLSID_SHELL_LINK: GUID = GUID::from_u128(0x00021401_0000_0000_C000_000000000046);
@@ -873,6 +1070,7 @@ fn run_message_window(sender: UnboundedSender<NativeCommand>) -> io::Result<()> 
     if hwnd.is_null() {
         return Err(io::Error::last_os_error());
     }
+    let _ = MESSAGE_HWND.set(hwnd as isize);
 
     add_tray_icon(hwnd)?;
     register_hotkey(hwnd)?;
@@ -962,6 +1160,27 @@ unsafe extern "system" fn window_proc(
             }
             0
         }
+        WM_COPYDATA => {
+            let cds = unsafe { &*(lparam as *const COPYDATASTRUCT) };
+            let mut pending = PENDING_QUERY.lock().unwrap();
+            if pending
+                .as_ref()
+                .is_some_and(|p| cds.dwData == p.request_id as usize)
+            {
+                // Only valid for the duration of this call — parse and copy
+                // out before returning.
+                let data = unsafe {
+                    std::slice::from_raw_parts(cds.lpData as *const u8, cds.cbData as usize)
+                };
+                let hits = parse_everything_reply(data);
+                if let Some(p) = pending.take() {
+                    let _ = p.reply.try_send(hits);
+                }
+                return 1;
+            }
+            drop(pending);
+            unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+        }
         WM_DESTROY => {
             unsafe {
                 UnregisterHotKey(hwnd, HOTKEY_ID);
@@ -998,4 +1217,153 @@ fn wide_null(value: &str) -> Vec<u16> {
 
 fn null_mut_hwnd() -> HWND {
     std::ptr::null_mut()
+}
+
+/// Blocking HTTPS GET over WinHTTP. Used for the currency rate fetch
+/// (~daily, on the background pool) — never called from the UI thread.
+/// `path` must include the leading '/'. Returns the response body decoded
+/// as UTF-8, or `None` on any connection/protocol failure.
+pub fn https_get(host: &str, path: &str) -> Option<String> {
+    use windows_sys::Win32::Networking::WinHttp::{
+        INTERNET_DEFAULT_HTTPS_PORT, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_FLAG_SECURE,
+        WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest,
+        WinHttpReceiveResponse, WinHttpSendRequest,
+    };
+
+    unsafe {
+        let agent = wide_null("hayai/1.0");
+        let session = WinHttpOpen(
+            agent.as_ptr(),
+            WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+            null(),
+            null(),
+            0,
+        );
+        if session.is_null() {
+            return None;
+        }
+
+        let host_wide = wide_null(host);
+        let connect = WinHttpConnect(session, host_wide.as_ptr(), INTERNET_DEFAULT_HTTPS_PORT, 0);
+        if connect.is_null() {
+            WinHttpCloseHandle(session);
+            return None;
+        }
+
+        let path_wide = wide_null(path);
+        let verb = wide_null("GET");
+        let request = WinHttpOpenRequest(
+            connect,
+            verb.as_ptr(),
+            path_wide.as_ptr(),
+            null(),
+            null(),
+            null(),
+            WINHTTP_FLAG_SECURE,
+        );
+        if request.is_null() {
+            WinHttpCloseHandle(connect);
+            WinHttpCloseHandle(session);
+            return None;
+        }
+
+        let sent = WinHttpSendRequest(request, null(), 0, null_mut(), 0, 0, 0);
+        let body = if sent != 0 && WinHttpReceiveResponse(request, null_mut()) != 0 {
+            read_winhttp_body(request)
+        } else {
+            None
+        };
+
+        WinHttpCloseHandle(request);
+        WinHttpCloseHandle(connect);
+        WinHttpCloseHandle(session);
+        body
+    }
+}
+
+unsafe fn read_winhttp_body(request: *mut c_void) -> Option<String> {
+    use windows_sys::Win32::Networking::WinHttp::{WinHttpQueryDataAvailable, WinHttpReadData};
+
+    let mut bytes = Vec::new();
+    loop {
+        let mut available: u32 = 0;
+        if unsafe { WinHttpQueryDataAvailable(request, &mut available) } == 0 {
+            return None;
+        }
+        if available == 0 {
+            break;
+        }
+        let mut buffer = vec![0u8; available as usize];
+        let mut read: u32 = 0;
+        if unsafe {
+            WinHttpReadData(
+                request,
+                buffer.as_mut_ptr() as *mut c_void,
+                available,
+                &mut read,
+            )
+        } == 0
+        {
+            return None;
+        }
+        buffer.truncate(read as usize);
+        bytes.extend_from_slice(&buffer);
+        if read == 0 {
+            break;
+        }
+    }
+    String::from_utf8(bytes).ok()
+}
+
+/// The ISO 4217 currency code (lowercase, e.g. `"usd"`) implied by the
+/// user's Windows region setting — used to pick a default "convert to"
+/// currency for bare amounts like "$100" with no explicit target. `None`
+/// on any lookup failure (falls back to no default, forcing an explicit
+/// target).
+pub fn system_currency_code() -> Option<String> {
+    use windows_sys::Win32::Globalization::{GetLocaleInfoEx, GetUserDefaultLocaleName, LOCALE_SINTLSYMBOL};
+
+    unsafe {
+        // LOCALE_NAME_MAX_LENGTH, per the Win32 docs — not exposed as a
+        // constant by windows-sys.
+        let mut locale_name = [0u16; 85];
+        if GetUserDefaultLocaleName(locale_name.as_mut_ptr(), locale_name.len() as i32) == 0 {
+            return None;
+        }
+        let mut buffer = [0u16; 8];
+        let len = GetLocaleInfoEx(
+            locale_name.as_ptr(),
+            LOCALE_SINTLSYMBOL,
+            buffer.as_mut_ptr(),
+            buffer.len() as i32,
+        );
+        if len <= 1 {
+            return None;
+        }
+        // `len` includes the null terminator.
+        let code = String::from_utf16_lossy(&buffer[..(len as usize - 1)])
+            .trim()
+            .to_lowercase();
+        if code.is_empty() { None } else { Some(code) }
+    }
+}
+
+/// The user's current local wall-clock time (year, month, day, hour,
+/// minute) — the "now" anchor for date/time arithmetic like "5 days from
+/// now" or "3pm + 5". Reads OS local time directly rather than computing a
+/// UTC offset ourselves, since `GetLocalTime` already accounts for the
+/// system's current DST state.
+pub fn local_now() -> (i32, u32, u32, u32, u32) {
+    use windows_sys::Win32::Foundation::SYSTEMTIME;
+    use windows_sys::Win32::System::SystemInformation::GetLocalTime;
+
+    let mut time: SYSTEMTIME = unsafe { std::mem::zeroed() };
+    unsafe { GetLocalTime(&mut time) };
+    (
+        time.wYear as i32,
+        time.wMonth as u32,
+        time.wDay as u32,
+        time.wHour as u32,
+        time.wMinute as u32,
+    )
 }

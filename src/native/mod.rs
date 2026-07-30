@@ -19,8 +19,8 @@ mod windows;
 
 #[cfg(windows)]
 pub use windows::{
-    NativeRuntime, extract_icon_rgba, focus_launcher_window, hide_launcher_window,
-    list_apps_folder, launch_path,
+    NativeRuntime, everything_query, extract_icon_rgba, focus_launcher_window,
+    hide_launcher_window, https_get, list_apps_folder, launch_path, local_now, system_currency_code,
 };
 
 #[cfg(not(windows))]
@@ -53,4 +53,32 @@ pub fn launch_path(_path: &std::path::Path) {}
 #[cfg(not(windows))]
 pub fn list_apps_folder() -> Vec<(String, std::path::PathBuf)> {
     Vec::new()
+}
+
+/// One Everything search result.
+#[cfg(not(windows))]
+pub struct FileHit {
+    pub name: String,
+    pub parent: std::path::PathBuf,
+    pub is_folder: bool,
+}
+
+#[cfg(not(windows))]
+pub fn everything_query(_query: &str, _max_results: u32) -> Option<Vec<FileHit>> {
+    None
+}
+
+#[cfg(not(windows))]
+pub fn https_get(_host: &str, _path: &str) -> Option<String> {
+    None
+}
+
+#[cfg(not(windows))]
+pub fn system_currency_code() -> Option<String> {
+    None
+}
+
+#[cfg(not(windows))]
+pub fn local_now() -> (i32, u32, u32, u32, u32) {
+    (1970, 1, 1, 0, 0)
 }
