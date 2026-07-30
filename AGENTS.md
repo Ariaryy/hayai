@@ -27,8 +27,11 @@ below); don't add more without checking the number.
 | `src/apps.rs` | `Catalog` (behind the `CatalogGlobal` global): Start Menu `.lnk` scan + `shell:AppsFolder` enumeration (packaged/Store apps), fuzzy search, lazy+cached **background-thread** icon decode, recents. The app-search vertical slice. |
 | `src/native/mod.rs` | `NativeCommand` enum + `IconImage` + platform dispatch. Non-Windows builds get stubs so it still compiles. |
 | `src/native/windows.rs` | Win32: hidden message-only window, `RegisterHotKey`, tray icon, `focus_launcher_window` (foreground/focus dance), `extract_icon_rgba` (icon extraction with shortcut/PIDL handling — see below), `list_apps_folder` (raw COM shell-namespace enumeration), `launch_path` (`ShellExecuteW`). |
-| `src/commands.rs` | `CommandProvider` trait + `CommandItem`/`CommandAction` model. Not yet wired into the view (apps use a bespoke path for now). |
-| `src/plugins.rs` | `PluginRegistry` over `CommandProvider`. Not yet wired in. |
+| `src/commands.rs` | `CommandProvider` trait + `CommandItem`/`CommandAction` model. |
+| `src/plugins.rs` | `PluginRegistry` over `CommandProvider`, dispatched from `LauncherRoot`'s search path (auto-claim NL detection, then keyword routing). |
+| `src/files.rs` | `FileSearchProvider` — Everything SDK-backed file search (`native::everything_query`), debounced via `CommandProvider::wants_debounce`/`background_search`. |
+| `src/calc/` | `CalcProvider`, claimed via the ` = ` keyword or NL auto-claim (`is_candidate` cheap gate + each evaluator's own parse). Evaluator chain in `calc::evaluate`, tried in order: `units` (dimension/temperature conversion), `currency` (live FX rates, symbol/code forms, regional-default bare amounts), `bases` (hex/dec/oct/bin), `time` (clock arithmetic, timezone conversion, relative-date arithmetic — hand-rolled civil-calendar math, no `chrono`), `arithmetic` (plain expressions, recursive-descent). `grammar::parse_amount` is the shared amount parser (handles the `k`-thousands shorthand, e.g. `"5k"` = 5000) used by `units`/`currency`/the conversion half of `grammar::parse_conversion` — deliberately *not* used by `arithmetic`, so `k` only works in conversion contexts, never in plain calculator expressions. |
+| `src/startup.rs` | `register()`/`unregister()` — writes/deletes the `HKCU\...\Run` entry for launch-on-login, via `winreg` (not raw FFI, matching the sibling `Panora` project's established pattern). Called from `main.rs`'s Velopack install/uninstall fast-callback hooks, never on a normal run. |
 
 ### Threading / control flow
 - The **native runtime runs on its own OS thread** with a classic Win32 message loop
@@ -282,5 +285,9 @@ There are no automated tests yet. Manual verification for window behavior:
    the next open.
 
 ## Roadmap
-See `PLANS.md` for the feature roadmap (app search/launch, file search, calculator/unit
-& currency conversion, clipboard history).
+Built: app search/launch, file search (Everything SDK), calculator (arithmetic, unit/temperature
+conversion, currency conversion with live rates and a regional default, hex/dec/oct/bin base
+conversion, clock/timezone/relative-date arithmetic), Up/Down search history recall, a Velopack-based
+installer (`scripts/build-installer.ps1`) that registers/unregisters launch-on-login via `src/startup.rs`.
+Not yet built: clipboard history (text + images, `rusqlite` dependency already added), an action
+sub-menu, a broader plugin system beyond the current built-in providers.

@@ -25,12 +25,22 @@ apps, a global hotkey, and a minimal RAM footprint.
   the tray.
 - **Tray icon**: left-click toggles the launcher, right-click opens a small
   Toggle/Quit menu.
+- **File search**, powered by the Everything SDK, alongside app search.
+- **Calculator**, triggered automatically as you type (or via ` = `):
+  arithmetic, unit and temperature conversion, currency conversion (live
+  rates, with amounts auto-converted to your region's currency even without
+  typing `to`), hex/decimal/octal/binary base conversion, a `k` thousands
+  shorthand in conversions (`"5k km to miles"`), clock-time arithmetic
+  (`"1pm + 5"`), timezone conversion (`"3pm est to ist"`), and relative-date
+  arithmetic (`"5 days from now"`, `"2 weeks ago"`).
+- **Search history**: press `Up` on an empty query to recall previous
+  searches/calculations, just like a terminal.
 - Runs quietly in the background — dismissing the launcher hides it, it
   doesn't relaunch or rescan.
 
 Under the hood, results are produced by a small provider pipeline
 (`CommandProvider`/`PluginRegistry`) designed to grow beyond app search —
-file search, a calculator, clipboard history, and more are planned next.
+clipboard history and more are planned next.
 
 ## Install / run
 
@@ -43,8 +53,10 @@ cargo run --release
 ```
 
 `cargo build --release` produces `target/release/hayai.exe` with no console
-window attached. There's no installer yet — copy the binary wherever you like
-and run it; add it to your Startup folder if you want it running on login.
+window attached. To build an installer (via [Velopack](https://velopack.io/)),
+run `scripts/build-installer.ps1` — it produces a setup exe and a portable
+zip under `dist/velopack/`. The installer registers hayai to launch on login
+(a per-user `HKCU\...\Run` entry) and cleans that up again on uninstall.
 
 ## Usage
 
@@ -58,11 +70,12 @@ and run it; add it to your Startup folder if you want it running on login.
 
 ## Project status
 
-Hayai is under active development. App search and launch is the complete,
-working vertical slice; file search, a calculator/unit conversion, clipboard
-history, an action sub-menu, and a plugin system are planned but not yet
-built. See `AGENTS.md` for architecture notes and known GPUI/Win32 pitfalls
-if you're contributing.
+Hayai is under active development. App search/launch, file search, and the
+calculator (arithmetic, unit/currency/base conversion, time/date arithmetic)
+are complete, working vertical slices; clipboard history, an action
+sub-menu, and a broader plugin system are planned but not yet built. See
+`AGENTS.md` for architecture notes and known GPUI/Win32 pitfalls if you're
+contributing.
 
 ## Why Windows-only, why Rust + GPUI
 
