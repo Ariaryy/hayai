@@ -19,8 +19,9 @@ mod windows;
 
 #[cfg(windows)]
 pub use windows::{
-    NativeRuntime, everything_query, extract_icon_rgba, focus_launcher_window,
-    hide_launcher_window, https_get, list_apps_folder, launch_path, local_now, system_currency_code,
+    NativeRuntime, extract_icon_rgba, focus_launcher_window, hide_launcher_window,
+    https_get, launch_path, launch_path_as_admin, list_apps_folder, local_now, scry_query,
+    system_currency_code,
 };
 
 #[cfg(not(windows))]
@@ -51,20 +52,26 @@ pub fn extract_icon_rgba(_path: &std::path::Path) -> Option<IconImage> {
 pub fn launch_path(_path: &std::path::Path) {}
 
 #[cfg(not(windows))]
+pub fn launch_path_as_admin(_path: &std::path::Path) {}
+
+#[cfg(not(windows))]
 pub fn list_apps_folder() -> Vec<(String, std::path::PathBuf)> {
     Vec::new()
 }
 
-/// One Everything search result.
+/// One search result hit.
 #[cfg(not(windows))]
 pub struct FileHit {
     pub name: String,
     pub parent: std::path::PathBuf,
     pub is_folder: bool,
+    pub size: u64,
+    #[allow(dead_code)]
+    pub mtime: u32,
 }
 
 #[cfg(not(windows))]
-pub fn everything_query(_query: &str, _max_results: u32) -> Option<Vec<FileHit>> {
+pub fn scry_query(_query: &str, _max_results: u32) -> Option<Vec<FileHit>> {
     None
 }
 

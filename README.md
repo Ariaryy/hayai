@@ -25,7 +25,7 @@ apps, a global hotkey, and a minimal RAM footprint.
   the tray.
 - **Tray icon**: left-click toggles the launcher, right-click opens a small
   Toggle/Quit menu.
-- **File search**, powered by the Everything SDK, alongside app search.
+- **File search**, powered by a local Scry index, alongside app search.
 - **Calculator**, triggered automatically as you type (or via ` = `):
   arithmetic, unit and temperature conversion, currency conversion (live
   rates, with amounts auto-converted to your region's currency even without

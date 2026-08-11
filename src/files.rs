@@ -1,11 +1,11 @@
-//! File search via a running Everything (voidtools) instance, keyword ` f `.
+//! File search via scry daemon (`scryd`), keyword ` f `.
 //!
-//! Debounced provider: `background_search` runs `native::everything_query`
+//! Debounced provider: `background_search` runs `native::scry_query`
 //! on the background pool (never inline in `search`, which stays cheap for
 //! the empty-query case the pipeline calls synchronously).
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gpui::App;
@@ -14,6 +14,14 @@ use crate::commands::{BackgroundSearch, CommandAction, CommandItem, CommandProvi
 use crate::native;
 
 const MAX_RESULTS: u32 = 64;
+/// Query extra candidates before applying Hayai's folder-first presentation.
+/// Scry ranks relevance without a folder preference, so fetching only the
+/// visible count can leave a navigable directory out of the list.
+const SEARCH_CANDIDATES: u32 = 256;
+/// Scoped matches are filtered client-side against the exact directory the
+/// user entered. Keep a wider candidate set so common path components do not
+/// crowd out valid descendants before that filter runs.
+const SCOPED_SEARCH_CANDIDATES: u32 = 512;
 /// How many recently-opened files/folders we persist across runs.
 const MAX_RECENTS: usize = 30;
 
@@ -97,9 +105,8 @@ fn recents_file() -> Option<PathBuf> {
 }
 
 /// Directories that are almost never what someone means when they search by
-/// name (build output, package caches, VCS internals) — excluded from every
-/// query via Everything's `!term` syntax unless the user's own query already
-/// mentions the term (so searching *for* "node_modules" still works).
+/// name (build output, package caches, VCS internals) — excluded from results
+/// unless the user's own query explicitly references the directory term.
 const NOISY_DIRS: &[&str] = &[
     "node_modules",
     ".git",
@@ -113,19 +120,15 @@ const NOISY_DIRS: &[&str] = &[
     ".venv",
 ];
 
-/// Append `!term` exclusions for noisy directories the query doesn't already
-/// reference, so common build/package junk doesn't mask the result someone
-/// actually wants.
-fn augment_query(query: &str) -> String {
-    let lower = query.to_lowercase();
-    let mut augmented = query.to_string();
-    for dir in NOISY_DIRS {
-        if !lower.contains(dir) {
-            augmented.push_str(" !");
-            augmented.push_str(dir);
-        }
-    }
-    augmented
+fn is_noisy_path(path: &Path, query: &str) -> bool {
+    let query_lower = query.to_lowercase();
+    path.components().any(|component| {
+        let Some(name) = component.as_os_str().to_str() else {
+            return false;
+        };
+        let name = name.to_lowercase();
+        NOISY_DIRS.contains(&name.as_str()) && !query_lower.contains(&name)
+    })
 }
 
 fn path_to_item(path: &PathBuf) -> CommandItem {
@@ -143,18 +146,21 @@ fn path_to_item(path: &PathBuf) -> CommandItem {
 
 /// Listing of the user's home folder, used as the file-mode empty-query
 /// fallback when there's no recents history yet (fresh install). Local
-/// directory read, not an Everything IPC round trip — cheap enough to run
+/// directory read, not a daemon IPC round trip — cheap enough to run
 /// inline on the (synchronous) `search` path.
-fn home_dir_listing() -> Vec<CommandItem> {
-    let Ok(home) = std::env::var("USERPROFILE") else {
+fn directory_listing(dir: &Path, query: &str) -> Vec<CommandItem> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
-    let Ok(entries) = std::fs::read_dir(home) else {
-        return Vec::new();
-    };
-    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
-    // Folders first (mirrors how file browsers order a directory), then
-    // alphabetical within each group.
+    let mut paths: Vec<PathBuf> = entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| !is_noisy_path(path, query))
+        .collect();
+
+    // Folders first, alphabetical within each group. This is intentionally a
+    // non-recursive listing: Tab enters one level, while typed input invokes
+    // the indexed descendant search below.
     paths.sort_by(|a, b| {
         b.is_dir().cmp(&a.is_dir()).then_with(|| {
             let a_name = a.file_name().map(|n| n.to_string_lossy().to_lowercase());
@@ -164,6 +170,42 @@ fn home_dir_listing() -> Vec<CommandItem> {
     });
     paths.truncate(MAX_RESULTS as usize);
     paths.iter().map(path_to_item).collect()
+}
+
+fn home_dir_listing() -> Vec<CommandItem> {
+    let Ok(home) = std::env::var("USERPROFILE") else {
+        return Vec::new();
+    };
+    directory_listing(Path::new(&home), "")
+}
+
+fn parse_scoped_query(query: &str) -> Option<(PathBuf, String)> {
+    let (scope, remainder) = query.split_once('|')?;
+    let scope = PathBuf::from(scope.trim_end_matches('\\'));
+    (!scope.as_os_str().is_empty()).then_some((scope, remainder.trim().to_owned()))
+}
+
+fn scoped_scry_query(scope: &Path, remainder: &str) -> String {
+    let scope = scope.to_string_lossy();
+    let scope = scope.trim_end_matches('\\');
+    format!("{scope}\\{}", remainder.replace(' ', "\\"))
+}
+fn format_size(bytes: u64) -> String {
+    if bytes == 0 {
+        return String::new();
+    }
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * KB;
+    const GB: u64 = 1024 * MB;
+    if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.1} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.0} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 pub struct FileSearchProvider {
@@ -216,28 +258,67 @@ impl CommandProvider for FileSearchProvider {
             return None;
         }
         let query = query.to_string();
-        Some(Box::new(move || match native::everything_query(&augment_query(&query), MAX_RESULTS) {
+        let scope = parse_scoped_query(&query);
+        let browse_dir = scope
+            .as_ref()
+            .and_then(|(dir, remainder)| remainder.is_empty().then(|| dir.clone()));
+        let scry_query = scope
+            .as_ref()
+            .map(|(dir, remainder)| scoped_scry_query(dir, remainder))
+            .unwrap_or_else(|| query.clone());
+        let max_results = if scope.is_some() {
+            SCOPED_SEARCH_CANDIDATES
+        } else {
+            SEARCH_CANDIDATES
+        };
+
+        Some(Box::new(move || {
+            if let Some(dir) = browse_dir {
+                return directory_listing(&dir, &query);
+            }
+            match native::scry_query(&scry_query, max_results) {
             None => vec![CommandItem {
                 id: "files:not-running".into(),
-                title: "Everything not running".into(),
-                subtitle: Some("File search needs Everything (voidtools.com)".into()),
+                title: "scryd not running".into(),
+                subtitle: Some("File search needs scryd daemon".into()),
                 icon: IconSource::None,
                 action: CommandAction::ShowText(String::new()),
             }],
             Some(mut hits) => {
-                // Shallower paths first as a tie-break — a stable sort keeps
-                // Everything's own relevance ordering within each depth, so
-                // this only nudges deeply-nested matches down rather than
-                // reordering everything.
-                hits.sort_by_key(|hit| hit.parent.components().count());
+                hits.retain(|hit| {
+                    let full_path = hit.parent.join(&hit.name);
+                    if is_noisy_path(&full_path, &query) {
+                        return false;
+                    }
+                    if let Some((dir, _)) = &scope
+                        && (!full_path.starts_with(dir) || full_path == *dir)
+                    {
+                        return false;
+                    }
+                    true
+                });
+                // Folders first, then shallower paths, then alphabetical by name.
+                hits.sort_by(|a, b| {
+                    b.is_folder
+                        .cmp(&a.is_folder)
+                        .then_with(|| a.parent.components().count().cmp(&b.parent.components().count()))
+                        .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                });
+                hits.truncate(MAX_RESULTS as usize);
                 hits
                 .into_iter()
                 .map(|hit| {
                     let full_path = hit.parent.join(&hit.name);
+                    let parent_str = hit.parent.to_string_lossy();
+                    let subtitle = if !hit.is_folder && hit.size > 0 {
+                        format!("{parent_str} · {}", format_size(hit.size))
+                    } else {
+                        parent_str.into_owned()
+                    };
                     CommandItem {
                         id: full_path.to_string_lossy().into_owned(),
                         title: hit.name,
-                        subtitle: Some(hit.parent.to_string_lossy().into_owned()),
+                        subtitle: Some(subtitle),
                         // TODO: per-extension icon dedup — each hit currently
                         // grows the catalog's path-keyed icon cache by one
                         // entry; fine at 64 results/keystroke, revisit if
@@ -248,6 +329,6 @@ impl CommandProvider for FileSearchProvider {
                 })
                 .collect()
             }
-        }))
+        }}))
     }
 }

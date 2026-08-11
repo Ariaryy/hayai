@@ -1,9 +1,7 @@
 use std::io;
 use std::ptr::{null, null_mut};
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{OnceLock, mpsc};
 use std::thread;
-use std::time::Duration;
 
 use futures::channel::mpsc::UnboundedSender;
 
@@ -33,17 +31,16 @@ use windows_sys::Win32::UI::Shell::{
     SHGetFileInfoW, SHGetImageList, SHGetNameFromIDList, SHParseDisplayName,
     SIGDN_DESKTOPABSOLUTEPARSING, SIGDN_NORMALDISPLAY, Shell_NotifyIconW, ShellExecuteW,
 };
-use windows_sys::Win32::System::DataExchange::COPYDATASTRUCT;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, AppendMenuW, BringWindowToTop, CreatePopupMenu, CreateWindowExW,
-    DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, FindWindowW,
-    GWL_EXSTYLE, GetCursorPos, GetIconInfo, GetMessageW, GetWindowLongPtrW, GetWindowRect,
-    HWND_MESSAGE, HWND_TOPMOST, ICONINFO, IDI_APPLICATION, LoadIconW, MF_STRING, MSG,
-    PostMessageW, PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW, SW_SHOWNORMAL,
-    SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SendMessageW, SetForegroundWindow,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
-    TranslateMessage, WM_APP, WM_COPYDATA, WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP, WM_NULL,
-    WM_RBUTTONUP, WNDCLASSW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
+    DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GWL_EXSTYLE,
+    GetCursorPos, GetIconInfo, GetMessageW, GetWindowLongPtrW, GetWindowRect, HWND_MESSAGE,
+    HWND_TOPMOST, ICONINFO, IDI_APPLICATION, LoadIconW, MF_STRING, MSG, PostMessageW,
+    PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SWP_FRAMECHANGED,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
+    ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP,
+    WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_EX_APPWINDOW,
+    WS_EX_TOOLWINDOW, WS_OVERLAPPED,
 };
 
 use super::{IconImage, NativeCommand};
@@ -56,56 +53,18 @@ const WM_TRAY_ICON: u32 = WM_APP + 1;
 // `&self` and never blocks, so no `Mutex` is needed — the send must not block
 // the Win32 message loop.
 static COMMAND_SENDER: OnceLock<UnboundedSender<NativeCommand>> = OnceLock::new();
+static SCRY_SEARCH_SENDER: OnceLock<mpsc::Sender<ScrySearchRequest>> = OnceLock::new();
 
-/// HWND of our message-only window, stashed as `isize` (not `HWND`, which
-/// isn't `Send`/`Sync`) so `everything_query` — called from the background
-/// pool — can address it as the IPC reply target.
-static MESSAGE_HWND: OnceLock<isize> = OnceLock::new();
 
-/// `EVERYTHING_IPC_QUERYW`'s `dwData` value for a query `WM_COPYDATA`, from
-/// the Everything SDK's `Everything_IPC.h`.
-const EVERYTHING_IPC_COPYDATAQUERYW: usize = 2;
-/// `EVERYTHING_IPC_ITEMW.flags` bit for folder results (files have neither
-/// bit set).
-const EVERYTHING_IPC_FOLDER: u32 = 0x1;
-/// `EVERYTHING_IPC_ITEMW.flags` bit for drive results.
-const EVERYTHING_IPC_DRIVE: u32 = 0x2;
 
-struct PendingQuery {
-    request_id: u32,
-    reply: std::sync::mpsc::SyncSender<Vec<FileHit>>,
-}
-
-/// The one in-flight Everything query's reply slot. `everything_query` holds
-/// `QUERY_LOCK` for its whole round trip, so at most one entry is ever live
-/// here — `window_proc` just needs somewhere to hand results back across
-/// threads.
-static PENDING_QUERY: Mutex<Option<PendingQuery>> = Mutex::new(None);
-/// Serializes `everything_query` calls: Everything's IPC is a single
-/// request/reply exchange per `WM_COPYDATA`, and overlapping calls would
-/// stomp each other's `PENDING_QUERY` slot.
-static QUERY_LOCK: Mutex<()> = Mutex::new(());
-static NEXT_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
-/// Bumped on every `everything_query` call. Lets a call that's been sitting
-/// in `QUERY_LOCK`'s queue notice, once it finally acquires the lock, that a
-/// newer call has since been issued — its own result would just be discarded
-/// by the caller's generation check anyway, so it skips the (up to 2s) IPC
-/// round trip instead of doing it pointlessly. Without this, typing quickly
-/// piles up several full round trips back-to-back on the lock, and the
-/// keystroke that actually matters ends up waiting behind all of them —
-/// which is what made file search feel unresponsive / empty under fast typing.
-static QUERY_SEQ: AtomicU32 = AtomicU32::new(0);
-
-/// One Everything search result.
+/// One search result hit.
 pub struct FileHit {
     pub name: String,
     pub parent: PathBuf,
-    // Unused: folders and files both resolve through `CommandAction::OpenFile`
-    // today (`ShellExecuteW` "open" on a directory opens Explorer, same as a
-    // file). Kept for a future folder-specific affordance (e.g. a distinct
-    // icon or action).
-    #[allow(dead_code)]
     pub is_folder: bool,
+    pub size: u64,
+    #[allow(dead_code)]
+    pub mtime: u32,
 }
 
 pub struct NativeRuntime {
@@ -287,147 +246,151 @@ pub fn launch_path(path: &Path) {
     }
 }
 
-/// Query a running Everything (voidtools) instance over its `WM_COPYDATA`
-/// IPC. Blocking; call ONLY from the background pool, never the GPUI thread
-/// (a round trip can take up to the 2s timeout below).
-///
-/// Returns `None` if Everything's IPC window isn't found (not running).
-pub fn everything_query(query: &str, max_results: u32) -> Option<Vec<FileHit>> {
-    // Registered up front so a call still queued behind `QUERY_LOCK` can
-    // notice, once it's this call's turn, that it's since been superseded.
-    let my_seq = QUERY_SEQ.fetch_add(1, Ordering::SeqCst) + 1;
+struct ScrySearchRequest {
+    query: String,
+    max_results: u32,
+    reply: mpsc::SyncSender<Option<Vec<FileHit>>>,
+}
 
-    let everything_hwnd = unsafe {
-        FindWindowW(
-            wide_null("EVERYTHING_TASKBAR_NOTIFICATION").as_ptr(),
-            null(),
-        )
-    };
-    if everything_hwnd.is_null() {
-        return None;
-    }
-    let message_hwnd = *MESSAGE_HWND.get()?;
+/// Open an executable through Shell's `runas` verb, which lets Windows own
+/// the UAC prompt rather than attempting to elevate Hayai itself.
+pub fn launch_path_as_admin(path: &Path) {
+    let verb = wide_null("runas");
+    let file = wide_null(&path.to_string_lossy());
 
-    // Holds for the whole round trip: only one Everything IPC exchange may
-    // be in flight, since PENDING_QUERY has room for exactly one reply slot.
-    let _guard = QUERY_LOCK.lock().unwrap();
-
-    // A newer call was issued while this one waited for the lock — its
-    // result would only be thrown away by the caller's generation check, so
-    // skip the (up to 2s) round trip and free the lock immediately instead
-    // of making the query that actually matters wait behind it too.
-    if QUERY_SEQ.load(Ordering::SeqCst) != my_seq {
-        return Some(Vec::new());
-    }
-
-    let request_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    *PENDING_QUERY.lock().unwrap() = Some(PendingQuery {
-        request_id,
-        reply: tx,
-    });
-
-    // EVERYTHING_IPC_QUERYW header: reply_hwnd, reply_copydata_message,
-    // search_flags, offset, max_results (5 x DWORD), followed by the
-    // null-terminated UTF-16 search string.
-    let wide_query: Vec<u16> = query.encode_utf16().chain([0]).collect();
-    const HEADER_LEN: usize = 20;
-    let mut buffer = vec![0u8; HEADER_LEN + wide_query.len() * 2];
-    buffer[0..4].copy_from_slice(&(message_hwnd as u32).to_ne_bytes());
-    buffer[4..8].copy_from_slice(&request_id.to_ne_bytes());
-    buffer[8..12].copy_from_slice(&0u32.to_ne_bytes()); // search_flags: none
-    buffer[12..16].copy_from_slice(&0u32.to_ne_bytes()); // offset
-    buffer[16..20].copy_from_slice(&max_results.to_ne_bytes());
-    let query_bytes = unsafe {
-        std::slice::from_raw_parts(wide_query.as_ptr() as *const u8, wide_query.len() * 2)
-    };
-    buffer[HEADER_LEN..].copy_from_slice(query_bytes);
-
-    let cds = COPYDATASTRUCT {
-        dwData: EVERYTHING_IPC_COPYDATAQUERYW,
-        cbData: buffer.len() as u32,
-        lpData: buffer.as_mut_ptr() as *mut c_void,
-    };
-
+    // Like `launch_path`, this runs on GPUI's background pool. ShellExecuteW
+    // may need COM on its calling thread; repeated apartment initialization is
+    // harmless for an already-initialized thread.
+    let _ = unsafe { CoInitializeEx(null(), COINIT_APARTMENTTHREADED as u32) };
     unsafe {
-        SendMessageW(
-            everything_hwnd,
-            WM_COPYDATA,
-            message_hwnd as usize,
-            &cds as *const COPYDATASTRUCT as isize,
+        ShellExecuteW(
+            null_mut_hwnd(),
+            verb.as_ptr(),
+            file.as_ptr(),
+            null(),
+            null(),
+            SW_SHOWNORMAL,
         );
     }
-
-    match rx.recv_timeout(Duration::from_secs(2)) {
-        Ok(hits) => Some(hits),
-        Err(_) => {
-            *PENDING_QUERY.lock().unwrap() = None;
-            Some(Vec::new())
-        }
-    }
 }
 
-/// Parse an `EVERYTHING_IPC_LISTW` reply buffer (as delivered via
-/// `WM_COPYDATA`'s `lpData`/`cbData`) into `FileHit`s. `data` is
-/// untrusted-shaped (it comes from another process over IPC), so every
-/// offset is bounds-checked before use.
-fn parse_everything_reply(data: &[u8]) -> Vec<FileHit> {
-    // totfolders, totfiles, totitems, numfolders, numfiles, numitems, offset
-    // (7 x DWORD) -- see EVERYTHING_IPC_LISTW in Everything-SDK/ipc/everything_ipc.h.
-    const LIST_HEADER: usize = 28;
-    const ITEM_SIZE: usize = 12; // flags, filename_offset, path_offset (3 x DWORD)
+/// Query a running `scryd` daemon instance over its named pipe IPC or
+/// shared memory index. Blocking; call ONLY from the background pool, never
+/// the GPUI thread.
+///
+/// Returns `None` if `scryd` is not running or the query fails.
+pub fn scry_query(query: &str, max_results: u32) -> Option<Vec<FileHit>> {
+    let (reply, response) = mpsc::sync_channel(1);
+    scry_search_sender()
+        .send(ScrySearchRequest {
+            query: query.to_owned(),
+            max_results,
+            reply,
+        })
+        .ok()?;
+    response.recv_timeout(std::time::Duration::from_secs(5)).ok().flatten()
+}
 
-    if data.len() < LIST_HEADER {
-        return Vec::new();
-    }
-    let numitems = u32::from_ne_bytes(data[20..24].try_into().unwrap()) as usize;
+fn scry_search_sender() -> &'static mpsc::Sender<ScrySearchRequest> {
+    SCRY_SEARCH_SENDER.get_or_init(|| {
+        let (sender, receiver) = mpsc::channel();
+        thread::Builder::new()
+            .name("hayai-scry-search".into())
+            .spawn(move || run_scry_search(receiver))
+            .expect("failed to start Scry search worker");
+        sender
+    })
+}
 
-    // Cap the up-front allocation independent of the untrusted `numitems`
-    // field; the loop below still bounds-checks every item regardless.
-    let mut hits = Vec::with_capacity(numitems.min(256));
-    for i in 0..numitems {
-        let item_off = LIST_HEADER + i * ITEM_SIZE;
-        let Some(item) = data.get(item_off..item_off + ITEM_SIZE) else {
-            break;
+fn run_scry_search(receiver: mpsc::Receiver<ScrySearchRequest>) {
+    let mut session: Option<scry_client::SearchSession> = None;
+    let mut active: Option<mpsc::SyncSender<Option<Vec<FileHit>>>> = None;
+    loop {
+        let request = if active.is_some() {
+            match receiver.recv_timeout(std::time::Duration::from_millis(8)) {
+                Ok(request) => Some(request),
+                Err(mpsc::RecvTimeoutError::Timeout) => None,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        } else {
+            match receiver.recv() {
+                Ok(request) => Some(request),
+                Err(_) => break,
+            }
         };
-        let flags = u32::from_ne_bytes(item[0..4].try_into().unwrap());
-        let filename_offset = u32::from_ne_bytes(item[4..8].try_into().unwrap()) as usize;
-        let path_offset = u32::from_ne_bytes(item[8..12].try_into().unwrap()) as usize;
 
-        let (Some(name), Some(parent)) = (
-            read_utf16_cstr(data, filename_offset),
-            read_utf16_cstr(data, path_offset),
-        ) else {
+        if let Some(request) = request {
+            if let Some(reply) = active.take() {
+                let _ = reply.try_send(Some(Vec::new()));
+            }
+            if session.is_none() {
+                session = scry_client::SearchSession::connect(request.max_results).ok();
+            }
+            let Some(current) = session.as_mut() else {
+                let _ = request.reply.try_send(None);
+                continue;
+            };
+            current.set_limit(request.max_results);
+            let kind = scry_query_kind(&request.query);
+            if current.submit(kind, &request.query).is_err() {
+                session = None;
+                let _ = request.reply.try_send(None);
+                continue;
+            }
+            active = Some(request.reply);
+        }
+
+        let Some(current) = session.as_mut() else {
             continue;
         };
-        let is_folder = flags & (EVERYTHING_IPC_FOLDER | EVERYTHING_IPC_DRIVE) != 0;
-        hits.push(FileHit {
-            name,
-            parent: PathBuf::from(parent),
-            is_folder,
-        });
+        match current.poll_latest() {
+            Ok(Some(entries)) => {
+                if let Some(reply) = active.take() {
+                    let _ = reply.try_send(Some(entries_to_hits(entries)));
+                }
+            }
+            Ok(None) => {}
+            Err(_) => {
+                session = None;
+                if let Some(reply) = active.take() {
+                    let _ = reply.try_send(None);
+                }
+            }
+        }
     }
-    hits
 }
 
-/// Read a null-terminated UTF-16 string starting at byte offset
-/// `byte_offset` within `data`. Returns `None` on any out-of-range or
-/// misaligned offset instead of panicking — `data` is untrusted IPC input.
-fn read_utf16_cstr(data: &[u8], byte_offset: usize) -> Option<String> {
-    if byte_offset % 2 != 0 {
-        return None;
-    }
-    let tail = data.get(byte_offset..)?;
-    let mut units = Vec::new();
-    let mut pairs = tail.chunks_exact(2);
-    for pair in &mut pairs {
-        let unit = u16::from_ne_bytes([pair[0], pair[1]]);
-        if unit == 0 {
-            break;
-        }
-        units.push(unit);
-    }
-    Some(String::from_utf16_lossy(&units))
+fn scry_query_kind(query: &str) -> scry_client::QueryKind {
+    let kind = if query.bytes().any(|b| matches!(b, b'*' | b'?')) {
+        scry_client::QueryKind::Wildcard
+    } else {
+        scry_client::QueryKind::PathTerms
+    };
+    kind
+}
+
+fn entries_to_hits(entries: Vec<scry_client::ResultEntry>) -> Vec<FileHit> {
+    entries
+        .into_iter()
+        .map(|entry| {
+            let path = PathBuf::from(&entry.path);
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| entry.path.clone());
+            let parent = path
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| PathBuf::from(""));
+            FileHit {
+                name,
+                parent,
+                is_folder: entry.is_dir,
+                size: entry.size,
+                mtime: entry.mtime,
+            }
+        })
+        .collect()
 }
 
 const CLSID_SHELL_LINK: GUID = GUID::from_u128(0x00021401_0000_0000_C000_000000000046);
@@ -1070,8 +1033,6 @@ fn run_message_window(sender: UnboundedSender<NativeCommand>) -> io::Result<()> 
     if hwnd.is_null() {
         return Err(io::Error::last_os_error());
     }
-    let _ = MESSAGE_HWND.set(hwnd as isize);
-
     add_tray_icon(hwnd)?;
     register_hotkey(hwnd)?;
 
@@ -1160,27 +1121,7 @@ unsafe extern "system" fn window_proc(
             }
             0
         }
-        WM_COPYDATA => {
-            let cds = unsafe { &*(lparam as *const COPYDATASTRUCT) };
-            let mut pending = PENDING_QUERY.lock().unwrap();
-            if pending
-                .as_ref()
-                .is_some_and(|p| cds.dwData == p.request_id as usize)
-            {
-                // Only valid for the duration of this call — parse and copy
-                // out before returning.
-                let data = unsafe {
-                    std::slice::from_raw_parts(cds.lpData as *const u8, cds.cbData as usize)
-                };
-                let hits = parse_everything_reply(data);
-                if let Some(p) = pending.take() {
-                    let _ = p.reply.try_send(hits);
-                }
-                return 1;
-            }
-            drop(pending);
-            unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
-        }
+
         WM_DESTROY => {
             unsafe {
                 UnregisterHotKey(hwnd, HOTKEY_ID);
