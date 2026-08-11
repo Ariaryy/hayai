@@ -76,7 +76,8 @@ try {
         if ($LASTEXITCODE -ne 0) {
             throw "Cargo build failed with exit code $LASTEXITCODE"
         }
-        cargo build --manifest-path (Join-Path $ScryRoot "Cargo.toml") --profile daemon-release -p scry-daemon
+        $scryTarget = Join-Path $projectRoot "target\scry-package"
+        cargo build --manifest-path (Join-Path $ScryRoot "Cargo.toml") --target-dir $scryTarget --profile daemon-release -p scry-daemon
         if ($LASTEXITCODE -ne 0) {
             throw "Scry daemon build failed with exit code $LASTEXITCODE"
         }
@@ -100,7 +101,7 @@ try {
     Copy-Item -LiteralPath $exePath -Destination (Join-Path $stageDir $exeName) -Force
 
     $scryRootPath = [System.IO.Path]::GetFullPath((Join-Path $projectRoot $ScryRoot))
-    $scryDaemon = Join-Path $scryRootPath "target\daemon-release\scryd.exe"
+    $scryDaemon = Join-Path $projectRoot "target\scry-package\daemon-release\scryd.exe"
     if (-not (Test-Path -LiteralPath $scryDaemon)) {
         throw "Scry daemon build output not found: $scryDaemon"
     }
