@@ -56,6 +56,8 @@ cargo run --release
 window attached. To build an installer (via [Velopack](https://velopack.io/)),
 run `scripts/build-installer.ps1` — it produces a setup exe and a portable
 zip under `dist/velopack/`. The installer registers hayai to launch on login
+and bundles the matching Scry Search daemon. File mode offers an explicit
+UAC-backed setup action when the elevated daemon is not yet running.
 (a per-user `HKCU\...\Run` entry) and cleans that up again on uninstall.
 
 ## Usage
