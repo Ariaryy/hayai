@@ -81,6 +81,10 @@ try {
         if ($LASTEXITCODE -ne 0) {
             throw "Scry daemon build failed with exit code $LASTEXITCODE"
         }
+        cargo build --manifest-path (Join-Path $ScryRoot "Cargo.toml") --target-dir $scryTarget --release -p scry-cli
+        if ($LASTEXITCODE -ne 0) {
+            throw "Scry CLI build failed with exit code $LASTEXITCODE"
+        }
     }
 
     $packageName = Read-CargoValue -LiteralPath $cargoToml -Key "name"
@@ -102,10 +106,15 @@ try {
 
     $scryRootPath = [System.IO.Path]::GetFullPath((Join-Path $projectRoot $ScryRoot))
     $scryDaemon = Join-Path $projectRoot "target\scry-package\daemon-release\scryd.exe"
+    $scryCli = Join-Path $projectRoot "target\scry-package\release\scry.exe"
     if (-not (Test-Path -LiteralPath $scryDaemon)) {
         throw "Scry daemon build output not found: $scryDaemon"
     }
+    if (-not (Test-Path -LiteralPath $scryCli)) {
+        throw "Scry CLI build output not found: $scryCli"
+    }
     Copy-Item -LiteralPath $scryDaemon -Destination (Join-Path $stageDir "scryd.exe") -Force
+    Copy-Item -LiteralPath $scryCli -Destination (Join-Path $stageDir "scry.exe") -Force
     Copy-Item -LiteralPath (Join-Path $scryRootPath "scripts\install-daemon.ps1") -Destination $stageDir -Force
     Copy-Item -LiteralPath (Join-Path $scryRootPath "scripts\uninstall-daemon.ps1") -Destination $stageDir -Force
 
