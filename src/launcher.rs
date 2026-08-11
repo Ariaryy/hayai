@@ -297,6 +297,48 @@ fn enter_kbd(cx: &App) -> impl IntoElement {
 /// `InputEvent::PressEnter`) on an ancestor of our input — `InputState`
 /// already `cx.propagate()`s all of these in single-line mode specifically so
 /// a containing view can do this.
+#[derive(Clone)]
+struct ActionMenu {
+    path: PathBuf,
+    is_dir: bool,
+    can_run_as_admin: bool,
+    selected: usize,
+}
+
+fn ctrl_k_kbd(cx: &App) -> impl IntoElement {
+    div()
+        .text_color(cx.theme().muted_foreground)
+        .bg(cx.theme().tokens.muted)
+        .py_0p5()
+        .px_1()
+        .text_center()
+        .rounded(cx.theme().radius.half())
+        .line_height(relative(1.0))
+        .text_xs()
+        .flex_shrink_0()
+        .child("Ctrl K")
+}
+
+#[derive(Clone, Copy)]
+enum MenuAction {
+    Open,
+    Reveal,
+    CopyPath,
+    RunAsAdmin,
+}
+
+fn can_run_as_admin(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension().and_then(|extension| extension.to_str()),
+        Some(extension)
+            if extension.eq_ignore_ascii_case("exe")
+                || extension.eq_ignore_ascii_case("com")
+                || extension.eq_ignore_ascii_case("bat")
+                || extension.eq_ignore_ascii_case("cmd")
+                || extension.eq_ignore_ascii_case("msi")
+    )
+}
+
 struct LauncherRoot {
     list: Entity<ListState<ResultListDelegate>>,
     search_input: Entity<InputState>,
@@ -306,7 +348,7 @@ struct LauncherRoot {
     file_mode: bool,
     /// Stack of folders entered via Tab-on-a-folder-result, outermost first.
     /// Empty means file mode is searching everywhere; the last entry scopes
-    /// the query under it using Everything's trailing-backslash folder-browse
+    /// the query under it using the file provider's scoped-search form
     /// syntax. Each Tab push descends one level further; Backspace/Escape on
     /// an empty box pop one level back off, mirroring how you got there.
     folder_scope: Vec<PathBuf>,
@@ -316,6 +358,7 @@ struct LauncherRoot {
     history: Vec<String>,
     /// `None` while typing live; `Some(i)` while browsing `history[i]`.
     history_cursor: Option<usize>,
+    action_menu: Option<ActionMenu>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -338,11 +381,12 @@ impl LauncherRoot {
         // keys away from the input while it still holds focus.
         let intercept = cx.intercept_keystrokes(move |event, window, cx| {
             let key = event.keystroke.key.as_str();
-            if key != "backspace" && key != "tab" {
+            let control_k = event.keystroke.modifiers.control && key == "k";
+            if key != "backspace" && key != "tab" && !control_k {
                 return;
             }
             this.update(cx, |this, cx| {
-                this.on_intercepted_key(key, window, cx);
+                this.on_intercepted_key(key, control_k, window, cx);
             });
         });
         let _subscriptions = vec![
@@ -356,6 +400,7 @@ impl LauncherRoot {
             folder_scope: Vec::new(),
             history: Vec::new(),
             history_cursor: None,
+            action_menu: None,
             _subscriptions,
         }
     }
@@ -366,8 +411,14 @@ impl LauncherRoot {
     /// visible in the input box itself).
     fn build_query(&self, remainder: &str) -> String {
         match self.folder_scope.last() {
-            Some(folder) if remainder.is_empty() => format!(" f {}\\", folder.display()),
-            Some(folder) => format!(" f {}\\{}", folder.display(), remainder),
+            Some(folder) => {
+                let folder_str = folder.to_string_lossy();
+                let clean_folder = folder_str.trim_end_matches('\\');
+                // `|` cannot occur in a Windows path, so it is a safe internal
+                // scope separator. The visible input remains only the user's
+                // remainder; FileSearchProvider reconstructs the Scry query.
+                format!(" f {clean_folder}|{}", remainder.trim())
+            }
             None => format!(" f {}", remainder),
         }
     }
@@ -421,6 +472,87 @@ impl LauncherRoot {
         });
     }
 
+    fn selected_action_menu(&self, cx: &App) -> Option<ActionMenu> {
+        let delegate = self.list.read(cx).delegate();
+        delegate
+            .selected_index
+            .and_then(|ix| delegate.results.get(ix.row))
+            .and_then(|item| match &item.action {
+                CommandAction::OpenFile(path) => Some(ActionMenu {
+                    path: path.clone(),
+                    is_dir: path.is_dir(),
+                    can_run_as_admin: can_run_as_admin(path),
+                    selected: 0,
+                }),
+                CommandAction::LaunchApplication(path) => Some(ActionMenu {
+                    path: path.clone(),
+                    is_dir: false,
+                    can_run_as_admin: true,
+                    selected: 0,
+                }),
+                CommandAction::CopyToClipboard(_) | CommandAction::ShowText(_) => None,
+            })
+    }
+
+    fn selected_menu_action(&self) -> Option<MenuAction> {
+        let menu = self.action_menu.as_ref()?;
+        match menu.selected {
+            0 => Some(MenuAction::Open),
+            1 => Some(MenuAction::Reveal),
+            2 => Some(MenuAction::CopyPath),
+            3 if menu.can_run_as_admin => Some(MenuAction::RunAsAdmin),
+            _ => None,
+        }
+    }
+
+    fn move_menu_selection(&mut self, delta: isize, cx: &mut Context<Self>) -> bool {
+        let Some(menu) = self.action_menu.as_mut() else {
+            return false;
+        };
+        let count = if menu.can_run_as_admin { 4 } else { 3 };
+        menu.selected = (menu.selected as isize + delta).rem_euclid(count) as usize;
+        cx.notify();
+        true
+    }
+
+    fn run_menu_action(
+        &mut self,
+        action: MenuAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(menu) = self.action_menu.take() else {
+            return;
+        };
+        match action {
+            MenuAction::Open => self.list.update(cx, |list, cx| {
+                list.delegate_mut().confirm(false, window, cx);
+            }),
+            MenuAction::CopyPath => {
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(
+                    menu.path.to_string_lossy().into_owned(),
+                ));
+                LauncherState::dismiss(window, cx);
+            }
+            MenuAction::Reveal => {
+                let path = menu.path.parent().unwrap_or(&menu.path).to_path_buf();
+                LauncherState::dismiss(window, cx);
+                cx.background_spawn(async move {
+                    native::launch_path(&path);
+                })
+                .detach();
+            }
+            MenuAction::RunAsAdmin if menu.can_run_as_admin => {
+                LauncherState::dismiss(window, cx);
+                cx.background_spawn(async move {
+                    native::launch_path_as_admin(&menu.path);
+                })
+                .detach();
+            }
+            MenuAction::RunAsAdmin => {}
+        }
+    }
+
     fn on_search_event(
         &mut self,
         input: &Entity<InputState>,
@@ -430,6 +562,7 @@ impl LauncherRoot {
     ) {
         match event {
             InputEvent::Change => {
+                self.action_menu = None;
                 // Only real user edits reach this arm — our own history-recall
                 // `set_value` calls below drive `perform_search_and_select_first`
                 // directly and don't emit `Change`, so this can't clobber a
@@ -450,6 +583,10 @@ impl LauncherRoot {
                 });
             }
             InputEvent::PressEnter { .. } => {
+                if let Some(action) = self.selected_menu_action() {
+                    self.run_menu_action(action, window, cx);
+                    return;
+                }
                 let text = input.read(cx).value().to_string();
                 if !text.is_empty() && self.history.first().map(String::as_str) != Some(text.as_str()) {
                     self.history.insert(0, text);
@@ -465,7 +602,7 @@ impl LauncherRoot {
     }
 
     /// Tab on a folder result enters it: scope subsequent queries under it
-    /// (via Everything's folder-browse syntax in `build_query`) without
+    /// (via the scoped-search form in `build_query`) without
     /// leaving the launcher, so the same key can descend further into
     /// nested folders.
     ///
@@ -475,7 +612,23 @@ impl LauncherRoot {
     /// listener on an ancestor div never sees them while the input holds
     /// focus. Interception runs before action/keymap dispatch entirely, so
     /// it's the only hook that can steal these two keys away first.
-    fn on_intercepted_key(&mut self, key: &str, window: &mut Window, cx: &mut Context<Self>) {
+    fn on_intercepted_key(
+        &mut self,
+        key: &str,
+        control_k: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if control_k {
+            cx.stop_propagation();
+            self.action_menu = if self.action_menu.is_some() {
+                None
+            } else {
+                self.selected_action_menu(cx)
+            };
+            cx.notify();
+            return;
+        }
         if !self.file_mode {
             return;
         }
@@ -522,6 +675,9 @@ impl LauncherRoot {
     }
 
     fn move_selection(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.action_menu.take().is_some() {
+            cx.notify();
+        }
         self.list.update(cx, |list, cx| {
             let count = list.delegate().items_count(0, cx);
             if count == 0 {
@@ -535,6 +691,9 @@ impl LauncherRoot {
     }
 
     fn on_move_up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
+        if self.move_menu_selection(-1, cx) {
+            return;
+        }
         let at_top = self.list.read(cx).selected_index().map(|ix| ix.row).unwrap_or(0) == 0;
         if self.search_input.read(cx).value().is_empty() && at_top {
             // Empty query *and* already on the top result: Up is history
@@ -550,6 +709,9 @@ impl LauncherRoot {
     }
 
     fn on_move_down(&mut self, _: &MoveDown, window: &mut Window, cx: &mut Context<Self>) {
+        if self.move_menu_selection(1, cx) {
+            return;
+        }
         if self.history_cursor.is_some()
             && self.search_input.read(cx).value().is_empty()
             && self.recall_history(-1, window, cx)
@@ -584,6 +746,10 @@ impl LauncherRoot {
     }
 
     fn on_escape(&mut self, _: &Escape, window: &mut Window, cx: &mut Context<Self>) {
+        if self.action_menu.take().is_some() {
+            cx.notify();
+            return;
+        }
         // Escape backs out one level at a time: folder scope first (same
         // stack as Backspace), then file mode entirely, then a non-empty
         // query just gets cleared, and only once all of those are already
@@ -637,6 +803,7 @@ impl gpui::Render for LauncherRoot {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
+            .relative()
             .flex()
             .flex_col()
             .bg(cx.theme().background)
@@ -722,11 +889,94 @@ impl gpui::Render for LauncherRoot {
                     .gap_2()
                     .border_t_1()
                     .border_color(cx.theme().border)
-                    .text_color(cx.theme().muted_foreground)
-                    .text_xs()
-                    .child(self.selected_action_label(cx))
-                    .child(enter_kbd(cx)),
+                .text_color(cx.theme().muted_foreground)
+                .text_xs()
+                .child(ctrl_k_kbd(cx))
+                .child("Actions")
+                .child(self.selected_action_label(cx))
+                .child(enter_kbd(cx)),
             )
+            .when_some(self.action_menu.clone(), |root, menu| {
+                let open_label = if menu.is_dir {
+                    "Open folder"
+                } else if menu.can_run_as_admin {
+                    "Run"
+                } else {
+                    "Open"
+                };
+                let reveal_label = if menu.is_dir {
+                    "Open parent folder"
+                } else {
+                    "Show in folder"
+                };
+                root.child(
+                    div()
+                        .absolute()
+                        .right(px(12.0))
+                        .bottom(px(48.0))
+                        .w(px(236.0))
+                        .p_2()
+                        .bg(cx.theme().background)
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .rounded(cx.theme().radius)
+                        .shadow_lg()
+                        .child(
+                            h_flex()
+                                .justify_between()
+                                .px_1()
+                                .pb_1()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("Actions")
+                                .child("↑↓ choose · Enter run · Esc close"),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .rounded(cx.theme().radius)
+                                .when(menu.selected == 0, |row| {
+                                    row.bg(cx.theme().tokens.muted)
+                                })
+                                .child(open_label),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .rounded(cx.theme().radius)
+                                .when(menu.selected == 1, |row| {
+                                    row.bg(cx.theme().tokens.muted)
+                                })
+                                .child(reveal_label),
+                        )
+                        .child(
+                            div()
+                                .px_2()
+                                .py_1()
+                                .rounded(cx.theme().radius)
+                                .when(menu.selected == 2, |row| {
+                                    row.bg(cx.theme().tokens.muted)
+                                })
+                                .child("Copy path"),
+                        )
+                        .when(menu.can_run_as_admin, |panel| {
+                            panel.child(
+                                div()
+                                    .mt_1()
+                                    .px_2()
+                                    .py_1()
+                                    .rounded(cx.theme().radius)
+                                    .text_color(cx.theme().accent)
+                                    .when(menu.selected == 3, |row| {
+                                        row.bg(cx.theme().tokens.muted)
+                                    })
+                                    .child("Run as administrator"),
+                            )
+                        }),
+                )
+            })
     }
 }
 
@@ -785,7 +1035,7 @@ impl ListDelegate for ResultListDelegate {
             let registry = self.registry.clone();
             cx.spawn_in(window, async move |list, cx| {
                 cx.background_executor()
-                    .timer(Duration::from_millis(50))
+                    .timer(Duration::from_millis(8))
                     .await;
                 // Foreground again after the await: the query may have moved
                 // on while we slept, so drop this result set if so.
@@ -793,6 +1043,9 @@ impl ListDelegate for ResultListDelegate {
                     return;
                 }
                 let items = cx.background_spawn(async move { job() }).await;
+                if registry.borrow().current_generation() != generation {
+                    return;
+                }
                 let _ = list.update(cx, |list, cx| {
                     list.delegate_mut().apply_results(generation, items, cx);
                 });
