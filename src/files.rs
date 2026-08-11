@@ -279,10 +279,10 @@ impl CommandProvider for FileSearchProvider {
             match native::scry_query(&scry_query, max_results) {
             None => vec![CommandItem {
                 id: "files:not-running".into(),
-                title: "scryd not running".into(),
-                subtitle: Some("File search needs scryd daemon".into()),
+                title: "Enable file search".into(),
+                subtitle: Some("Install and start the elevated Scry Search daemon".into()),
                 icon: IconSource::None,
-                action: CommandAction::ShowText(String::new()),
+                action: CommandAction::InstallFileSearch,
             }],
             Some(mut hits) => {
                 hits.retain(|hit| {

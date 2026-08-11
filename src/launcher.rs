@@ -490,7 +490,9 @@ impl LauncherRoot {
                     can_run_as_admin: true,
                     selected: 0,
                 }),
-                CommandAction::CopyToClipboard(_) | CommandAction::ShowText(_) => None,
+                CommandAction::CopyToClipboard(_)
+                | CommandAction::ShowText(_)
+                | CommandAction::InstallFileSearch => None,
             })
     }
 
@@ -788,6 +790,7 @@ impl LauncherRoot {
             Some(CommandAction::OpenFile(path)) if path.is_dir() => "Open Folder",
             Some(CommandAction::OpenFile(_)) => "Open File",
             Some(CommandAction::ShowText(_)) => "Show",
+            Some(CommandAction::InstallFileSearch) => "Enable",
             Some(CommandAction::LaunchApplication(_)) | None => "Open Application",
         }
     }
@@ -1138,6 +1141,13 @@ impl ListDelegate for ResultListDelegate {
             }
             Some(CommandAction::ShowText(_)) => {
                 // Stays on screen; no-op.
+            }
+            Some(CommandAction::InstallFileSearch) => {
+                LauncherState::dismiss(window, cx);
+                cx.background_spawn(async move {
+                    native::install_scry_daemon();
+                })
+                .detach();
             }
             None => {
                 LauncherState::dismiss(window, cx);

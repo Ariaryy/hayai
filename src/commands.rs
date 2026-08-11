@@ -22,6 +22,7 @@ pub enum CommandAction {
     CopyToClipboard(String),
     #[allow(dead_code)]
     ShowText(String),
+    InstallFileSearch,
 }
 
 #[derive(Clone, Debug)]

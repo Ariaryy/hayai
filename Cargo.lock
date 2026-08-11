@@ -5769,7 +5769,7 @@ dependencies = [
 
 [[package]]
 name = "scry-client"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "anyhow",
  "scry-core",
@@ -5778,7 +5778,7 @@ dependencies = [
 
 [[package]]
 name = "scry-core"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -5791,7 +5791,7 @@ dependencies = [
 
 [[package]]
 name = "scry-ipc"
-version = "0.1.0"
+version = "0.1.0-alpha.1"
 
 [[package]]
 name = "seahash"

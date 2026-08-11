@@ -20,7 +20,7 @@ mod windows;
 #[cfg(windows)]
 pub use windows::{
     NativeRuntime, extract_icon_rgba, focus_launcher_window, hide_launcher_window,
-    https_get, launch_path, launch_path_as_admin, list_apps_folder, local_now, scry_query,
+    https_get, install_scry_daemon, launch_path, launch_path_as_admin, list_apps_folder, local_now, scry_query,
     system_currency_code,
 };
 
@@ -73,6 +73,11 @@ pub struct FileHit {
 #[cfg(not(windows))]
 pub fn scry_query(_query: &str, _max_results: u32) -> Option<Vec<FileHit>> {
     None
+}
+
+#[cfg(not(windows))]
+pub fn install_scry_daemon() -> bool {
+    false
 }
 
 #[cfg(not(windows))]

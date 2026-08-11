@@ -4,6 +4,7 @@ param(
     [string]$PackId = "Hayai",
     [string]$PackTitle = "Hayai",
     [string]$PackAuthors = "Hayai",
+    [string]$ScryRoot = "..\scry",
     [switch]$SkipBuild,
     [switch]$KeepStage
 )
@@ -75,6 +76,10 @@ try {
         if ($LASTEXITCODE -ne 0) {
             throw "Cargo build failed with exit code $LASTEXITCODE"
         }
+        cargo build --manifest-path (Join-Path $ScryRoot "Cargo.toml") --profile daemon-release -p scry-daemon
+        if ($LASTEXITCODE -ne 0) {
+            throw "Scry daemon build failed with exit code $LASTEXITCODE"
+        }
     }
 
     $packageName = Read-CargoValue -LiteralPath $cargoToml -Key "name"
@@ -93,6 +98,15 @@ try {
     New-CleanDirectory -LiteralPath $outputDir
 
     Copy-Item -LiteralPath $exePath -Destination (Join-Path $stageDir $exeName) -Force
+
+    $scryRootPath = [System.IO.Path]::GetFullPath((Join-Path $projectRoot $ScryRoot))
+    $scryDaemon = Join-Path $scryRootPath "target\daemon-release\scryd.exe"
+    if (-not (Test-Path -LiteralPath $scryDaemon)) {
+        throw "Scry daemon build output not found: $scryDaemon"
+    }
+    Copy-Item -LiteralPath $scryDaemon -Destination (Join-Path $stageDir "scryd.exe") -Force
+    Copy-Item -LiteralPath (Join-Path $scryRootPath "scripts\install-daemon.ps1") -Destination $stageDir -Force
+    Copy-Item -LiteralPath (Join-Path $scryRootPath "scripts\uninstall-daemon.ps1") -Destination $stageDir -Force
 
     $runtimeFiles = Get-ChildItem -LiteralPath $buildOutput -File | Where-Object {
         $_.Extension -ieq ".dll"

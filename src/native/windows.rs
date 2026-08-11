@@ -274,6 +274,40 @@ pub fn launch_path_as_admin(path: &Path) {
     }
 }
 
+/// Launch the bundled daemon setup through UAC. Returns false when the release
+/// payload is incomplete; the setup script owns task registration and startup.
+pub fn install_scry_daemon() -> bool {
+    let Ok(executable) = std::env::current_exe() else {
+        return false;
+    };
+    let Some(directory) = executable.parent() else {
+        return false;
+    };
+    let script = directory.join("install-daemon.ps1");
+    if !script.is_file() || !directory.join("scryd.exe").is_file() {
+        return false;
+    }
+
+    let verb = wide_null("runas");
+    let powershell = wide_null("powershell.exe");
+    let parameters = wide_null(&format!(
+        "-NoProfile -ExecutionPolicy Bypass -File \"{}\"",
+        script.display()
+    ));
+    let working_directory = wide_null(&directory.to_string_lossy());
+    let result = unsafe {
+        ShellExecuteW(
+            null_mut_hwnd(),
+            verb.as_ptr(),
+            powershell.as_ptr(),
+            parameters.as_ptr(),
+            working_directory.as_ptr(),
+            SW_SHOWNORMAL,
+        )
+    };
+    result as usize > 32
+}
+
 /// Query a running `scryd` daemon instance over its named pipe IPC or
 /// shared memory index. Blocking; call ONLY from the background pool, never
 /// the GPUI thread.
