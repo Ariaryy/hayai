@@ -31,7 +31,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6.2"
-scry-client = { path = "../scry/scry-client" }
+scry-client = { git = "https://github.com/Ariaryy/scry-search", tag = "v0.1.0-alpha.1" }
 # Installer/updater framework and its startup-registration hooks
 # (`VelopackApp::build()...run()` in `main.rs`); `winreg` backs
 # `native::startup` for the `HKCU\...\Run` entry it writes/removes.

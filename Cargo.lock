@@ -5770,6 +5770,7 @@ dependencies = [
 [[package]]
 name = "scry-client"
 version = "0.1.0-alpha.1"
+source = "git+https://github.com/Ariaryy/scry-search?tag=v0.1.0-alpha.1#76cd2f6267244a37f29d40db1c973a8eb9714059"
 dependencies = [
  "anyhow",
  "scry-core",
@@ -5779,6 +5780,7 @@ dependencies = [
 [[package]]
 name = "scry-core"
 version = "0.1.0-alpha.1"
+source = "git+https://github.com/Ariaryy/scry-search?tag=v0.1.0-alpha.1#76cd2f6267244a37f29d40db1c973a8eb9714059"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -5792,6 +5794,7 @@ dependencies = [
 [[package]]
 name = "scry-ipc"
 version = "0.1.0-alpha.1"
+source = "git+https://github.com/Ariaryy/scry-search?tag=v0.1.0-alpha.1#76cd2f6267244a37f29d40db1c973a8eb9714059"
 
 [[package]]
 name = "seahash"
