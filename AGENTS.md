@@ -1,9 +1,3 @@
-# AGENTS.md — Hayai
-
-Guidance for AI agents (and humans) working in this repo. Read this before touching
-window/focus code or the gpui-component dependency — both have sharp edges that already
-caused shipped bugs or required real investigation to get right.
-
 ## What Hayai is
 
 A Raycast-style launcher for Windows, optimized for **high performance and minimum
@@ -298,5 +292,7 @@ Built: app search/launch, file search (scry daemon), calculator (arithmetic, uni
 conversion, currency conversion with live rates and a regional default, hex/dec/oct/bin base
 conversion, clock/timezone/relative-date arithmetic), Up/Down search history recall, a Velopack-based
 installer (`scripts/build-installer.ps1`) that registers/unregisters launch-on-login via `src/startup.rs`.
-Not yet built: clipboard history (text + images, `rusqlite` dependency already added), an action
-sub-menu, a broader plugin system beyond the current built-in providers.
+Also built: a contextual action panel for app/file results (`Ctrl+K`, with
+open/reveal/copy-path/run-as-admin actions). Not yet built: clipboard history
+(text + images, `rusqlite` dependency already added) and a broader plugin system
+beyond the current built-in providers.

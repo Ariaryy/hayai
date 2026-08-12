@@ -1,0 +1,41 @@
+name: Performance report
+description: Report latency, memory, CPU, disk, or responsiveness regressions
+title: "perf: "
+labels: ["performance"]
+body:
+  - type: markdown
+    attributes:
+      value: Please sanitize all app names, paths, filenames, queries, and clipboard contents.
+  - type: input
+    id: version
+    attributes:
+      label: Hayai version or commit
+    validations:
+      required: true
+  - type: textarea
+    id: machine
+    attributes:
+      label: Machine and Windows version
+      description: CPU, RAM, Windows version, storage type, and monitor setup when relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: workload
+    attributes:
+      label: Workload
+      description: App/file catalog shape, query type, warm/cold state, and whether Scry was indexing.
+    validations:
+      required: true
+  - type: textarea
+    id: measurement
+    attributes:
+      label: Measurement
+      description: Build profile, tool, sample count, before/after versions, and observed RSS/CPU/latency.
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: User-visible impact
+    validations:
+      required: true
