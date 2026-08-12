@@ -18,38 +18,128 @@ enum Dimension {
 }
 
 const LENGTH: &[Unit] = &[
-    Unit { names: &["m", "meter", "meters", "metre", "metres"], factor: 1.0 },
-    Unit { names: &["km", "kilometer", "kilometers", "kilometre", "kilometres"], factor: 1000.0 },
-    Unit { names: &["cm", "centimeter", "centimeters", "centimetre", "centimetres"], factor: 0.01 },
-    Unit { names: &["mm", "millimeter", "millimeters", "millimetre", "millimetres"], factor: 0.001 },
-    Unit { names: &["mile", "miles", "mi"], factor: 1609.344 },
-    Unit { names: &["yard", "yards", "yd"], factor: 0.9144 },
-    Unit { names: &["foot", "feet", "ft"], factor: 0.3048 },
-    Unit { names: &["inch", "inches", "in"], factor: 0.0254 },
-    Unit { names: &["nmi", "nauticalmile", "nauticalmiles"], factor: 1852.0 },
+    Unit {
+        names: &["m", "meter", "meters", "metre", "metres"],
+        factor: 1.0,
+    },
+    Unit {
+        names: &["km", "kilometer", "kilometers", "kilometre", "kilometres"],
+        factor: 1000.0,
+    },
+    Unit {
+        names: &[
+            "cm",
+            "centimeter",
+            "centimeters",
+            "centimetre",
+            "centimetres",
+        ],
+        factor: 0.01,
+    },
+    Unit {
+        names: &[
+            "mm",
+            "millimeter",
+            "millimeters",
+            "millimetre",
+            "millimetres",
+        ],
+        factor: 0.001,
+    },
+    Unit {
+        names: &["mile", "miles", "mi"],
+        factor: 1609.344,
+    },
+    Unit {
+        names: &["yard", "yards", "yd"],
+        factor: 0.9144,
+    },
+    Unit {
+        names: &["foot", "feet", "ft"],
+        factor: 0.3048,
+    },
+    Unit {
+        names: &["inch", "inches", "in"],
+        factor: 0.0254,
+    },
+    Unit {
+        names: &["nmi", "nauticalmile", "nauticalmiles"],
+        factor: 1852.0,
+    },
 ];
 
 const MASS: &[Unit] = &[
-    Unit { names: &["kg", "kilogram", "kilograms"], factor: 1.0 },
-    Unit { names: &["g", "gram", "grams"], factor: 0.001 },
-    Unit { names: &["mg", "milligram", "milligrams"], factor: 0.000_001 },
-    Unit { names: &["lb", "lbs", "pound", "pounds"], factor: 0.453_592 },
-    Unit { names: &["oz", "ounce", "ounces"], factor: 0.028_349_5 },
-    Unit { names: &["ton", "tonne", "tons", "tonnes"], factor: 1000.0 },
-    Unit { names: &["stone", "st"], factor: 6.350_29 },
+    Unit {
+        names: &["kg", "kilogram", "kilograms"],
+        factor: 1.0,
+    },
+    Unit {
+        names: &["g", "gram", "grams"],
+        factor: 0.001,
+    },
+    Unit {
+        names: &["mg", "milligram", "milligrams"],
+        factor: 0.000_001,
+    },
+    Unit {
+        names: &["lb", "lbs", "pound", "pounds"],
+        factor: 0.453_592,
+    },
+    Unit {
+        names: &["oz", "ounce", "ounces"],
+        factor: 0.028_349_5,
+    },
+    Unit {
+        names: &["ton", "tonne", "tons", "tonnes"],
+        factor: 1000.0,
+    },
+    Unit {
+        names: &["stone", "st"],
+        factor: 6.350_29,
+    },
 ];
 
 const DATA: &[Unit] = &[
-    Unit { names: &["b", "byte", "bytes"], factor: 1.0 },
-    Unit { names: &["bit", "bits"], factor: 0.125 },
-    Unit { names: &["kb", "kilobyte", "kilobytes"], factor: 1_000.0 },
-    Unit { names: &["mb", "megabyte", "megabytes"], factor: 1_000_000.0 },
-    Unit { names: &["gb", "gigabyte", "gigabytes"], factor: 1_000_000_000.0 },
-    Unit { names: &["tb", "terabyte", "terabytes"], factor: 1_000_000_000_000.0 },
-    Unit { names: &["kib", "kibibyte", "kibibytes"], factor: 1024.0 },
-    Unit { names: &["mib", "mebibyte", "mebibytes"], factor: 1024.0 * 1024.0 },
-    Unit { names: &["gib", "gibibyte", "gibibytes"], factor: 1024.0 * 1024.0 * 1024.0 },
-    Unit { names: &["tib", "tebibyte", "tebibytes"], factor: 1024.0 * 1024.0 * 1024.0 * 1024.0 },
+    Unit {
+        names: &["b", "byte", "bytes"],
+        factor: 1.0,
+    },
+    Unit {
+        names: &["bit", "bits"],
+        factor: 0.125,
+    },
+    Unit {
+        names: &["kb", "kilobyte", "kilobytes"],
+        factor: 1_000.0,
+    },
+    Unit {
+        names: &["mb", "megabyte", "megabytes"],
+        factor: 1_000_000.0,
+    },
+    Unit {
+        names: &["gb", "gigabyte", "gigabytes"],
+        factor: 1_000_000_000.0,
+    },
+    Unit {
+        names: &["tb", "terabyte", "terabytes"],
+        factor: 1_000_000_000_000.0,
+    },
+    Unit {
+        names: &["kib", "kibibyte", "kibibytes"],
+        factor: 1024.0,
+    },
+    Unit {
+        names: &["mib", "mebibyte", "mebibytes"],
+        factor: 1024.0 * 1024.0,
+    },
+    Unit {
+        names: &["gib", "gibibyte", "gibibytes"],
+        factor: 1024.0 * 1024.0 * 1024.0,
+    },
+    Unit {
+        names: &["tib", "tebibyte", "tebibytes"],
+        factor: 1024.0 * 1024.0 * 1024.0 * 1024.0,
+    },
 ];
 
 fn find_unit(token: &str) -> Option<(Dimension, f64)> {
@@ -90,7 +180,7 @@ impl Temp {
         }
     }
 
-    fn from_celsius(self, c: f64) -> f64 {
+    fn convert_from_celsius(self, c: f64) -> f64 {
         match self {
             Temp::Celsius => c,
             Temp::Fahrenheit => c * 9.0 / 5.0 + 32.0,
@@ -107,7 +197,7 @@ pub fn convert(input: &str) -> Option<EvalResult> {
     let expression = format!("{} {}", format_number(amount), from);
 
     if let (Some(from_t), Some(to_t)) = (find_temp(&from), find_temp(&to)) {
-        let result = to_t.from_celsius(from_t.to_celsius(amount));
+        let result = to_t.convert_from_celsius(from_t.to_celsius(amount));
         return Some(EvalResult {
             expression,
             value: format!("{} {}", format_number(result), to),

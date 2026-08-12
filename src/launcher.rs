@@ -36,7 +36,7 @@ fn perform_search_and_select_first(
     window: &mut Window,
     cx: &mut Context<ListState<ResultListDelegate>>,
 ) {
-    let _ = list.delegate_mut().perform_search(query, window, cx);
+    std::mem::drop(list.delegate_mut().perform_search(query, window, cx));
     let ix = (list.delegate().items_count(0, cx) > 0).then(IndexPath::default);
     list.set_selected_index(ix, window, cx);
 }
@@ -163,11 +163,11 @@ impl LauncherState {
                         list.set_selected_index(ix, window, cx);
                     });
                     let search_input = cx.new(|cx| {
-                        InputState::new(window, cx)
-                            .placeholder("Search apps, files, commands...")
+                        InputState::new(window, cx).placeholder("Search apps, files, commands...")
                     });
-                    let view =
-                        cx.new(|cx| LauncherRoot::new(list.clone(), search_input.clone(), window, cx));
+                    let view = cx.new(|cx| {
+                        LauncherRoot::new(list.clone(), search_input.clone(), window, cx)
+                    });
 
                     *entities_slot_for_window.borrow_mut() =
                         Some((list.clone(), search_input.clone(), view.clone()));
@@ -426,7 +426,11 @@ impl LauncherRoot {
     fn enter_file_mode(&mut self, raw: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.file_mode = true;
         self.folder_scope.clear();
-        let remainder = raw.strip_prefix(" f").unwrap_or("").trim_start().to_string();
+        let remainder = raw
+            .strip_prefix(" f")
+            .unwrap_or("")
+            .trim_start()
+            .to_string();
         self.search_input.update(cx, |input, cx| {
             input.set_value(&remainder, window, cx);
             input.set_placeholder("Search files and folders...", window, cx);
@@ -455,7 +459,8 @@ impl LauncherRoot {
 
     fn exit_file_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.reset_to_apps(window, cx);
-        self.search_input.update(cx, |input, cx| input.focus(window, cx));
+        self.search_input
+            .update(cx, |input, cx| input.focus(window, cx));
     }
 
     /// Pop one level off the folder-scope stack (Tab's inverse) and re-run
@@ -517,12 +522,7 @@ impl LauncherRoot {
         true
     }
 
-    fn run_menu_action(
-        &mut self,
-        action: MenuAction,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    fn run_menu_action(&mut self, action: MenuAction, window: &mut Window, cx: &mut Context<Self>) {
         let Some(menu) = self.action_menu.take() else {
             return;
         };
@@ -590,7 +590,9 @@ impl LauncherRoot {
                     return;
                 }
                 let text = input.read(cx).value().to_string();
-                if !text.is_empty() && self.history.first().map(String::as_str) != Some(text.as_str()) {
+                if !text.is_empty()
+                    && self.history.first().map(String::as_str) != Some(text.as_str())
+                {
                     self.history.insert(0, text);
                     self.history.truncate(HISTORY_LIMIT);
                 }
@@ -685,7 +687,10 @@ impl LauncherRoot {
             if count == 0 {
                 return;
             }
-            let current = list.selected_index().map(|ix| ix.row as isize).unwrap_or(-1);
+            let current = list
+                .selected_index()
+                .map(|ix| ix.row as isize)
+                .unwrap_or(-1);
             let next = (current + delta).rem_euclid(count as isize) as usize;
             list.set_selected_index(Some(IndexPath::new(next)), window, cx);
             list.scroll_to_selected_item(window, cx);
@@ -696,7 +701,13 @@ impl LauncherRoot {
         if self.move_menu_selection(-1, cx) {
             return;
         }
-        let at_top = self.list.read(cx).selected_index().map(|ix| ix.row).unwrap_or(0) == 0;
+        let at_top = self
+            .list
+            .read(cx)
+            .selected_index()
+            .map(|ix| ix.row)
+            .unwrap_or(0)
+            == 0;
         if self.search_input.read(cx).value().is_empty() && at_top {
             // Empty query *and* already on the top result: Up is history
             // recall (even when there's no history yet, so it never falls
@@ -729,7 +740,12 @@ impl LauncherRoot {
     /// list navigation once the user is typing or browsing results.
     /// Returns `false` when there's nowhere to go, so the caller can fall
     /// back to ordinary list-selection movement.
-    fn recall_history(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    fn recall_history(
+        &mut self,
+        delta: isize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let next = match (self.history_cursor, delta) {
             (None, 1) if !self.history.is_empty() => Some(0),
             (Some(i), 1) if i + 1 < self.history.len() => Some(i + 1),
@@ -738,9 +754,17 @@ impl LauncherRoot {
             _ => return false,
         };
         self.history_cursor = next;
-        let text = next.and_then(|i| self.history.get(i)).cloned().unwrap_or_default();
-        self.search_input.update(cx, |input, cx| input.set_value(&text, window, cx));
-        let query = if self.file_mode { self.build_query(&text) } else { text };
+        let text = next
+            .and_then(|i| self.history.get(i))
+            .cloned()
+            .unwrap_or_default();
+        self.search_input
+            .update(cx, |input, cx| input.set_value(&text, window, cx));
+        let query = if self.file_mode {
+            self.build_query(&text)
+        } else {
+            text
+        };
         self.list.update(cx, |list, cx| {
             perform_search_and_select_first(list, &query, window, cx);
         });
@@ -766,7 +790,8 @@ impl LauncherRoot {
         }
         if !self.search_input.read(cx).value().is_empty() {
             self.history_cursor = None;
-            self.search_input.update(cx, |input, cx| input.set_value("", window, cx));
+            self.search_input
+                .update(cx, |input, cx| input.set_value("", window, cx));
             self.list.update(cx, |list, cx| {
                 perform_search_and_select_first(list, "", window, cx);
             });
@@ -892,12 +917,12 @@ impl gpui::Render for LauncherRoot {
                     .gap_2()
                     .border_t_1()
                     .border_color(cx.theme().border)
-                .text_color(cx.theme().muted_foreground)
-                .text_xs()
-                .child(ctrl_k_kbd(cx))
-                .child("Actions")
-                .child(self.selected_action_label(cx))
-                .child(enter_kbd(cx)),
+                    .text_color(cx.theme().muted_foreground)
+                    .text_xs()
+                    .child(ctrl_k_kbd(cx))
+                    .child("Actions")
+                    .child(self.selected_action_label(cx))
+                    .child(enter_kbd(cx)),
             )
             .when_some(self.action_menu.clone(), |root, menu| {
                 let open_label = if menu.is_dir {
@@ -939,9 +964,7 @@ impl gpui::Render for LauncherRoot {
                                 .px_2()
                                 .py_1()
                                 .rounded(cx.theme().radius)
-                                .when(menu.selected == 0, |row| {
-                                    row.bg(cx.theme().tokens.muted)
-                                })
+                                .when(menu.selected == 0, |row| row.bg(cx.theme().tokens.muted))
                                 .child(open_label),
                         )
                         .child(
@@ -949,9 +972,7 @@ impl gpui::Render for LauncherRoot {
                                 .px_2()
                                 .py_1()
                                 .rounded(cx.theme().radius)
-                                .when(menu.selected == 1, |row| {
-                                    row.bg(cx.theme().tokens.muted)
-                                })
+                                .when(menu.selected == 1, |row| row.bg(cx.theme().tokens.muted))
                                 .child(reveal_label),
                         )
                         .child(
@@ -959,9 +980,7 @@ impl gpui::Render for LauncherRoot {
                                 .px_2()
                                 .py_1()
                                 .rounded(cx.theme().radius)
-                                .when(menu.selected == 2, |row| {
-                                    row.bg(cx.theme().tokens.muted)
-                                })
+                                .when(menu.selected == 2, |row| row.bg(cx.theme().tokens.muted))
                                 .child("Copy path"),
                         )
                         .when(menu.can_run_as_admin, |panel| {
@@ -972,9 +991,7 @@ impl gpui::Render for LauncherRoot {
                                     .py_1()
                                     .rounded(cx.theme().radius)
                                     .text_color(cx.theme().accent)
-                                    .when(menu.selected == 3, |row| {
-                                        row.bg(cx.theme().tokens.muted)
-                                    })
+                                    .when(menu.selected == 3, |row| row.bg(cx.theme().tokens.muted))
                                     .child("Run as administrator"),
                             )
                         }),
@@ -1010,7 +1027,12 @@ impl ResultListDelegate {
         }
     }
 
-    fn apply_results(&mut self, generation: u64, items: Vec<CommandItem>, cx: &mut Context<ListState<Self>>) {
+    fn apply_results(
+        &mut self,
+        generation: u64,
+        items: Vec<CommandItem>,
+        cx: &mut Context<ListState<Self>>,
+    ) {
         if crate::plugins::is_stale(self.results_generation, generation) {
             return;
         }
@@ -1094,7 +1116,14 @@ impl ListDelegate for ResultListDelegate {
         // doubles as "is this a calculator result" without adding a field
         // to `CommandItem` that every other provider would have to fill in.
         let calculator = matches!(item.action, CommandAction::CopyToClipboard(_));
-        Some(ResultRow::new(ix, item.title, item.subtitle, icon, selected, calculator))
+        Some(ResultRow::new(
+            ix,
+            item.title,
+            item.subtitle,
+            icon,
+            selected,
+            calculator,
+        ))
     }
 
     fn set_selected_index(
@@ -1107,7 +1136,12 @@ impl ListDelegate for ResultListDelegate {
         cx.notify();
     }
 
-    fn confirm(&mut self, _secondary: bool, window: &mut Window, cx: &mut Context<ListState<Self>>) {
+    fn confirm(
+        &mut self,
+        _secondary: bool,
+        window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) {
         // Bookkeeping first (cheap, in-memory), then hide the window
         // *immediately* — a shell call can take hundreds of ms and must not
         // hold the launcher on screen after Enter.
@@ -1126,7 +1160,9 @@ impl ListDelegate for ResultListDelegate {
                 .detach();
             }
             Some(CommandAction::OpenFile(path)) => {
-                let recents = cx.global::<crate::files::FileRecentsGlobal>().clone_handle();
+                let recents = cx
+                    .global::<crate::files::FileRecentsGlobal>()
+                    .clone_handle();
                 let contents = recents.borrow_mut().mark_opened(path.clone());
                 LauncherState::dismiss(window, cx);
                 cx.background_spawn(async move {
@@ -1240,7 +1276,14 @@ impl gpui::RenderOnce for ResultRow {
         // own style with ours before painting the highlight, so the radius
         // applies to that fill too. The list's own `.p_2()` provides the
         // inset on all four sides uniformly.
-        let ResultRow { base, title, subtitle, icon, selected: _, calculator } = self;
+        let ResultRow {
+            base,
+            title,
+            subtitle,
+            icon,
+            selected: _,
+            calculator,
+        } = self;
         let content: AnyElement = if calculator {
             ResultRow::render_calculator(title, subtitle, cx)
         } else {
@@ -1273,26 +1316,28 @@ impl ResultRow {
                     .justify_center()
                     .when_some(icon, |slot, image| slot.child(img(image).size(px(22.0)))),
             )
-            .child(
-                div().flex_1().flex().flex_col().child(title).when_some(
-                    subtitle,
-                    |col, subtitle| {
-                        col.child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(subtitle),
-                        )
-                    },
-                ),
-            )
+            .child(div().flex_1().flex().flex_col().child(title).when_some(
+                subtitle,
+                |col, subtitle| {
+                    col.child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(subtitle),
+                    )
+                },
+            ))
             .into_any_element()
     }
 
     /// A featured calculator card: small "Calculator" label + the
     /// question in muted text on the left, the answer large and bold on the
     /// right — visually distinct from a normal search result row.
-    fn render_calculator(title: SharedString, subtitle: Option<SharedString>, cx: &mut App) -> AnyElement {
+    fn render_calculator(
+        title: SharedString,
+        subtitle: Option<SharedString>,
+        cx: &mut App,
+    ) -> AnyElement {
         h_flex()
             .items_center()
             .justify_between()

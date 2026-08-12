@@ -12,8 +12,8 @@ pub enum IconSource {
     Path(PathBuf),
 }
 
-// Unused variants below are the extension surface for future providers
-// (clipboard history, calculator) — see `ROADMAP.md`.
+// Less-common variants below are the extension surface for provider-specific
+// result behavior (clipboard history is the next planned provider).
 #[derive(Clone, Debug)]
 pub enum CommandAction {
     LaunchApplication(PathBuf),

@@ -1,4 +1,8 @@
 /target
 /dist
+
 .tokensave
+.claude/settings.local.json
+.serena
+
 plans

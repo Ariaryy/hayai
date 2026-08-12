@@ -4,7 +4,7 @@ param(
     [string]$PackId = "Hayai",
     [string]$PackTitle = "Hayai",
     [string]$PackAuthors = "Hayai",
-    [string]$ScryRoot = "..\scry",
+    [string]$ScryPackage = "",
     [switch]$SkipBuild,
     [switch]$KeepStage
 )
@@ -64,26 +64,68 @@ function New-CleanDirectory {
     New-Item -ItemType Directory -Path $LiteralPath -Force | Out-Null
 }
 
+function Resolve-ScryPackage {
+    param(
+        [Parameter(Mandatory = $true)][string]$LockPath,
+        [string]$ExplicitPackage
+    )
+
+    $lock = Get-Content -LiteralPath $LockPath -Raw
+    $match = [regex]::Match(
+        $lock,
+        '(?ms)^name = "scry-client"\s+version = "[^"]+"\s+source = "git\+https://github\.com/Ariaryy/scry-search\?tag=(?<tag>[^#"]+)#[0-9a-f]{40}"'
+    )
+    if (-not $match.Success) {
+        throw "Unable to resolve the tagged Scry Search release from $LockPath"
+    }
+
+    $tag = $match.Groups["tag"].Value
+    $cacheDir = Join-Path $projectRoot "target\scry-release"
+    New-Item -ItemType Directory -Path $cacheDir -Force | Out-Null
+
+    if ($ExplicitPackage) {
+        $archive = [System.IO.Path]::GetFullPath((Join-Path $projectRoot $ExplicitPackage))
+        if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
+            throw "ScryPackage archive not found: $archive"
+        }
+    }
+    else {
+        $archiveName = "scry-search-$tag-windows-x86_64.zip"
+        $archive = Join-Path $cacheDir $archiveName
+        if (-not (Test-Path -LiteralPath $archive -PathType Leaf)) {
+            $url = "https://github.com/Ariaryy/scry-search/releases/download/$tag/$archiveName"
+            Write-Host "Downloading first-party Scry Search release $tag"
+            Invoke-WebRequest -Uri $url -OutFile $archive
+        }
+    }
+
+    $root = Join-Path $cacheDir $tag
+    if (-not (Test-Path -LiteralPath (Join-Path $root "scryd.exe"))) {
+        if (Test-Path -LiteralPath $root) {
+            Remove-Item -LiteralPath $root -Recurse -Force
+        }
+        Expand-Archive -LiteralPath $archive -DestinationPath $root
+    }
+    foreach ($required in @("scryd.exe", "scry.exe", "install-daemon.ps1", "uninstall-daemon.ps1")) {
+        if (-not (Test-Path -LiteralPath (Join-Path $root $required) -PathType Leaf)) {
+            throw "Scry Search release $tag is missing $required"
+        }
+    }
+    return $root
+}
+
 Push-Location -LiteralPath $projectRoot
 try {
+    $scryPackageRoot = Resolve-ScryPackage -LockPath (Join-Path $projectRoot "Cargo.lock") -ExplicitPackage $ScryPackage
     if (-not $SkipBuild) {
         if ($Configuration -eq "release") {
-            cargo build --release
+            cargo build --locked --release
         }
         else {
-            cargo build
+            cargo build --locked
         }
         if ($LASTEXITCODE -ne 0) {
             throw "Cargo build failed with exit code $LASTEXITCODE"
-        }
-        $scryTarget = Join-Path $projectRoot "target\scry-package"
-        cargo build --manifest-path (Join-Path $ScryRoot "Cargo.toml") --target-dir $scryTarget --profile daemon-release -p scry-daemon
-        if ($LASTEXITCODE -ne 0) {
-            throw "Scry daemon build failed with exit code $LASTEXITCODE"
-        }
-        cargo build --manifest-path (Join-Path $ScryRoot "Cargo.toml") --target-dir $scryTarget --release -p scry-cli
-        if ($LASTEXITCODE -ne 0) {
-            throw "Scry CLI build failed with exit code $LASTEXITCODE"
         }
     }
 
@@ -104,19 +146,9 @@ try {
 
     Copy-Item -LiteralPath $exePath -Destination (Join-Path $stageDir $exeName) -Force
 
-    $scryRootPath = [System.IO.Path]::GetFullPath((Join-Path $projectRoot $ScryRoot))
-    $scryDaemon = Join-Path $projectRoot "target\scry-package\daemon-release\scryd.exe"
-    $scryCli = Join-Path $projectRoot "target\scry-package\release\scry.exe"
-    if (-not (Test-Path -LiteralPath $scryDaemon)) {
-        throw "Scry daemon build output not found: $scryDaemon"
+    foreach ($file in @("scryd.exe", "scry.exe", "install-daemon.ps1", "uninstall-daemon.ps1")) {
+        Copy-Item -LiteralPath (Join-Path $scryPackageRoot $file) -Destination $stageDir -Force
     }
-    if (-not (Test-Path -LiteralPath $scryCli)) {
-        throw "Scry CLI build output not found: $scryCli"
-    }
-    Copy-Item -LiteralPath $scryDaemon -Destination (Join-Path $stageDir "scryd.exe") -Force
-    Copy-Item -LiteralPath $scryCli -Destination (Join-Path $stageDir "scry.exe") -Force
-    Copy-Item -LiteralPath (Join-Path $scryRootPath "scripts\install-daemon.ps1") -Destination $stageDir -Force
-    Copy-Item -LiteralPath (Join-Path $scryRootPath "scripts\uninstall-daemon.ps1") -Destination $stageDir -Force
 
     $runtimeFiles = Get-ChildItem -LiteralPath $buildOutput -File | Where-Object {
         $_.Extension -ieq ".dll"

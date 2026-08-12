@@ -1,0 +1,44 @@
+name: Bug report
+description: Report incorrect behavior or a regression
+title: "bug: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include private filenames, file-search results, clipboard data, or credentials. Use generic replacements.
+  - type: input
+    id: version
+    attributes:
+      label: Hayai version or commit
+      description: Provide the release tag or source commit.
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+  - type: dropdown
+    id: package
+    attributes:
+      label: Installation type
+      options:
+        - Installer
+        - Portable ZIP
+        - Source build
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: What happened?
+      description: Include expected behavior, actual behavior, and minimal reproduction steps.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized diagnostics
+      render: text

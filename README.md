@@ -1,105 +1,119 @@
+<div align="center">
+
 # Hayai
 
-A [Raycast](https://www.raycast.com/)-inspired application launcher for
-Windows, built to be fast and light: instant fuzzy search over your installed
-apps, a global hotkey, and a minimal RAM footprint.
+### A fast, keyboard-first launcher for Windows
 
-> 速い (hayai) — Japanese for "fast".
+Apps · realtime file search · calculator · contextual actions
 
-![platform](https://img.shields.io/badge/platform-Windows-blue)
-![license](https://img.shields.io/badge/license-MIT-blue)
-![powered by GPUI](https://img.shields.io/badge/powered%20by-GPUI-8A2BE2)
+<p>
+  <a href="#install">Install</a> ·
+  <a href="docs/users/usage.md">User guide</a> ·
+  <a href="docs/users/file-search.md">File search</a> ·
+  <a href="docs/users/actions.md">Actions</a> ·
+  <a href="https://github.com/Ariaryy/hayai/releases">Releases</a>
+</p>
 
-## Features
+</div>
 
-- **Global hotkey** (`Alt+Space`) opens a frameless, centered, always-on-top
-  search window — repositions itself onto whichever monitor your cursor is on.
-- **Fuzzy search** over Start Menu shortcuts *and* packaged/Store apps (via
-  `shell:AppsFolder`), with prefix / word-boundary / consecutive-match scoring.
-- **Recents-first**: an empty query shows your most recently launched apps
-  before the rest of the catalog.
-- **Sharp icons**: 48px Hi-DPI icon extraction straight from the shell's
-  system image list, decoded off the UI thread so typing never stutters.
-- **Keyboard-first**: `Up`/`Down` to navigate (first result is always
-  pre-selected), `Enter` to launch, `Esc` or focus-loss to dismiss back to
-  the tray.
-- **Tray icon**: left-click toggles the launcher, right-click opens a small
-  Toggle/Quit menu.
-- **File search**, built using
-  [Scry Search](https://github.com/Ariaryy/scry-search), alongside app search.
-- **Calculator**, triggered automatically as you type (or via ` = `):
-  arithmetic, unit and temperature conversion, currency conversion (live
-  rates, with amounts auto-converted to your region's currency even without
-  typing `to`), hex/decimal/octal/binary base conversion, a `k` thousands
-  shorthand in conversions (`"5k km to miles"`), clock-time arithmetic
-  (`"1pm + 5"`), timezone conversion (`"3pm est to ist"`), and relative-date
-  arithmetic (`"5 days from now"`, `"2 weeks ago"`).
-- **Search history**: press `Up` on an empty query to recall previous
-  searches/calculations, just like a terminal.
-- Runs quietly in the background — dismissing the launcher hides it, it
-  doesn't relaunch or rescan.
+Hayai is a Raycast-inspired launcher built with Rust, GPUI, and native Windows
+APIs. Press `Alt+Space`, type what you need, and launch an app, find a file, or
+calculate a result without leaving the keyboard.
 
-Under the hood, results are produced by a small provider pipeline
-(`CommandProvider`/`PluginRegistry`) designed to grow beyond app search —
-clipboard history and more are planned next.
+> 速い (*hayai*) is Japanese for “fast.”
 
-## Install / run
+> **Status:** early alpha. Core launcher, app search, file search, calculator,
+> search history, and contextual actions work; behavior and packaging may still
+> change between releases.
 
-Requires the [Rust toolchain](https://rustup.rs/) and Windows.
+## Why Hayai?
 
-```sh
-git clone https://github.com/ariaryy/hayai.git
-cd hayai
-cargo run --release
+- **Instant app search:** fuzzy search across Start Menu shortcuts and packaged
+  Microsoft Store apps.
+- **Realtime file search:** powered by the first-party
+  [Scry Search](https://github.com/Ariaryy/scry-search) index and its persistent,
+  low-overhead Windows daemon.
+- **Useful calculator:** arithmetic, unit and temperature conversion, live
+  currency conversion, number bases, clock arithmetic, timezones, and relative
+  dates.
+- **Keyboard first:** navigate with `Up`/`Down`, run with `Enter`, and open
+  contextual actions with `Ctrl+K`.
+- **Native and lightweight:** no browser runtime; icons, hotkeys, tray behavior,
+  application discovery, and focus handling use native Windows facilities.
+- **Quiet in the background:** dismissing the window returns it to the tray
+  without relaunching or rescanning.
+
+## Install
+
+Download the latest installer or portable ZIP from
+[GitHub Releases](https://github.com/Ariaryy/hayai/releases).
+
+Hayai is not code-signed yet, so Windows SmartScreen may warn about downloaded
+builds. Verify that the file came from this repository's Releases page and, if
+needed, compare its SHA-256 hash with the included `SHA256SUMS.txt` before
+choosing **Run anyway**.
+
+The installer starts Hayai at login and bundles the matching Scry Search daemon
+and setup scripts. File search prompts once for elevation when its per-user
+daemon has not yet been installed. App search and the calculator do not require
+elevation.
+
+For portable use, upgrades, removal, and source builds, see the
+[installation guide](docs/users/install.md).
+
+## Search
+
+Start typing normally to search applications. Hayai automatically recognizes
+calculator expressions. A query that begins with a literal space enters Hayai's
+command-mode router: press `Space`, then type a provider keyword. The current
+file-search keyword is `f`, so `Space` → `f` switches the launcher into its
+Scry-powered file mode. This convention leaves room for future modes such as
+`Space` → `cp` for clipboard history.
+
+The examples below use `␠` to make the otherwise invisible leading space
+visible; do not type the `␠` symbol itself.
+
+```text
+discord
+␠f annual report ext:pdf
+15 km to miles
+100 usd to inr
+3pm est to ist
+5 days from now
 ```
 
-`cargo build --release` produces `target/release/hayai.exe` with no console
-window attached. To build an installer (via [Velopack](https://velopack.io/)),
-run `scripts/build-installer.ps1` — it produces a setup exe and a portable
-zip under `dist/velopack/`. The installer registers hayai to launch on login
-and bundles the matching
-[Scry Search](https://github.com/Ariaryy/scry-search) daemon. File mode offers an explicit
-UAC-backed setup action when the elevated daemon is not yet running.
-(a per-user `HKCU\...\Run` entry) and cleans that up again on uninstall.
+See the [usage guide](docs/users/usage.md), [file-search guide](docs/users/file-search.md),
+and [action reference](docs/users/actions.md) for the complete behavior.
 
-## Usage
+## Shortcuts
 
 | Action | Shortcut |
 |---|---|
-| Open / toggle the launcher | `Alt+Space` |
+| Open or toggle Hayai | `Alt+Space` |
 | Move selection | `Up` / `Down` |
-| Launch selected result | `Enter` |
-| Dismiss | `Esc`, click elsewhere, or `Alt+Space` again |
-| Tray menu (Toggle / Quit) | right-click the tray icon |
+| Run the selected result | `Enter` |
+| Open contextual actions | `Ctrl+K` |
+| Dismiss actions or Hayai | `Esc` |
+| Toggle from the tray | left-click the tray icon |
+| Open Toggle/Quit tray menu | right-click the tray icon |
 
-## Project status
+## Architecture
 
-Hayai is under active development. App search/launch, file search, and the
-calculator (arithmetic, unit/currency/base conversion, time/date arithmetic)
-are complete, working vertical slices; clipboard history, an action
-sub-menu, and a broader plugin system are planned but not yet built. See
-`AGENTS.md` for architecture notes and known GPUI/Win32 pitfalls if you're
-contributing.
+Hayai keeps its UI thread focused on rendering and input. Native Windows work,
+Scry queries, network-backed currency refreshes, and icon decoding run outside
+the render path. Results flow through a small `CommandProvider` registry so app
+search, files, and calculator behavior share one launcher surface.
 
-## Why Windows-only, why Rust + GPUI
-
-This project specifically targets Windows (Win32 APIs for the hotkey, tray,
-shell icon extraction, and packaged-app enumeration are used directly, no
-cross-platform abstraction layer). It's built on [GPUI](https://www.gpui.rs/)
-(the GUI framework behind the [Zed](https://zed.dev/) editor) and
-[gpui-component](https://github.com/longbridge/gpui-component) for widgets,
-chosen over Electron/web-view approaches specifically to keep the memory
-footprint small — see `AGENTS.md` for the measured RSS numbers behind that
-decision.
+Read the [architecture overview](docs/internal/architecture.md) and `AGENTS.md`
+before changing GPUI window lifecycle, focus, input propagation, or Win32 code.
+Those areas have ordering and re-entrancy requirements that are easy to break.
 
 ## Contributing
 
-Issues and PRs welcome, but this is a side project and I may not have time to
-review or merge promptly — contribute at your own risk. Please read
-`AGENTS.md` first — it documents several non-obvious GPUI/Win32 pitfalls
-(window lifecycle, focus ordering, thread discipline) that have already
-caused shipped bugs once.
+Issues and focused pull requests are welcome. Start with
+[CONTRIBUTING.md](CONTRIBUTING.md) and run formatting, Clippy, and tests before
+submitting a change. Security issues should follow [SECURITY.md](SECURITY.md).
 
 ## License
 
-[MIT](LICENSE)
+Hayai is available under the [MIT License](LICENSE).
