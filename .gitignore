@@ -2,7 +2,7 @@
 /dist
 
 .tokensave
-.claude
+.claude/settings.local.json
 .serena
 
 plans
