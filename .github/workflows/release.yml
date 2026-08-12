@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: target/scry-release
+          key: scry-release-${{ hashFiles('Cargo.lock') }}
+      - name: Validate release version
+        id: release
+        shell: pwsh
+        run: |
+          $manifest = Get-Content Cargo.toml -Raw
+          $version = [regex]::Match($manifest, '(?m)^version\s*=\s*"([^"]+)"').Groups[1].Value
+          if (-not $version) { throw "Unable to read package version from Cargo.toml" }
+          if ($env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match Cargo.toml version $version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Install Velopack CLI
+        shell: pwsh
+        run: dotnet tool install --tool-path .tools vpk --version 0.0.1298
+      - name: Build installer and portable package
+        shell: pwsh
+        run: ./scripts/build-installer.ps1 -VpkPath "$PWD/.tools/vpk.exe"
+      - name: Create checksums
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem dist/velopack/Hayai-win-Setup.exe,dist/velopack/Hayai-win-Portable.zip
+          $lines = foreach ($file in $files) {
+            $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
+            "$hash  $($file.Name)"
+          }
+          $lines | Set-Content -Encoding ascii dist/velopack/SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Hayai ${{ steps.release.outputs.version }}
+          files: |
+            dist/velopack/Hayai-win-Setup.exe
+            dist/velopack/Hayai-win-Portable.zip
+            dist/velopack/SHA256SUMS.txt
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
