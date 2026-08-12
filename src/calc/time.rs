@@ -131,10 +131,8 @@ fn parse_clock_arithmetic(input: &str) -> Option<EvalResult> {
 
     let (sign, rest) = if let Some(r) = rest.strip_prefix('+') {
         (1.0, r)
-    } else if let Some(r) = rest.strip_prefix('-') {
-        (-1.0, r)
     } else {
-        return None;
+        (-1.0, rest.strip_prefix('-')?)
     };
     let hours: f64 = rest.trim().parse().ok()?;
 
