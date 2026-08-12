@@ -25,7 +25,8 @@ apps, a global hotkey, and a minimal RAM footprint.
   the tray.
 - **Tray icon**: left-click toggles the launcher, right-click opens a small
   Toggle/Quit menu.
-- **File search**, powered by the Everything SDK, alongside app search.
+- **File search**, built using
+  [Scry Search](https://github.com/Ariaryy/scry-search), alongside app search.
 - **Calculator**, triggered automatically as you type (or via ` = `):
   arithmetic, unit and temperature conversion, currency conversion (live
   rates, with amounts auto-converted to your region's currency even without
@@ -56,6 +57,9 @@ cargo run --release
 window attached. To build an installer (via [Velopack](https://velopack.io/)),
 run `scripts/build-installer.ps1` — it produces a setup exe and a portable
 zip under `dist/velopack/`. The installer registers hayai to launch on login
+and bundles the matching
+[Scry Search](https://github.com/Ariaryy/scry-search) daemon. File mode offers an explicit
+UAC-backed setup action when the elevated daemon is not yet running.
 (a per-user `HKCU\...\Run` entry) and cleans that up again on uninstall.
 
 ## Usage

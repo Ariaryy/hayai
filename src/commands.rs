@@ -5,7 +5,7 @@ use std::path::PathBuf;
 /// icon-decode cache keeps doing the work.
 #[derive(Clone, Debug)]
 pub enum IconSource {
-    /// No icon (e.g. the "Everything not running" hint row).
+    /// No icon (for example, a backend-unavailable hint row).
     None,
     /// Resolve through the catalog's path-keyed icon cache (apps today;
     /// files later — same extraction machinery).
@@ -22,6 +22,7 @@ pub enum CommandAction {
     CopyToClipboard(String),
     #[allow(dead_code)]
     ShowText(String),
+    InstallFileSearch,
 }
 
 #[derive(Clone, Debug)]

@@ -29,7 +29,7 @@ below); don't add more without checking the number.
 | `src/native/windows.rs` | Win32: hidden message-only window, `RegisterHotKey`, tray icon, `focus_launcher_window` (foreground/focus dance), `extract_icon_rgba` (icon extraction with shortcut/PIDL handling — see below), `list_apps_folder` (raw COM shell-namespace enumeration), `launch_path` (`ShellExecuteW`). |
 | `src/commands.rs` | `CommandProvider` trait + `CommandItem`/`CommandAction` model. |
 | `src/plugins.rs` | `PluginRegistry` over `CommandProvider`, dispatched from `LauncherRoot`'s search path (auto-claim NL detection, then keyword routing). |
-| `src/files.rs` | `FileSearchProvider` — Everything SDK-backed file search (`native::everything_query`), debounced via `CommandProvider::wants_debounce`/`background_search`. |
+| `src/files.rs` | `FileSearchProvider` — Scry Search (`scryd`)-backed file search (`native::scry_query`), debounced via `CommandProvider::wants_debounce`/`background_search`. |
 | `src/calc/` | `CalcProvider`, claimed via the ` = ` keyword or NL auto-claim (`is_candidate` cheap gate + each evaluator's own parse). Evaluator chain in `calc::evaluate`, tried in order: `units` (dimension/temperature conversion), `currency` (live FX rates, symbol/code forms, regional-default bare amounts), `bases` (hex/dec/oct/bin), `time` (clock arithmetic, timezone conversion, relative-date arithmetic — hand-rolled civil-calendar math, no `chrono`), `arithmetic` (plain expressions, recursive-descent). `grammar::parse_amount` is the shared amount parser (handles the `k`-thousands shorthand, e.g. `"5k"` = 5000) used by `units`/`currency`/the conversion half of `grammar::parse_conversion` — deliberately *not* used by `arithmetic`, so `k` only works in conversion contexts, never in plain calculator expressions. |
 | `src/startup.rs` | `register()`/`unregister()` — writes/deletes the `HKCU\...\Run` entry for launch-on-login, via `winreg` (not raw FFI, matching the sibling `Panora` project's established pattern). Called from `main.rs`'s Velopack install/uninstall fast-callback hooks, never on a normal run. |
 
@@ -219,6 +219,15 @@ invoke your callback, so it's safe to register even while holding a `RefCell` bo
   `Escape`) rather than defining our own — see "Action propagation" above for why that
   works without extra `KeyBinding`/`key_context` registration on our side.
 
+### Context action panel: input routing and paint order
+
+`Ctrl+K` opens the selected-result action panel. While it is open, Up/Down
+must change the panel's action selection and Enter must execute that action;
+never let those keys fall through to the results list. Render the absolute
+panel as the final child of `LauncherRoot`'s root element: GPUI paints later
+siblings on top, while putting it before `List` leaves it behind the selected
+row.
+
 ### 4. Win32 focus ordering
 In `focus_launcher_window`, the Win32 foreground/focus calls must run **before** GPUI's
 `window.focus(...)`. Reversed, GPUI's `WM_SETFOCUS` handling clobbers the focus state.
@@ -285,7 +294,7 @@ There are no automated tests yet. Manual verification for window behavior:
    the next open.
 
 ## Roadmap
-Built: app search/launch, file search (Everything SDK), calculator (arithmetic, unit/temperature
+Built: app search/launch, file search (scry daemon), calculator (arithmetic, unit/temperature
 conversion, currency conversion with live rates and a regional default, hex/dec/oct/bin base
 conversion, clock/timezone/relative-date arithmetic), Up/Down search history recall, a Velopack-based
 installer (`scripts/build-installer.ps1`) that registers/unregisters launch-on-login via `src/startup.rs`.
