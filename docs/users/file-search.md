@@ -7,10 +7,12 @@ client protocol.
 
 ## Set up the daemon
 
-Open Hayai and type `f `. If the daemon cannot be reached, the result list shows
-an installation action. Select it and press `Enter`. Windows requests elevation
-once, installs a highest-privilege per-user scheduled task, and starts the
-daemon.
+Open Hayai, press `Space`, and then type `f`. The leading space tells Hayai to
+route the query as a command; `f` selects the file-search provider. Hayai
+replaces that trigger with a visible file-mode pill. If the daemon cannot be
+reached, the result list shows an installation action. Select it and press
+`Enter`. Windows requests elevation once, installs a highest-privilege per-user
+scheduled task, and starts the daemon.
 
 Initial indexing is the exceptional heavy phase. Search results become complete
 after Scry finishes reading the fixed NTFS volumes available to the current
@@ -18,13 +20,15 @@ machine.
 
 ## Search syntax
 
-The `f ` prefix belongs to Hayai; the remainder is a Scry query.
+The command pattern is one literal leading space followed by a provider keyword.
+For file search it is `Space` → `f`; everything after `f` becomes the Scry
+query. The `␠` symbol below only makes the leading space visible:
 
 ```text
-f budget
-f annual report type:file ext:pdf,docx
-f type:dir modified:<7d
-f *.toml
+␠f budget
+␠f annual report type:file ext:pdf,docx
+␠f type:dir modified:<7d
+␠f *.toml
 ```
 
 Read Scry's maintained

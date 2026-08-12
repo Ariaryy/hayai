@@ -20,9 +20,10 @@ install shortcuts or register Hayai to launch at login.
 ## File-search setup
 
 App search and the calculator work immediately. File search requires Scry
-Search's elevated, per-user daemon. Enter file mode with `f `; if the daemon is
-not running, Hayai offers a setup action. Windows displays one UAC prompt while
-the scheduled task is installed and started.
+Search's elevated, per-user daemon. Enter file mode by pressing `Space` and then
+typing `f`; the initial space activates Hayai's command-mode router. If the
+daemon is not running, Hayai offers a setup action. Windows displays one UAC
+prompt while the scheduled task is installed and started.
 
 See [File search](file-search.md) for details.
 

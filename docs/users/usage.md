@@ -12,12 +12,18 @@ Use `Up` and `Down` to select a result and `Enter` to launch it.
 
 ## Files
 
-Start a query with `f ` to use Scry Search:
+Hayai reserves a literal leading space for command modes. Press `Space`, then
+type the provider keyword; `f` is the current file-search keyword. In other
+words, `Space` → `f` enters Scry-powered file mode. The same router can support
+future keywords such as `Space` → `cp` without treating ordinary application
+queries as commands.
+
+The `␠` symbol below represents the one leading space and is not typed:
 
 ```text
-f invoice
-f projects annual report ext:pdf
-f type:dir modified:<7d
+␠f invoice
+␠f projects annual report ext:pdf
+␠f type:dir modified:<7d
 ```
 
 Hayai also recognizes a directory scope before the query. The exact matching
@@ -26,8 +32,8 @@ and ranking are provided by Scry. See [File search](file-search.md) and Scry's
 
 ## Calculator
 
-Calculator-shaped queries are detected automatically. You can also use the
-explicit `= ` provider keyword.
+Calculator-shaped queries are detected automatically. Its explicit provider
+keyword uses the same leading-space command router when needed.
 
 ```text
 2 * (7 + 3)

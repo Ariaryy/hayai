@@ -63,12 +63,19 @@ For portable use, upgrades, removal, and source builds, see the
 
 ## Search
 
-Start typing to search applications. Hayai automatically recognizes calculator
-expressions. Prefix a query with `f ` to search files through Scry Search.
+Start typing normally to search applications. Hayai automatically recognizes
+calculator expressions. A query that begins with a literal space enters Hayai's
+command-mode router: press `Space`, then type a provider keyword. The current
+file-search keyword is `f`, so `Space` → `f` switches the launcher into its
+Scry-powered file mode. This convention leaves room for future modes such as
+`Space` → `cp` for clipboard history.
+
+The examples below use `␠` to make the otherwise invisible leading space
+visible; do not type the `␠` symbol itself.
 
 ```text
 discord
-f annual report ext:pdf
+␠f annual report ext:pdf
 15 km to miles
 100 usd to inr
 3pm est to ist
