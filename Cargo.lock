@@ -5769,8 +5769,8 @@ dependencies = [
 
 [[package]]
 name = "scry-client"
-version = "0.1.0-alpha.1"
-source = "git+https://github.com/Ariaryy/scry-search?tag=v0.1.0-alpha.1#76cd2f6267244a37f29d40db1c973a8eb9714059"
+version = "0.1.0-alpha.3"
+source = "git+https://github.com/Ariaryy/scry-search?tag=v0.1.0-alpha.3#45f54cc551ca1dc0f467b70de3b35c17b16a196f"
 dependencies = [
  "anyhow",
  "scry-core",
@@ -5779,8 +5779,8 @@ dependencies = [
 
 [[package]]
 name = "scry-core"
-version = "0.1.0-alpha.1"
-source = "git+https://github.com/Ariaryy/scry-search?tag=v0.1.0-alpha.1#76cd2f6267244a37f29d40db1c973a8eb9714059"
+version = "0.1.0-alpha.3"
+source = "git+https://github.com/Ariaryy/scry-search?tag=v0.1.0-alpha.3#45f54cc551ca1dc0f467b70de3b35c17b16a196f"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -5793,8 +5793,8 @@ dependencies = [
 
 [[package]]
 name = "scry-ipc"
-version = "0.1.0-alpha.1"
-source = "git+https://github.com/Ariaryy/scry-search?tag=v0.1.0-alpha.1#76cd2f6267244a37f29d40db1c973a8eb9714059"
+version = "0.1.0-alpha.3"
+source = "git+https://github.com/Ariaryy/scry-search?tag=v0.1.0-alpha.3#45f54cc551ca1dc0f467b70de3b35c17b16a196f"
 
 [[package]]
 name = "seahash"
@@ -6540,7 +6540,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand 2.4.1",
- "getrandom 0.4.2",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix 1.1.4",
  "windows-sys 0.61.2",
