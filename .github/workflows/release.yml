@@ -39,21 +39,23 @@ jobs:
       - name: Build installer and portable package
         shell: pwsh
         run: ./scripts/build-installer.ps1 -VpkPath "$PWD/.tools/vpk.exe"
-      - name: Create checksums
+      - name: Stage versioned release assets
         shell: pwsh
         run: |
-          $files = Get-ChildItem dist/velopack/Hayai-win-Setup.exe,dist/velopack/Hayai-win-Portable.zip
+          $releaseDir = "dist/release"
+          $prefix = "hayai-$env:GITHUB_REF_NAME-windows-x86_64"
+          New-Item -ItemType Directory -Path $releaseDir -Force | Out-Null
+          Copy-Item dist/velopack/Hayai-win-Setup.exe "$releaseDir/$prefix-setup.exe"
+          Copy-Item dist/velopack/Hayai-win-Portable.zip "$releaseDir/$prefix-portable.zip"
+          $files = Get-ChildItem "$releaseDir/$prefix-setup.exe","$releaseDir/$prefix-portable.zip"
           $lines = foreach ($file in $files) {
             $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash.ToLowerInvariant()
             "$hash  $($file.Name)"
           }
-          $lines | Set-Content -Encoding ascii dist/velopack/SHA256SUMS.txt
+          $lines | Set-Content -Encoding ascii -LiteralPath "$releaseDir/$prefix-SHA256SUMS.txt"
       - uses: softprops/action-gh-release@v2
         with:
           name: Hayai ${{ steps.release.outputs.version }}
-          files: |
-            dist/velopack/Hayai-win-Setup.exe
-            dist/velopack/Hayai-win-Portable.zip
-            dist/velopack/SHA256SUMS.txt
+          files: dist/release/*
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}

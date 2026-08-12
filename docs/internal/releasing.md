@@ -34,7 +34,19 @@ workflow rejects a mismatch. It then:
 3. builds Hayai with its lockfile;
 4. downloads the independently built Scry package matching the locked tag;
 5. creates the Velopack installer and portable ZIP;
-6. publishes both artifacts and `SHA256SUMS.txt` to a generated GitHub release.
+6. publishes the versioned setup, portable archive, and checksum manifest;
+7. generates the release changelog from merged pull requests and commits.
+
+The public artifacts use the tag in their names:
+
+```text
+hayai-v<version>-windows-x86_64-setup.exe
+hayai-v<version>-windows-x86_64-portable.zip
+hayai-v<version>-windows-x86_64-SHA256SUMS.txt
+```
+
+The release title is `Hayai <version>`, matching Scry Search's release-title
+convention without exposing Velopack's internal package naming.
 
 Versions containing `-` are automatically marked as prereleases.
 

@@ -2,7 +2,7 @@
 
 ## Installer
 
-Download `Hayai-win-Setup.exe` from the latest
+Download `hayai-v<version>-windows-x86_64-setup.exe` from the latest
 [GitHub release](https://github.com/Ariaryy/hayai/releases) and run it. The
 installer adds Start Menu and desktop shortcuts, registers Hayai to launch for
 the current user at login, and bundles the matching Scry Search utilities.
@@ -13,9 +13,9 @@ SHA-256 hash against `SHA256SUMS.txt` before choosing **Run anyway**.
 
 ## Portable package
 
-Download and extract `Hayai-win-Portable.zip`, then run `hayai.exe`. The
-portable package contains the same application and Scry utilities, but does not
-install shortcuts or register Hayai to launch at login.
+Download and extract `hayai-v<version>-windows-x86_64-portable.zip`, then run
+`hayai.exe`. The portable package contains the same application and Scry
+utilities, but does not install shortcuts or register Hayai to launch at login.
 
 ## File-search setup
 
