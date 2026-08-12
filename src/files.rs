@@ -101,7 +101,11 @@ pub fn write_file_recents_file(contents: &str) {
 
 fn recents_file() -> Option<PathBuf> {
     let app_data = std::env::var("APPDATA").ok()?;
-    Some(PathBuf::from(app_data).join("hayai").join("file_recents.txt"))
+    Some(
+        PathBuf::from(app_data)
+            .join("hayai")
+            .join("file_recents.txt"),
+    )
 }
 
 /// Directories that are almost never what someone means when they search by
@@ -131,7 +135,7 @@ fn is_noisy_path(path: &Path, query: &str) -> bool {
     })
 }
 
-fn path_to_item(path: &PathBuf) -> CommandItem {
+fn path_to_item(path: &Path) -> CommandItem {
     CommandItem {
         id: path.to_string_lossy().into_owned(),
         title: path
@@ -139,8 +143,8 @@ fn path_to_item(path: &PathBuf) -> CommandItem {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.to_string_lossy().into_owned()),
         subtitle: path.parent().map(|p| p.to_string_lossy().into_owned()),
-        icon: IconSource::Path(path.clone()),
-        action: CommandAction::OpenFile(path.clone()),
+        icon: IconSource::Path(path.to_path_buf()),
+        action: CommandAction::OpenFile(path.to_path_buf()),
     }
 }
 
@@ -169,7 +173,7 @@ fn directory_listing(dir: &Path, query: &str) -> Vec<CommandItem> {
         })
     });
     paths.truncate(MAX_RESULTS as usize);
-    paths.iter().map(path_to_item).collect()
+    paths.iter().map(|path| path_to_item(path)).collect()
 }
 
 fn home_dir_listing() -> Vec<CommandItem> {
@@ -245,7 +249,7 @@ impl CommandProvider for FileSearchProvider {
             .recents()
             .iter()
             .filter(|path| path.exists())
-            .map(path_to_item)
+            .map(|path| path_to_item(path))
             .collect();
         if !recents.is_empty() {
             return recents;
@@ -277,58 +281,63 @@ impl CommandProvider for FileSearchProvider {
                 return directory_listing(&dir, &query);
             }
             match native::scry_query(&scry_query, max_results) {
-            None => vec![CommandItem {
-                id: "files:not-running".into(),
-                title: "Enable file search".into(),
-                subtitle: Some("Install and start the elevated Scry Search daemon".into()),
-                icon: IconSource::None,
-                action: CommandAction::InstallFileSearch,
-            }],
-            Some(mut hits) => {
-                hits.retain(|hit| {
-                    let full_path = hit.parent.join(&hit.name);
-                    if is_noisy_path(&full_path, &query) {
-                        return false;
-                    }
-                    if let Some((dir, _)) = &scope
-                        && (!full_path.starts_with(dir) || full_path == *dir)
-                    {
-                        return false;
-                    }
-                    true
-                });
-                // Folders first, then shallower paths, then alphabetical by name.
-                hits.sort_by(|a, b| {
-                    b.is_folder
-                        .cmp(&a.is_folder)
-                        .then_with(|| a.parent.components().count().cmp(&b.parent.components().count()))
-                        .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-                });
-                hits.truncate(MAX_RESULTS as usize);
-                hits
-                .into_iter()
-                .map(|hit| {
-                    let full_path = hit.parent.join(&hit.name);
-                    let parent_str = hit.parent.to_string_lossy();
-                    let subtitle = if !hit.is_folder && hit.size > 0 {
-                        format!("{parent_str} · {}", format_size(hit.size))
-                    } else {
-                        parent_str.into_owned()
-                    };
-                    CommandItem {
-                        id: full_path.to_string_lossy().into_owned(),
-                        title: hit.name,
-                        subtitle: Some(subtitle),
-                        // TODO: per-extension icon dedup — each hit currently
-                        // grows the catalog's path-keyed icon cache by one
-                        // entry; fine at 64 results/keystroke, revisit if
-                        // that ever changes.
-                        icon: IconSource::Path(full_path.clone()),
-                        action: CommandAction::OpenFile(full_path),
-                    }
-                })
-                .collect()
+                None => vec![CommandItem {
+                    id: "files:not-running".into(),
+                    title: "Enable file search".into(),
+                    subtitle: Some("Install and start the elevated Scry Search daemon".into()),
+                    icon: IconSource::None,
+                    action: CommandAction::InstallFileSearch,
+                }],
+                Some(mut hits) => {
+                    hits.retain(|hit| {
+                        let full_path = hit.parent.join(&hit.name);
+                        if is_noisy_path(&full_path, &query) {
+                            return false;
+                        }
+                        if let Some((dir, _)) = &scope
+                            && (!full_path.starts_with(dir) || full_path == *dir)
+                        {
+                            return false;
+                        }
+                        true
+                    });
+                    // Folders first, then shallower paths, then alphabetical by name.
+                    hits.sort_by(|a, b| {
+                        b.is_folder
+                            .cmp(&a.is_folder)
+                            .then_with(|| {
+                                a.parent
+                                    .components()
+                                    .count()
+                                    .cmp(&b.parent.components().count())
+                            })
+                            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+                    });
+                    hits.truncate(MAX_RESULTS as usize);
+                    hits.into_iter()
+                        .map(|hit| {
+                            let full_path = hit.parent.join(&hit.name);
+                            let parent_str = hit.parent.to_string_lossy();
+                            let subtitle = if !hit.is_folder && hit.size > 0 {
+                                format!("{parent_str} · {}", format_size(hit.size))
+                            } else {
+                                parent_str.into_owned()
+                            };
+                            CommandItem {
+                                id: full_path.to_string_lossy().into_owned(),
+                                title: hit.name,
+                                subtitle: Some(subtitle),
+                                // TODO: per-extension icon dedup — each hit currently
+                                // grows the catalog's path-keyed icon cache by one
+                                // entry; fine at 64 results/keystroke, revisit if
+                                // that ever changes.
+                                icon: IconSource::Path(full_path.clone()),
+                                action: CommandAction::OpenFile(full_path),
+                            }
+                        })
+                        .collect()
+                }
             }
-        }}))
+        }))
     }
 }

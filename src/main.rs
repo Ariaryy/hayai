@@ -9,12 +9,12 @@ mod native;
 mod plugins;
 mod startup;
 
-use futures::StreamExt;
-use gpui::{App, rgb};
-use gpui_component::{Theme, ThemeMode, ThemeTokens};
 use apps::{AppsProvider, Catalog, CatalogGlobal};
 use calc::CalcProvider;
 use files::{FileRecentsGlobal, FileSearchProvider};
+use futures::StreamExt;
+use gpui::{App, rgb};
+use gpui_component::{Theme, ThemeMode, ThemeTokens};
 use launcher::{LauncherGlobal, LauncherState};
 use native::{NativeCommand, NativeRuntime};
 use plugins::{PluginRegistry, RegistryGlobal};
@@ -98,13 +98,13 @@ fn drive_native_commands(
         while let Some(command) = native_rx.next().await {
             match command {
                 NativeCommand::ToggleLauncher => {
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         let launcher = cx.global::<LauncherGlobal>().clone_handle();
                         launcher.borrow_mut().toggle(cx);
                     });
                 }
                 NativeCommand::Quit => {
-                    let _ = cx.update(|cx| cx.quit());
+                    cx.update(|cx| cx.quit());
                     return;
                 }
             }

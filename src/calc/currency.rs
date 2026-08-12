@@ -113,7 +113,13 @@ impl FxCache {
     }
 
     fn rate_for(&self, code: &str) -> Option<f64> {
-        self.inner.read().unwrap().rates.as_ref()?.get(code).copied()
+        self.inner
+            .read()
+            .unwrap()
+            .rates
+            .as_ref()?
+            .get(code)
+            .copied()
     }
 
     fn as_of_label(&self) -> Option<String> {
@@ -360,7 +366,10 @@ mod tests {
         cache_with_rates_and_default(pairs, None)
     }
 
-    fn cache_with_rates_and_default(pairs: &[(&str, f64)], default_target: Option<&str>) -> FxCache {
+    fn cache_with_rates_and_default(
+        pairs: &[(&str, f64)],
+        default_target: Option<&str>,
+    ) -> FxCache {
         let rates = pairs.iter().map(|(k, v)| (k.to_string(), *v)).collect();
         FxCache {
             inner: Arc::new(RwLock::new(FxSnapshot {

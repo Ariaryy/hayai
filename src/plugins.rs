@@ -79,10 +79,11 @@ impl PluginRegistry {
             let mut parts = rest.splitn(2, char::is_whitespace);
             let token = parts.next().unwrap_or("");
             let remainder = parts.next().unwrap_or("").trim();
-            if let Some(provider) = self.providers.iter().position(|p| {
-                p.keyword()
-                    .is_some_and(|kw| kw.eq_ignore_ascii_case(token))
-            }) {
+            if let Some(provider) = self
+                .providers
+                .iter()
+                .position(|p| p.keyword().is_some_and(|kw| kw.eq_ignore_ascii_case(token)))
+            {
                 return Dispatch {
                     generation,
                     provider,
@@ -110,9 +111,7 @@ impl PluginRegistry {
     /// NL auto-detection: the first provider whose `auto_claim` accepts this
     /// query wins, in registration order. Tried before keyword dispatch.
     fn auto_detect(&self, query: &str) -> Option<usize> {
-        self.providers
-            .iter()
-            .position(|p| p.auto_claim(query))
+        self.providers.iter().position(|p| p.auto_claim(query))
     }
 
     pub fn search(&self, dispatch: &Dispatch) -> Vec<CommandItem> {

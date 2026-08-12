@@ -19,7 +19,6 @@ use windows_sys::Win32::System::Com::{
     CoTaskMemFree, STGM_READ,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::core::{GUID, HRESULT, IUnknown_Vtbl};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     MOD_ALT, MOD_NOREPEAT, RegisterHotKey, SetActiveWindow, SetFocus, UnregisterHotKey, VK_SPACE,
 };
@@ -42,6 +41,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_EX_APPWINDOW,
     WS_EX_TOOLWINDOW, WS_OVERLAPPED,
 };
+use windows_sys::core::{GUID, HRESULT, IUnknown_Vtbl};
 
 use super::{IconImage, NativeCommand};
 
@@ -54,8 +54,6 @@ const WM_TRAY_ICON: u32 = WM_APP + 1;
 // the Win32 message loop.
 static COMMAND_SENDER: OnceLock<UnboundedSender<NativeCommand>> = OnceLock::new();
 static SCRY_SEARCH_SENDER: OnceLock<mpsc::Sender<ScrySearchRequest>> = OnceLock::new();
-
-
 
 /// One search result hit.
 pub struct FileHit {
@@ -322,7 +320,10 @@ pub fn scry_query(query: &str, max_results: u32) -> Option<Vec<FileHit>> {
             reply,
         })
         .ok()?;
-    response.recv_timeout(std::time::Duration::from_secs(5)).ok().flatten()
+    response
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .ok()
+        .flatten()
 }
 
 fn scry_search_sender() -> &'static mpsc::Sender<ScrySearchRequest> {
@@ -395,12 +396,11 @@ fn run_scry_search(receiver: mpsc::Receiver<ScrySearchRequest>) {
 }
 
 fn scry_query_kind(query: &str) -> scry_client::QueryKind {
-    let kind = if query.bytes().any(|b| matches!(b, b'*' | b'?')) {
+    if query.bytes().any(|b| matches!(b, b'*' | b'?')) {
         scry_client::QueryKind::Wildcard
     } else {
         scry_client::QueryKind::PathTerms
-    };
-    kind
+    }
 }
 
 fn entries_to_hits(entries: Vec<scry_client::ResultEntry>) -> Vec<FileHit> {
@@ -468,7 +468,11 @@ struct IPersistFileVtbl {
     base: IUnknown_Vtbl,
     get_class_id: unsafe extern "system" fn(this: *mut c_void, pclassid: *mut GUID) -> HRESULT,
     is_dirty: unsafe extern "system" fn(this: *mut c_void) -> HRESULT,
-    load: unsafe extern "system" fn(this: *mut c_void, psz_file_name: *const u16, dw_mode: u32) -> HRESULT,
+    load: unsafe extern "system" fn(
+        this: *mut c_void,
+        psz_file_name: *const u16,
+        dw_mode: u32,
+    ) -> HRESULT,
 }
 
 unsafe fn com_query_interface(this: *mut c_void, iid: &GUID) -> Option<*mut c_void> {
@@ -735,8 +739,7 @@ pub fn list_apps_folder() -> Vec<(String, PathBuf)> {
 unsafe fn app_entry_from_pidl(pidl: *const ITEMIDLIST) -> Option<(String, PathBuf)> {
     unsafe {
         let mut name_ptr: *mut u16 = null_mut();
-        if SHGetNameFromIDList(pidl, SIGDN_NORMALDISPLAY, &mut name_ptr) < 0 || name_ptr.is_null()
-        {
+        if SHGetNameFromIDList(pidl, SIGDN_NORMALDISPLAY, &mut name_ptr) < 0 || name_ptr.is_null() {
             return None;
         }
         let name = pwstr_to_string(name_ptr);
@@ -794,10 +797,11 @@ unsafe fn pwstr_to_string(ptr: *mut u16) -> String {
 pub fn extract_icon_rgba(path: &Path) -> Option<IconImage> {
     let info = resolve_shortcut_info(path);
 
-    if let Some((icon_path, icon_index)) = info.as_ref().and_then(|info| info.icon_location.as_ref()) {
-        if let Some(image) = extract_icon_by_index(icon_path, *icon_index) {
-            return Some(image);
-        }
+    if let Some((icon_path, icon_index)) =
+        info.as_ref().and_then(|info| info.icon_location.as_ref())
+        && let Some(image) = extract_icon_by_index(icon_path, *icon_index)
+    {
+        return Some(image);
     }
 
     let target = info
@@ -939,7 +943,9 @@ fn extract_icon_via_shell_pidl_legacy(shell_path: &str) -> Option<IconImage> {
     }
 }
 
-unsafe fn hicon_to_bgra(hicon: windows_sys::Win32::UI::WindowsAndMessaging::HICON) -> Option<IconImage> {
+unsafe fn hicon_to_bgra(
+    hicon: windows_sys::Win32::UI::WindowsAndMessaging::HICON,
+) -> Option<IconImage> {
     let mut icon_info: ICONINFO = unsafe { std::mem::zeroed() };
     if unsafe { GetIconInfo(hicon, &mut icon_info) } == 0 {
         return None;
@@ -976,7 +982,7 @@ unsafe fn hicon_to_bgra(hicon: windows_sys::Win32::UI::WindowsAndMessaging::HICO
         header.bmiHeader.biHeight = -height;
         header.bmiHeader.biPlanes = 1;
         header.bmiHeader.biBitCount = 32;
-        header.bmiHeader.biCompression = BI_RGB as u32;
+        header.bmiHeader.biCompression = BI_RGB;
 
         let mut pixels = vec![0u8; (width as usize) * (height as usize) * 4];
         let hdc = unsafe { GetDC(null_mut_hwnd()) };
@@ -1296,7 +1302,9 @@ unsafe fn read_winhttp_body(request: *mut c_void) -> Option<String> {
 /// on any lookup failure (falls back to no default, forcing an explicit
 /// target).
 pub fn system_currency_code() -> Option<String> {
-    use windows_sys::Win32::Globalization::{GetLocaleInfoEx, GetUserDefaultLocaleName, LOCALE_SINTLSYMBOL};
+    use windows_sys::Win32::Globalization::{
+        GetLocaleInfoEx, GetUserDefaultLocaleName, LOCALE_SINTLSYMBOL,
+    };
 
     unsafe {
         // LOCALE_NAME_MAX_LENGTH, per the Win32 docs — not exposed as a

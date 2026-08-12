@@ -37,7 +37,11 @@ pub fn format_currency(value: f64) -> String {
     }
     let negative = value < 0.0;
     let cents = (value.abs() * 100.0).round() as i64;
-    let body = format!("{}.{:02}", group_thousands(&(cents / 100).to_string()), cents % 100);
+    let body = format!(
+        "{}.{:02}",
+        group_thousands(&(cents / 100).to_string()),
+        cents % 100
+    );
     if negative { format!("-{body}") } else { body }
 }
 
@@ -45,7 +49,7 @@ fn group_thousands(digits: &str) -> String {
     let bytes = digits.as_bytes();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (i, b) in bytes.iter().enumerate() {
-        if i != 0 && (bytes.len() - i) % 3 == 0 {
+        if i != 0 && (bytes.len() - i).is_multiple_of(3) {
             out.push(',');
         }
         out.push(*b as char);

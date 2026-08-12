@@ -21,7 +21,10 @@ use crate::native;
 const TIMEZONES: &[(&[&str], i32)] = &[
     (&["utc", "gmt", "london"], 0),
     (&["bst"], 60),
-    (&["cet", "paris", "berlin", "madrid", "rome", "amsterdam"], 60),
+    (
+        &["cet", "paris", "berlin", "madrid", "rome", "amsterdam"],
+        60,
+    ),
     (&["cest"], 120),
     (&["eet", "athens", "cairo"], 120),
     (&["msk", "moscow"], 180),
@@ -31,10 +34,16 @@ const TIMEZONES: &[(&[&str], i32)] = &[
     (&["cdt"], -300),
     (&["mst", "denver"], -420),
     (&["mdt"], -360),
-    (&["pst", "losangeles", "la", "sf", "sanfrancisco", "seattle"], -480),
+    (
+        &["pst", "losangeles", "la", "sf", "sanfrancisco", "seattle"],
+        -480,
+    ),
     (&["pdt"], -420),
     (&["gst", "dubai"], 240),
-    (&["ist", "mumbai", "delhi", "bangalore", "kolkata", "india"], 330),
+    (
+        &["ist", "mumbai", "delhi", "bangalore", "kolkata", "india"],
+        330,
+    ),
     (&["sgt", "singapore", "hongkong"], 480),
     (&["cst_asia", "beijing", "shanghai", "china"], 480),
     (&["jst", "tokyo"], 540),
@@ -177,7 +186,11 @@ fn parse_timezone_conversion(input: &str) -> Option<EvalResult> {
 
     Some(EvalResult {
         expression: format!("{} {}", format_clock(source), from_token.to_uppercase()),
-        value: format!("{}{day_note} {}", format_clock(target), to_token.to_uppercase()),
+        value: format!(
+            "{}{day_note} {}",
+            format_clock(target),
+            to_token.to_uppercase()
+        ),
     })
 }
 
@@ -206,11 +219,27 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 }
 
 const WEEKDAYS: [&str; 7] = [
-    "Thursday", "Friday", "Saturday", "Sunday", "Monday", "Tuesday", "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
 ];
 const MONTHS: [&str; 12] = [
-    "January", "February", "March", "April", "May", "June", "July", "August", "September",
-    "October", "November", "December",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
 ];
 
 fn format_date(days_since_epoch: i64) -> String {

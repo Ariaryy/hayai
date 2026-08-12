@@ -71,10 +71,9 @@ fn evaluate(input: &str, fx: &currency::FxCache) -> Option<EvalResult> {
 /// non-candidates instantly (this runs on every keystroke across every
 /// provider), then each evaluator's own full parse decides for real.
 fn is_candidate(input: &str) -> bool {
-    input
-        .chars()
-        .next()
-        .is_some_and(|c| c.is_ascii_digit() || c == '(' || c == '.' || c == '-' || currency::is_symbol(c))
+    input.chars().next().is_some_and(|c| {
+        c.is_ascii_digit() || c == '(' || c == '.' || c == '-' || currency::is_symbol(c)
+    })
 }
 
 fn result_item(query: &str, result: EvalResult) -> CommandItem {

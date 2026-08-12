@@ -94,12 +94,14 @@ impl Catalog {
         // pool and publish the result when it lands.
         cx.spawn(async move |cx| {
             let apps = cx.background_spawn(async move { scan_apps() }).await;
-            let _ = cx.update(|cx| {
+            cx.update(|cx| {
                 cx.global::<CatalogGlobal>()
                     .clone_handle()
                     .borrow_mut()
                     .set_apps(apps);
-                let launcher = cx.global::<crate::launcher::LauncherGlobal>().clone_handle();
+                let launcher = cx
+                    .global::<crate::launcher::LauncherGlobal>()
+                    .clone_handle();
                 launcher.borrow().refresh_results(cx);
             });
         })
@@ -217,7 +219,6 @@ impl Catalog {
                 .collect();
         }
     }
-
 }
 
 /// Write pre-serialized recents contents to disk. Free function on purpose:
@@ -343,7 +344,7 @@ fn fuzzy_score(haystack: &str, needle: &str) -> Option<i32> {
         for hay_char in hay.by_ref() {
             if hay_char == needle_char {
                 match prev_char {
-                    None => score += 10, // match at the very start
+                    None => score += 10,                                 // match at the very start
                     Some(prev) if !prev.is_alphanumeric() => score += 8, // word boundary
                     _ => {}
                 }
@@ -437,7 +438,10 @@ mod tests {
         // letters scattered through another candidate.
         let prefix = fuzzy_score("notepad", "note").unwrap();
         let scattered = fuzzy_score("network operations terminal e", "note").unwrap();
-        assert!(prefix > scattered, "prefix {prefix} vs scattered {scattered}");
+        assert!(
+            prefix > scattered,
+            "prefix {prefix} vs scattered {scattered}"
+        );
     }
 
     #[test]
@@ -445,7 +449,10 @@ mod tests {
         // 'c' at a word boundary ("visual studio code") vs mid-word ("arc").
         let boundary = fuzzy_score("studio code", "c").unwrap();
         let mid_word = fuzzy_score("arc", "c").unwrap();
-        assert!(boundary > mid_word, "boundary {boundary} vs mid-word {mid_word}");
+        assert!(
+            boundary > mid_word,
+            "boundary {boundary} vs mid-word {mid_word}"
+        );
     }
 
     #[test]
@@ -453,7 +460,10 @@ mod tests {
         // Same needle, same haystack length; consecutive letters score higher.
         let consecutive = fuzzy_score("xcodex", "code").unwrap();
         let gappy = fuzzy_score("cxoxdxex", "code").unwrap();
-        assert!(consecutive > gappy, "consecutive {consecutive} vs gappy {gappy}");
+        assert!(
+            consecutive > gappy,
+            "consecutive {consecutive} vs gappy {gappy}"
+        );
     }
 
     #[test]

@@ -19,9 +19,9 @@ mod windows;
 
 #[cfg(windows)]
 pub use windows::{
-    NativeRuntime, extract_icon_rgba, focus_launcher_window, hide_launcher_window,
-    https_get, install_scry_daemon, launch_path, launch_path_as_admin, list_apps_folder, local_now, scry_query,
-    system_currency_code,
+    NativeRuntime, extract_icon_rgba, focus_launcher_window, hide_launcher_window, https_get,
+    install_scry_daemon, launch_path, launch_path_as_admin, list_apps_folder, local_now,
+    scry_query, system_currency_code,
 };
 
 #[cfg(not(windows))]
