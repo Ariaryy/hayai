@@ -7,9 +7,9 @@ use std::time::Duration;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, AnyWindowHandle, App, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight,
-    Half, IntoElement, MouseButton, RenderImage, SharedString, Subscription, Task, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, img, px, relative,
-    size,
+    Half, HighlightStyle, IntoElement, MouseButton, RenderImage, SharedString, StyledText,
+    Subscription, Task, Window, WindowBackgroundAppearance, WindowBounds, WindowKind,
+    WindowOptions, div, img, px, relative, size,
 };
 use gpui_component::{
     ActiveTheme, IndexPath, Root, Selectable, Sizable, Size, h_flex,
@@ -24,6 +24,39 @@ use crate::plugins::PluginRegistry;
 
 const LAUNCHER_WIDTH: f32 = 720.0;
 const LAUNCHER_HEIGHT: f32 = 400.0;
+
+fn format_expression_for_display(expression: &str) -> String {
+    const SUPERSCRIPT_DIGITS: [char; 10] = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
+
+    let mut formatted = String::with_capacity(expression.len());
+    let mut characters = expression.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character != '^' {
+            formatted.push(character);
+            continue;
+        }
+
+        let mut exponent = String::new();
+        if characters.peek() == Some(&'-') {
+            characters.next();
+            exponent.push('⁻');
+        }
+        while let Some(digit) = characters.peek().and_then(|next| next.to_digit(10)) {
+            characters.next();
+            exponent.push(SUPERSCRIPT_DIGITS[digit as usize]);
+        }
+
+        if exponent.is_empty() || exponent == "⁻" {
+            formatted.push('^');
+            if exponent == "⁻" {
+                formatted.push('-');
+            }
+        } else {
+            formatted.push_str(&exponent);
+        }
+    }
+    formatted
+}
 
 /// Run a query through the delegate, then reset `ListState`'s own selection
 /// to the first row. `ListState::render_list_item` reads its *own*
@@ -1348,6 +1381,7 @@ impl ResultRow {
         calculation_detail: Option<CalculationDetail>,
         cx: &mut App,
     ) -> AnyElement {
+        let conversion_color = cx.theme().muted_foreground;
         let source_label = calculation_detail
             .as_ref()
             .map(|detail| SharedString::from(detail.source_label.clone()));
@@ -1396,12 +1430,46 @@ impl ResultRow {
                             .justify_center()
                             .px_2()
                             .when_some(subtitle, |col, expression| {
+                                let expression = format_expression_for_display(&expression);
+                                let mut search_start = 0;
+                                let highlights = expression
+                                    .split_whitespace()
+                                    .filter_map(|word| {
+                                        let offset =
+                                            expression[search_start..].find(word)? + search_start;
+                                        search_start = offset + word.len();
+                                        let connector = word
+                                            .trim_matches(|character: char| {
+                                                !character.is_alphabetic()
+                                            })
+                                            .to_ascii_lowercase();
+
+                                        matches!(
+                                            connector.as_str(),
+                                            "to" | "in"
+                                                | "as"
+                                                | "from"
+                                                | "into"
+                                                | "after"
+                                                | "before"
+                                        )
+                                        .then(|| {
+                                            (
+                                                offset..offset + word.len(),
+                                                HighlightStyle::color(conversion_color),
+                                            )
+                                        })
+                                    })
+                                    .collect::<Vec<_>>();
+
                                 col.child(
                                     div()
                                         .text_xl()
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .text_color(cx.theme().foreground)
-                                        .child(expression),
+                                        .child(
+                                            StyledText::new(expression).with_highlights(highlights),
+                                        ),
                                 )
                             })
                             .when_some(source_label, |col, label| col.child(zone_chip(label, cx))),
@@ -1415,16 +1483,16 @@ impl ResultRow {
                             .flex_col()
                             .items_center()
                             .justify_center()
-                            .child(div().w(px(1.0)).flex_1().bg(cx.theme().border))
+                            .child(div().w(px(1.0)).flex_1().bg(conversion_color))
                             .child(
                                 div()
                                     .px_1()
                                     .text_lg()
                                     .font_weight(FontWeight::BOLD)
-                                    .text_color(cx.theme().foreground)
+                                    .text_color(conversion_color)
                                     .child("→"),
                             )
-                            .child(div().w(px(1.0)).flex_1().bg(cx.theme().border)),
+                            .child(div().w(px(1.0)).flex_1().bg(conversion_color)),
                     )
                     .child(
                         div()
@@ -1447,5 +1515,17 @@ impl ResultRow {
                     ),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_expression_for_display;
+
+    #[test]
+    fn displays_numeric_exponents_as_superscripts() {
+        assert_eq!(format_expression_for_display("43560 ft^2"), "43560 ft²");
+        assert_eq!(format_expression_for_display("m^-12"), "m⁻¹²");
+        assert_eq!(format_expression_for_display("2^x"), "2^x");
     }
 }
