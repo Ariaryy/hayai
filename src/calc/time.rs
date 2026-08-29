@@ -99,9 +99,13 @@ fn timezone_tokens(input: &str) -> Option<(String, String, i32, i32)> {
     let first_end = input.find(char::is_whitespace)?;
     let first = &input[..first_end];
     let rest = input[first_end..].trim_start();
-    let (from_token, keyword_and_target) = if parse_clock(first).is_some() {
-        let timezone_end = rest.find(char::is_whitespace)?;
-        (&rest[..timezone_end], rest[timezone_end..].trim_start())
+    let (from_token, keyword_and_target) = if let Some((_, clock_rest)) = parse_leading_clock(input)
+    {
+        let timezone_end = clock_rest.find(char::is_whitespace)?;
+        (
+            &clock_rest[..timezone_end],
+            clock_rest[timezone_end..].trim_start(),
+        )
     } else {
         (first, rest)
     };
@@ -115,8 +119,7 @@ fn timezone_tokens(input: &str) -> Option<(String, String, i32, i32)> {
 }
 
 fn parse_timezone_difference(input: &str) -> Option<EvalResult> {
-    let first = input.split_whitespace().next()?;
-    if parse_clock(first).is_some() {
+    if parse_leading_clock(input).is_some() {
         return None;
     }
     let (from, to, from_offset, to_offset) = timezone_tokens(input)?;
@@ -199,6 +202,24 @@ fn parse_clock(token: &str) -> Option<(u32, u32)> {
     Some((hour, minute))
 }
 
+fn parse_leading_clock(input: &str) -> Option<((u32, u32), &str)> {
+    let input = input.trim_start();
+    let first_end = input.find(char::is_whitespace).unwrap_or(input.len());
+    let first = &input[..first_end];
+    let rest = input[first_end..].trim_start();
+    if let Some(clock) = parse_clock(first) {
+        return Some((clock, rest));
+    }
+
+    let meridiem_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    let meridiem = &rest[..meridiem_end];
+    if !matches!(meridiem.to_ascii_lowercase().as_str(), "am" | "pm") {
+        return None;
+    }
+    let clock = parse_clock(&format!("{first}{meridiem}"))?;
+    Some((clock, rest[meridiem_end..].trim_start()))
+}
+
 fn format_clock(total_minutes: i64) -> String {
     let m = total_minutes.rem_euclid(24 * 60);
     let hour24 = m / 60;
@@ -215,9 +236,7 @@ fn format_clock(total_minutes: i64) -> String {
 /// "1pm + 5", "9:30am - 2 hours", or "4pm + 30 min".
 fn parse_clock_arithmetic(input: &str) -> Option<EvalResult> {
     let input = input.trim();
-    let time_end = input.find(char::is_whitespace)?;
-    let (hour, minute) = parse_clock(&input[..time_end])?;
-    let rest = input[time_end..].trim_start();
+    let ((hour, minute), rest) = parse_leading_clock(input)?;
 
     let (sign, rest) = if let Some(r) = rest.strip_prefix('+') {
         (1.0, r)
@@ -247,9 +266,7 @@ fn parse_clock_arithmetic(input: &str) -> Option<EvalResult> {
 /// timezones using the fixed offset table above.
 fn parse_timezone_conversion(input: &str) -> Option<EvalResult> {
     let input = input.trim();
-    let time_end = input.find(char::is_whitespace)?;
-    let (hour, minute) = parse_clock(&input[..time_end])?;
-    let rest = input[time_end..].trim_start();
+    let ((hour, minute), rest) = parse_leading_clock(input)?;
 
     let tz_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
     if tz_end == 0 {
@@ -475,6 +492,10 @@ mod tests {
     fn timezone_conversion_same_day() {
         let result = convert("9am est to pst").unwrap();
         assert_eq!(result.value, "6:00 AM PST");
+
+        let spaced = convert("12 pm ist to cst").unwrap();
+        assert_eq!(spaced.value, "12:30 AM CST");
+        assert!(timezone_labels("12 pm ist to cst").is_some());
     }
 
     #[test]
@@ -552,6 +573,7 @@ mod tests {
     #[test]
     fn clock_arithmetic_accepts_duration_units() {
         assert_eq!(convert("4pm + 30 min").unwrap().value, "4:30 PM");
+        assert_eq!(convert("4 pm + 30 min").unwrap().value, "4:30 PM");
         assert_eq!(convert("9:15am - 45 mins").unwrap().value, "8:30 AM");
     }
 

@@ -94,15 +94,64 @@ fn format_expression_for_display(expression: &str) -> String {
         .iter()
         .enumerate()
         .map(|(index, token)| {
+            let bare_token = token.trim_end_matches([',', '.']);
+            let normalized_token = bare_token.to_ascii_lowercase();
+            let punctuation = &token[bare_token.len()..];
+            if matches!(normalized_token.as_str(), "am" | "pm") {
+                return format!("{}{punctuation}", normalized_token.to_ascii_uppercase());
+            }
+            if let Some((clock, meridiem)) = normalized_token
+                .strip_suffix("am")
+                .map(|clock| (clock, "AM"))
+                .or_else(|| {
+                    normalized_token
+                        .strip_suffix("pm")
+                        .map(|clock| (clock, "PM"))
+                })
+                && !clock.is_empty()
+                && clock
+                    .chars()
+                    .all(|character| character.is_ascii_digit() || character == ':')
+            {
+                return format!("{clock} {meridiem}{punctuation}");
+            }
+            if matches!(
+                normalized_token.as_str(),
+                "utc"
+                    | "gmt"
+                    | "bst"
+                    | "cet"
+                    | "cest"
+                    | "eet"
+                    | "msk"
+                    | "est"
+                    | "edt"
+                    | "cst"
+                    | "cdt"
+                    | "mst"
+                    | "mdt"
+                    | "pst"
+                    | "pdt"
+                    | "gst"
+                    | "ist"
+                    | "sgt"
+                    | "jst"
+                    | "kst"
+                    | "aest"
+                    | "aedt"
+                    | "nzst"
+            ) {
+                return format!("{}{punctuation}", normalized_token.to_ascii_uppercase());
+            }
+
             let Some(amount) = index
                 .checked_sub(1)
                 .and_then(|previous| tokens[previous].parse::<f64>().ok())
             else {
                 return (*token).to_string();
             };
-            let unit = token.trim_end_matches([',', '.']).to_ascii_lowercase();
             let singular = (amount.abs() - 1.0).abs() < f64::EPSILON;
-            let canonical = match unit.as_str() {
+            let canonical = match normalized_token.as_str() {
                 "year" | "years" | "yr" | "yrs" => Some(("year", "years")),
                 "month" | "months" | "mo" => Some(("month", "months")),
                 "week" | "weeks" | "wk" | "wks" => Some(("week", "weeks")),
@@ -115,7 +164,6 @@ fn format_expression_for_display(expression: &str) -> String {
             let Some((one, many)) = canonical else {
                 return (*token).to_string();
             };
-            let punctuation = &token[unit.len()..];
             format!("{}{punctuation}", if singular { one } else { many })
         })
         .collect::<Vec<_>>()
@@ -1661,5 +1709,18 @@ mod tests {
             format_result_for_display("9:05 PM IST"),
             "9:05\u{00a0}PM IST"
         );
+    }
+
+    #[test]
+    fn displays_timezone_abbreviations_in_uppercase() {
+        assert_eq!(
+            format_expression_for_display("12pm ist to cst"),
+            "12 PM IST to CST"
+        );
+        assert_eq!(
+            format_expression_for_display("12 pm ist to cst"),
+            "12 PM IST to CST"
+        );
+        assert_eq!(format_expression_for_display("utc to jst"), "UTC to JST");
     }
 }
