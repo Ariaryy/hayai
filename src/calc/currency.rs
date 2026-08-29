@@ -224,12 +224,25 @@ fn parse_tokens(input: &str) -> Option<(f64, String, String)> {
     if let Some((code, (amount, to))) = parse_symbol_form(input) {
         return Some((amount, code.to_string(), to));
     }
-    let (amount, from, to) = grammar::parse_conversion(input)?;
+    let (amount, from, to) = grammar::parse_conversion(input)
+        .or_else(|| parse_currency_pair(input).map(|(from, to)| (1.0, from, to)))?;
     Some((
         amount,
         normalize_code(&from)?.to_string(),
         normalize_code(&to)?.to_string(),
     ))
+}
+
+/// Parses a currency pair without an explicit amount ("USD to INR"). A
+/// missing amount means one source unit, matching how exchange rates are
+/// conventionally presented.
+fn parse_currency_pair(input: &str) -> Option<(String, String)> {
+    let input = input.trim();
+    let from_end = input.find(char::is_whitespace)?;
+    let from = input[..from_end].to_lowercase();
+    let rest = input[from_end..].trim_start();
+    let (to, matched) = grammar::parse_keyword_then_target(rest);
+    matched.then_some((from, to))
 }
 
 /// Parses the "$100 to eur" shape: a leading currency symbol attaches
@@ -486,6 +499,7 @@ mod tests {
     #[test]
     fn recognizes_code_form() {
         assert!(recognizes("100 usd to inr"));
+        assert!(recognizes("usd to inr"));
         assert!(recognizes("1 yen to inr"));
         assert!(recognizes("5 dollars to rupees"));
         assert!(!recognizes("100 km to inr"));
@@ -514,6 +528,11 @@ mod tests {
         let yen = convert("1 yen to inr", &cache).unwrap();
         assert_eq!(yen.expression, "1 JPY");
         assert_eq!(yen.value, "₹0.55");
+
+        let rate = convert("usd to inr", &cache).unwrap();
+        assert_eq!(rate.expression, "1 USD");
+        assert_eq!(rate.value, "₹83.00");
+        assert!(conversion_detail("usd to inr", &cache).is_some());
     }
 
     #[test]

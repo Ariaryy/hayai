@@ -1602,7 +1602,7 @@ impl ResultRow {
                     .bg(cx.theme().list_active)
                     .child(
                         h_flex()
-                            .items_center()
+                            .items_stretch()
                             .w_full()
                             .flex_1()
                             .child(
@@ -1666,7 +1666,7 @@ impl ResultRow {
                             .child(
                                 div()
                                     .w(px(center_width))
-                                    .h(px(70.0))
+                                    .self_stretch()
                                     .flex_none()
                                     .flex()
                                     .flex_col()
@@ -1685,7 +1685,7 @@ impl ResultRow {
                                         center.child(
                                             div()
                                                 .relative()
-                                                .top(px(-4.0))
+                                                .top(px(-7.0))
                                                 .text_xs()
                                                 .text_center()
                                                 .font_weight(FontWeight::MEDIUM)
