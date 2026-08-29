@@ -15,9 +15,9 @@ use super::grammar;
 use crate::native;
 
 /// Recognized timezone/city tokens (lowercase) mapped to a fixed UTC offset
-/// in minutes. Deliberately excludes ambiguous abbreviations shared by
-/// multiple regions (e.g. bare "cst" is both US Central and China
-/// Standard Time) in favor of unambiguous ones plus common city names.
+/// in minutes. Bare `cst` and `ist` retain their established North American
+/// Central and India meanings; result metadata always exposes that choice.
+/// China is available through `china`, `beijing`, `shanghai`, or `cst_asia`.
 const TIMEZONES: &[(&[&str], i32)] = &[
     (&["utc", "gmt", "london"], 0),
     (&["bst"], 60),
@@ -59,6 +59,64 @@ fn find_offset(token: &str) -> Option<i32> {
         .iter()
         .find(|(names, _)| names.contains(&token.as_str()))
         .map(|(_, offset)| *offset)
+}
+
+fn format_utc_offset(minutes: i32) -> String {
+    if minutes == 0 {
+        return "UTC".to_string();
+    }
+    let sign = if minutes < 0 { '-' } else { '+' };
+    let minutes = minutes.abs();
+    if minutes % 60 == 0 {
+        format!("UTC{sign}{}", minutes / 60)
+    } else {
+        format!("UTC{sign}{}:{:02}", minutes / 60, minutes % 60)
+    }
+}
+
+fn timezone_label(token: &str, offset: i32) -> String {
+    let lower = token.to_ascii_lowercase();
+    let identity = match lower.as_str() {
+        "cst" | "chicago" => "America/Chicago · CST",
+        "cdt" => "America/Chicago · CDT",
+        "cst_asia" | "beijing" | "shanghai" | "china" => "Asia/Shanghai · CST",
+        "ist" | "mumbai" | "delhi" | "bangalore" | "kolkata" | "india" => "Asia/Kolkata · IST",
+        "est" | "newyork" | "nyc" | "toronto" => "America/New_York · EST",
+        "edt" => "America/New_York · EDT",
+        "pst" | "losangeles" | "la" | "sf" | "sanfrancisco" | "seattle" => {
+            "America/Los_Angeles · PST"
+        }
+        "pdt" => "America/Los_Angeles · PDT",
+        "jst" | "tokyo" => "Asia/Tokyo · JST",
+        "utc" | "gmt" | "london" => "Etc/UTC",
+        _ => token,
+    };
+    format!("{identity} ({})", format_utc_offset(offset))
+}
+
+fn timezone_tokens(input: &str) -> Option<(String, String, i32, i32)> {
+    let input = input.trim();
+    let time_end = input.find(char::is_whitespace)?;
+    parse_clock(&input[..time_end])?;
+    let rest = input[time_end..].trim_start();
+    let tz_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    let from_token = &rest[..tz_end];
+    let from_offset = find_offset(from_token)?;
+    let rest = rest[tz_end..].trim_start();
+    let (to_token, matched) = grammar::parse_keyword_then_target(rest);
+    if !matched {
+        return None;
+    }
+    let to_offset = find_offset(&to_token)?;
+    Some((from_token.to_string(), to_token, from_offset, to_offset))
+}
+
+pub fn timezone_labels(input: &str) -> Option<(String, String)> {
+    let (from, to, from_offset, to_offset) = timezone_tokens(input)?;
+    Some((
+        timezone_label(&from, from_offset),
+        timezone_label(&to, to_offset),
+    ))
 }
 
 /// Parses a clock-time token like `"3pm"`, `"3:30pm"`, or `"15:30"` into
@@ -384,6 +442,16 @@ mod tests {
     fn timezone_conversion_same_day() {
         let result = convert("9am est to pst").unwrap();
         assert_eq!(result.value, "6:00 AM PST");
+    }
+
+    #[test]
+    fn ambiguous_abbreviations_get_explicit_region_labels() {
+        let labels = timezone_labels("12pm cst to ist").unwrap();
+        assert_eq!(labels.0, "America/Chicago · CST (UTC-6)");
+        assert_eq!(labels.1, "Asia/Kolkata · IST (UTC+5:30)");
+
+        let china = timezone_labels("12pm china to ist").unwrap();
+        assert_eq!(china.0, "Asia/Shanghai · CST (UTC+8)");
     }
 
     #[test]

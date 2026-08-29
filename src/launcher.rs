@@ -18,7 +18,7 @@ use gpui_component::{
 };
 
 use crate::apps::{Catalog, CatalogGlobal, IconRequest};
-use crate::commands::{CommandAction, CommandItem, IconSource};
+use crate::commands::{CalculationDetail, CommandAction, CommandItem, IconSource};
 use crate::native;
 use crate::plugins::PluginRegistry;
 
@@ -1120,6 +1120,7 @@ impl ListDelegate for ResultListDelegate {
             ix,
             item.title,
             item.subtitle,
+            item.calculation_detail,
             icon,
             selected,
             calculator,
@@ -1225,6 +1226,7 @@ struct ResultRow {
     base: ListItem,
     title: SharedString,
     subtitle: Option<SharedString>,
+    calculation_detail: Option<CalculationDetail>,
     icon: Option<Arc<RenderImage>>,
     selected: bool,
     /// Calculator results (see `ResultListDelegate::render_item`) render as
@@ -1238,6 +1240,7 @@ impl ResultRow {
         id: IndexPath,
         title: String,
         subtitle: Option<String>,
+        calculation_detail: Option<CalculationDetail>,
         icon: Option<Arc<RenderImage>>,
         selected: bool,
         calculator: bool,
@@ -1246,6 +1249,7 @@ impl ResultRow {
             base: ListItem::new(id).selected(selected),
             title: title.into(),
             subtitle: subtitle.map(Into::into),
+            calculation_detail,
             icon,
             selected,
             calculator,
@@ -1280,12 +1284,13 @@ impl gpui::RenderOnce for ResultRow {
             base,
             title,
             subtitle,
+            calculation_detail,
             icon,
             selected: _,
             calculator,
         } = self;
         let content: AnyElement = if calculator {
-            ResultRow::render_calculator(title, subtitle, cx)
+            ResultRow::render_calculator(title, subtitle, calculation_detail, cx)
         } else {
             ResultRow::render_plain(title, subtitle, icon, cx)
         };
@@ -1336,57 +1341,99 @@ impl ResultRow {
     fn render_calculator(
         title: SharedString,
         subtitle: Option<SharedString>,
+        calculation_detail: Option<CalculationDetail>,
         cx: &mut App,
     ) -> AnyElement {
-        h_flex()
-            .items_center()
-            .justify_between()
-            .gap_3()
+        let source_label = calculation_detail
+            .as_ref()
+            .map(|detail| SharedString::from(detail.source_label.clone()));
+        let target_label = calculation_detail.map(|detail| SharedString::from(detail.target_label));
+        let zone_chip = |label: SharedString, cx: &App| {
+            div()
+                .mt_1()
+                .px_2()
+                .py_0p5()
+                .rounded(cx.theme().radius)
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().tokens.muted)
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(label)
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_2()
             .w_full()
+            .child(
+                div()
+                    .px_2()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Calculator"),
+            )
             .child(
                 h_flex()
                     .items_center()
-                    .gap_2()
+                    .w_full()
+                    .min_h(px(74.0))
                     .child(
                         div()
-                            .w(px(22.0))
-                            .h(px(22.0))
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .items_center()
+                            .justify_center()
+                            .px_3()
+                            .when_some(subtitle, |col, expression| {
+                                col.child(
+                                    div()
+                                        .text_lg()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(cx.theme().foreground)
+                                        .child(expression),
+                                )
+                            })
+                            .when_some(source_label, |col, label| col.child(zone_chip(label, cx))),
+                    )
+                    .child(
+                        div()
+                            .w(px(52.0))
+                            .h(px(54.0))
                             .flex_none()
                             .flex()
                             .items_center()
                             .justify_center()
-                            .rounded(cx.theme().radius)
-                            .bg(cx.theme().accent)
+                            .border_l_1()
+                            .border_r_1()
+                            .border_color(cx.theme().border)
                             .text_xs()
+                            .font_weight(FontWeight::SEMIBOLD)
                             .text_color(cx.theme().muted_foreground)
-                            .child("="),
+                            .child("TO"),
                     )
                     .child(
                         div()
+                            .flex_1()
+                            .min_w_0()
                             .flex()
                             .flex_col()
+                            .items_center()
+                            .justify_center()
+                            .px_3()
                             .child(
                                 div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("Calculator"),
+                                    .text_lg()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(cx.theme().foreground)
+                                    .child(title),
                             )
-                            .when_some(subtitle, |col, subtitle| {
-                                col.child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(subtitle),
-                                )
-                            }),
+                            .when_some(target_label, |col, label| col.child(zone_chip(label, cx))),
                     ),
-            )
-            .child(
-                div()
-                    .text_lg()
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(cx.theme().foreground)
-                    .child(title),
             )
             .into_any_element()
     }

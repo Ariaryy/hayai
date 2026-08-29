@@ -18,7 +18,9 @@ mod grammar;
 mod time;
 mod units;
 
-use crate::commands::{BackgroundSearch, CommandAction, CommandItem, CommandProvider, IconSource};
+use crate::commands::{
+    BackgroundSearch, CalculationDetail, CommandAction, CommandItem, CommandProvider, IconSource,
+};
 
 pub struct EvalResult {
     /// The human-readable question, shown small (e.g. "10 km", "100 USD").
@@ -96,6 +98,12 @@ fn result_item(query: &str, result: EvalResult) -> CommandItem {
         id: format!("calc:{query}"),
         title: result.value.clone(),
         subtitle: Some(result.expression),
+        calculation_detail: time::timezone_labels(query).map(|(source_label, target_label)| {
+            CalculationDetail {
+                source_label,
+                target_label,
+            }
+        }),
         icon: IconSource::None,
         action: CommandAction::CopyToClipboard(result.value),
     }
@@ -155,6 +163,7 @@ impl CommandProvider for CalcProvider {
                     id: "calc:fx-error".into(),
                     title: "Couldn't fetch exchange rates".into(),
                     subtitle: Some("Check your internet connection and try again".into()),
+                    calculation_detail: None,
                     icon: IconSource::None,
                     action: CommandAction::ShowText(String::new()),
                 }],

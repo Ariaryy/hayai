@@ -143,6 +143,7 @@ fn path_to_item(path: &Path) -> CommandItem {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.to_string_lossy().into_owned()),
         subtitle: path.parent().map(|p| p.to_string_lossy().into_owned()),
+        calculation_detail: None,
         icon: IconSource::Path(path.to_path_buf()),
         action: CommandAction::OpenFile(path.to_path_buf()),
     }
@@ -285,6 +286,7 @@ impl CommandProvider for FileSearchProvider {
                     id: "files:not-running".into(),
                     title: "Enable file search".into(),
                     subtitle: Some("Install and start the elevated Scry Search daemon".into()),
+                    calculation_detail: None,
                     icon: IconSource::None,
                     action: CommandAction::InstallFileSearch,
                 }],
@@ -327,6 +329,7 @@ impl CommandProvider for FileSearchProvider {
                                 id: full_path.to_string_lossy().into_owned(),
                                 title: hit.name,
                                 subtitle: Some(subtitle),
+                                calculation_detail: None,
                                 // TODO: per-extension icon dedup — each hit currently
                                 // grows the catalog's path-keyed icon cache by one
                                 // entry; fine at 64 results/keystroke, revisit if
