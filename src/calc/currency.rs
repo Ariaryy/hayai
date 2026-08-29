@@ -346,9 +346,10 @@ fn symbol_prefix(code: &str) -> Option<&'static str> {
 }
 
 fn display_result(code: &str, amount: f64) -> String {
+    let upper_code = code.to_ascii_uppercase();
     match symbol_prefix(code) {
-        Some(symbol) => format!("{symbol}{}", format_currency(amount)),
-        None => format_currency(amount),
+        Some(symbol) => format!("{symbol}{} {upper_code}", format_currency(amount)),
+        None => format!("{} {upper_code}", format_currency(amount)),
     }
 }
 
@@ -523,7 +524,7 @@ mod tests {
     fn converts_with_cached_rates() {
         let cache = cache_with_rates(&[("usd", 1.0), ("inr", 83.0), ("jpy", 150.0)]);
         let result = convert("100 usd to inr", &cache).unwrap();
-        assert_eq!(result.value, "₹8,300.00");
+        assert_eq!(result.value, "₹8,300.00 INR");
         assert_eq!(result.expression, "$100.00 USD");
         assert_eq!(
             conversion_detail("100 usd to inr", &cache),
@@ -536,11 +537,11 @@ mod tests {
 
         let yen = convert("1 yen to inr", &cache).unwrap();
         assert_eq!(yen.expression, "¥1.00 JPY");
-        assert_eq!(yen.value, "₹0.55");
+        assert_eq!(yen.value, "₹0.55 INR");
 
         let rate = convert("usd to inr", &cache).unwrap();
         assert_eq!(rate.expression, "$1.00 USD");
-        assert_eq!(rate.value, "₹83.00");
+        assert_eq!(rate.value, "₹83.00 INR");
         assert!(conversion_detail("usd to inr", &cache).is_some());
     }
 
@@ -548,23 +549,23 @@ mod tests {
     fn converts_symbol_form() {
         let cache = cache_with_rates(&[("usd", 1.0), ("eur", 0.9)]);
         let result = convert("$100 to eur", &cache).unwrap();
-        assert_eq!(result.value, "€90.00");
+        assert_eq!(result.value, "€90.00 EUR");
     }
 
     #[test]
     fn converts_k_suffix_amount() {
         let cache = cache_with_rates(&[("usd", 1.0), ("inr", 83.0)]);
         let result = convert("5k usd to inr", &cache).unwrap();
-        assert_eq!(result.value, "₹415,000.00");
+        assert_eq!(result.value, "₹415,000.00 INR");
         let result = convert("$5k to inr", &cache).unwrap();
-        assert_eq!(result.value, "₹415,000.00");
+        assert_eq!(result.value, "₹415,000.00 INR");
     }
 
     #[test]
     fn converts_bare_amount_to_regional_default() {
         let cache = cache_with_rates_and_default(&[("usd", 1.0), ("inr", 83.0)], Some("inr"));
         let result = convert("$100", &cache).unwrap();
-        assert_eq!(result.value, "₹8,300.00");
+        assert_eq!(result.value, "₹8,300.00 INR");
     }
 
     #[test]
