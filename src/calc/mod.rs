@@ -10,9 +10,9 @@
 //! only actually uses it when a fetch is genuinely needed, so arithmetic
 //! and units stay instant.
 
-mod arithmetic;
 mod bases;
 mod currency;
+mod engine;
 mod format;
 mod grammar;
 mod time;
@@ -46,23 +46,23 @@ impl Default for CalcProvider {
 }
 
 fn evaluate(input: &str, fx: &currency::FxCache) -> Option<EvalResult> {
-    if let Some(result) = units::convert(input) {
-        return Some(result);
-    }
+    // These adapters provide OS-backed rates and wall-clock data, plus Hayai's
+    // established display conventions for common conversions. The general
+    // expression engine handles arithmetic and compositions of those values.
     if let Some(result) = currency::convert(input, fx) {
-        return Some(result);
-    }
-    if let Some(result) = bases::convert(input) {
         return Some(result);
     }
     if let Some(result) = time::convert(input) {
         return Some(result);
     }
-    if let Some(value) = arithmetic::eval(input) {
-        return Some(EvalResult {
-            expression: input.trim().to_string(),
-            value: format::format_number(value),
-        });
+    if let Some(result) = units::convert(input) {
+        return Some(result);
+    }
+    if let Some(result) = bases::convert(input) {
+        return Some(result);
+    }
+    if let Some(result) = engine::evaluate(input, Some(fx)) {
+        return Some(result);
     }
     None
 }
@@ -71,8 +71,21 @@ fn evaluate(input: &str, fx: &currency::FxCache) -> Option<EvalResult> {
 /// non-candidates instantly (this runs on every keystroke across every
 /// provider), then each evaluator's own full parse decides for real.
 fn is_candidate(input: &str) -> bool {
+    let lower = input.to_ascii_lowercase();
     input.chars().next().is_some_and(|c| {
-        c.is_ascii_digit() || c == '(' || c == '.' || c == '-' || currency::is_symbol(c)
+        c.is_ascii_digit()
+            || c == '('
+            || c == '.'
+            || c == '-'
+            || c == '@'
+            || currency::is_symbol(c)
+            || matches!(
+                lower.as_str(),
+                "pi" | "e" | "tau" | "today" | "tomorrow" | "yesterday"
+            )
+            || lower
+                .split_once('(')
+                .is_some_and(|(name, _)| name.chars().all(|c| c.is_ascii_alphabetic()))
     })
 }
 
@@ -107,11 +120,11 @@ impl CommandProvider for CalcProvider {
         if trimmed.is_empty() || !is_candidate(trimmed) {
             return false;
         }
-        arithmetic::eval(trimmed).is_some()
-            || units::convert(trimmed).is_some()
+        units::convert(trimmed).is_some()
             || currency::recognizes_any(trimmed, &self.fx)
             || bases::convert(trimmed).is_some()
             || time::convert(trimmed).is_some()
+            || engine::evaluate(trimmed, Some(&self.fx)).is_some()
     }
 
     fn search(&self, query: &str) -> Vec<CommandItem> {
@@ -156,7 +169,7 @@ mod tests {
     fn auto_claim_arithmetic() {
         let provider = CalcProvider::new();
         assert!(provider.auto_claim("2+2*3"));
-        assert!(!provider.auto_claim("7"));
+        assert!(provider.auto_claim("7"));
         assert!(!provider.auto_claim("1password"));
     }
 
@@ -198,8 +211,8 @@ mod tests {
     }
 
     #[test]
-    fn search_declines_bare_number() {
+    fn search_accepts_bare_number() {
         let provider = CalcProvider::new();
-        assert!(provider.search("7").is_empty());
+        assert_eq!(provider.search("7")[0].title, "7");
     }
 }

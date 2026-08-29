@@ -112,13 +112,14 @@ impl FxCache {
         }
     }
 
-    fn rate_for(&self, code: &str) -> Option<f64> {
+    pub(super) fn rate_for(&self, code: &str) -> Option<f64> {
+        let code = code.to_ascii_lowercase();
         self.inner
             .read()
             .unwrap()
             .rates
             .as_ref()?
-            .get(code)
+            .get(&code)
             .copied()
     }
 
