@@ -1328,7 +1328,14 @@ impl gpui::RenderOnce for ResultRow {
             ResultRow::render_plain(title, subtitle, icon, cx)
         };
         if calculator {
-            base.selected(false).px_0().py_1().child(content)
+            // Calculator results are presentation cards rather than hoverable list rows.
+            // Disabling the wrapper suppresses ListItem's built-in hover fill; the card
+            // supplies all of its own text colors, so the disabled text style cannot leak in.
+            base.selected(false)
+                .disabled(true)
+                .px_0()
+                .py_1()
+                .child(content)
         } else {
             base.py_1p5().rounded(cx.theme().radius).child(content)
         }
@@ -1382,6 +1389,7 @@ impl ResultRow {
         cx: &mut App,
     ) -> AnyElement {
         let conversion_color = cx.theme().muted_foreground;
+        let title = SharedString::from(format_expression_for_display(&title));
         let source_label = calculation_detail
             .as_ref()
             .map(|detail| SharedString::from(detail.source_label.clone()));
