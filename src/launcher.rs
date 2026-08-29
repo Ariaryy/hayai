@@ -122,6 +122,29 @@ fn format_expression_for_display(expression: &str) -> String {
         .join(" ")
 }
 
+fn format_result_for_display(result: &str) -> String {
+    let mut formatted = format_expression_for_display(result);
+    let mut non_breaking_spaces = [" AM", " PM"]
+        .into_iter()
+        .flat_map(|suffix| formatted.match_indices(suffix).map(|(index, _)| index))
+        .filter(|index| {
+            formatted[..*index]
+                .split_whitespace()
+                .next_back()
+                .and_then(|clock| clock.split_once(':'))
+                .is_some_and(|(hour, minute)| {
+                    hour.parse::<u8>().is_ok() && minute.parse::<u8>().is_ok()
+                })
+        })
+        .collect::<Vec<_>>();
+    non_breaking_spaces.sort_unstable_by(|left, right| right.cmp(left));
+
+    for index in non_breaking_spaces {
+        formatted.replace_range(index..index + 1, "\u{00a0}");
+    }
+    formatted
+}
+
 /// Run a query through the delegate, then reset `ListState`'s own selection
 /// to the first row. `ListState::render_list_item` reads its *own*
 /// `selected_index` (not the delegate's copy) to decide row highlighting, so
@@ -1453,7 +1476,7 @@ impl ResultRow {
         cx: &mut App,
     ) -> AnyElement {
         let conversion_color = cx.theme().muted_foreground;
-        let title = SharedString::from(format_expression_for_display(&title));
+        let title = SharedString::from(format_result_for_display(&title));
         let source_label = calculation_detail
             .as_ref()
             .map(|detail| SharedString::from(detail.source_label.clone()));
@@ -1592,7 +1615,7 @@ impl ResultRow {
 
 #[cfg(test)]
 mod tests {
-    use super::format_expression_for_display;
+    use super::{format_expression_for_display, format_result_for_display};
 
     #[test]
     fn displays_numeric_exponents_as_superscripts() {
@@ -1623,6 +1646,18 @@ mod tests {
         assert_eq!(
             format_expression_for_display("in 2 wk 1 d"),
             "in 2 weeks 1 day"
+        );
+    }
+
+    #[test]
+    fn keeps_clock_and_meridiem_on_the_same_line() {
+        assert_eq!(
+            format_result_for_display("Sunday, August 30, 2026, 2:35 AM"),
+            "Sunday, August 30, 2026, 2:35\u{00a0}AM"
+        );
+        assert_eq!(
+            format_result_for_display("9:05 PM IST"),
+            "9:05\u{00a0}PM IST"
         );
     }
 }
