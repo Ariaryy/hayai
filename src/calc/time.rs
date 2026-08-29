@@ -122,7 +122,7 @@ fn format_clock(total_minutes: i64) -> String {
     format!("{h12}:{minute:02} {suffix}")
 }
 
-/// "1pm + 5" / "9:30am - 2" — offsets a clock time by a number of hours.
+/// "1pm + 5", "9:30am - 2 hours", or "4pm + 30 min".
 fn parse_clock_arithmetic(input: &str) -> Option<EvalResult> {
     let input = input.trim();
     let time_end = input.find(char::is_whitespace)?;
@@ -134,17 +134,21 @@ fn parse_clock_arithmetic(input: &str) -> Option<EvalResult> {
     } else {
         (-1.0, rest.strip_prefix('-')?)
     };
-    let hours: f64 = rest.trim().parse().ok()?;
+    let rest = rest.trim();
+    let offset_minutes = if let Ok(hours) = rest.parse::<f64>() {
+        hours * 60.0
+    } else {
+        let duration = parse_duration(rest)?;
+        if duration.months != 0 {
+            return None;
+        }
+        duration.seconds / 60.0
+    };
 
     let source = hour as i64 * 60 + minute as i64;
-    let target = source + (sign * hours * 60.0).round() as i64;
+    let target = source + (sign * offset_minutes).round() as i64;
     Some(EvalResult {
-        expression: format!(
-            "{} {}{}h",
-            format_clock(source),
-            if sign > 0.0 { "+" } else { "-" },
-            hours
-        ),
+        expression: input.trim().to_string(),
         value: format_clock(target),
     })
 }
@@ -247,37 +251,104 @@ fn format_date(days_since_epoch: i64) -> String {
     format!("{weekday}, {month} {d}, {y}")
 }
 
-fn unit_days(token: &str) -> Option<f64> {
-    match token {
-        "day" | "days" => Some(1.0),
-        "week" | "weeks" => Some(7.0),
-        _ => None,
-    }
+#[derive(Default)]
+struct DurationParts {
+    months: i64,
+    seconds: f64,
 }
 
-/// "5 days from now" / "2 weeks ago" — relative date arithmetic anchored to
-/// the current local date (`native::local_now`).
+fn parse_duration(input: &str) -> Option<DurationParts> {
+    let mut parts = DurationParts::default();
+    let mut tokens = input.split_whitespace();
+    let mut found = false;
+    while let Some(amount) = tokens.next() {
+        let amount: f64 = amount.parse().ok()?;
+        let unit = tokens.next()?.trim_matches(|c: char| c == ',' || c == '.');
+        match unit {
+            "year" | "years" | "yr" | "yrs" => parts.months += (amount * 12.0).round() as i64,
+            "month" | "months" | "mo" => parts.months += amount.round() as i64,
+            "week" | "weeks" | "wk" | "wks" => parts.seconds += amount * 7.0 * 86_400.0,
+            "day" | "days" | "d" => parts.seconds += amount * 86_400.0,
+            "hour" | "hours" | "hr" | "hrs" | "h" => parts.seconds += amount * 3_600.0,
+            "minute" | "minutes" | "min" | "mins" => parts.seconds += amount * 60.0,
+            "second" | "seconds" | "sec" | "secs" | "s" => parts.seconds += amount,
+            _ => return None,
+        }
+        found = true;
+    }
+    found.then_some(parts)
+}
+
+fn days_in_month(year: i64, month: u32) -> u32 {
+    let next = if month == 12 {
+        days_from_civil(year + 1, 1, 1)
+    } else {
+        days_from_civil(year, month + 1, 1)
+    };
+    (next - days_from_civil(year, month, 1)) as u32
+}
+
+fn add_months(year: i64, month: u32, day: u32, months: i64) -> (i64, u32, u32) {
+    let month_index = year * 12 + i64::from(month) - 1 + months;
+    let target_year = month_index.div_euclid(12);
+    let target_month = month_index.rem_euclid(12) as u32 + 1;
+    let target_day = day.min(days_in_month(target_year, target_month));
+    (target_year, target_month, target_day)
+}
+
+/// Natural offsets anchored to the current local wall clock.
 fn parse_date_arithmetic(input: &str) -> Option<EvalResult> {
     let trimmed = input.trim();
     let lower = trimmed.to_lowercase();
-    let mut parts = lower.split_whitespace();
-
-    let count: f64 = parts.next()?.parse().ok()?;
-    let mult = unit_days(parts.next()?)?;
-    let remainder: Vec<&str> = parts.collect();
-    let signed_days = match remainder.as_slice() {
-        ["from", "now"] => count * mult,
-        ["ago"] => -(count * mult),
-        _ => return None,
+    let (relative, at_time) = match lower.rsplit_once(" at ") {
+        Some((relative, clock)) => (relative, Some(parse_clock(clock.trim())?)),
+        None => (lower.as_str(), None),
     };
+    let (duration_text, sign) = if let Some(value) = relative.strip_suffix(" from now") {
+        (value, 1_i64)
+    } else if let Some(value) = relative.strip_suffix(" after now") {
+        (value, 1)
+    } else if let Some(value) = relative.strip_suffix(" before now") {
+        (value, -1)
+    } else if let Some(value) = relative.strip_suffix(" ago") {
+        (value, -1)
+    } else if let Some(value) = relative.strip_suffix(" later") {
+        (value, 1)
+    } else if let Some(value) = relative.strip_prefix("in ") {
+        (value, 1)
+    } else {
+        return None;
+    };
+    let mut duration = parse_duration(duration_text.trim())?;
+    duration.months *= sign;
+    duration.seconds *= sign as f64;
 
-    let (year, month, day, _, _) = native::local_now();
-    let today = days_from_civil(year as i64, month, day);
-    let target = today + signed_days.round() as i64;
+    let (year, month, day, hour, minute) = native::local_now();
+    let (year, month, day) = add_months(year as i64, month, day, duration.months);
+    let start = days_from_civil(year, month, day) * 86_400
+        + i64::from(hour) * 3_600
+        + i64::from(minute) * 60;
+    let mut target = start + duration.seconds.round() as i64;
+    if let Some((hour, minute)) = at_time {
+        target =
+            target.div_euclid(86_400) * 86_400 + i64::from(hour) * 3_600 + i64::from(minute) * 60;
+    }
+    let target_days = target.div_euclid(86_400);
+    let minute_of_day = target.rem_euclid(86_400) / 60;
+    let includes_time = at_time.is_some() || duration.seconds.rem_euclid(86_400.0) != 0.0;
+    let value = if includes_time {
+        format!(
+            "{}, {}",
+            format_date(target_days),
+            format_clock(minute_of_day)
+        )
+    } else {
+        format_date(target_days)
+    };
 
     Some(EvalResult {
         expression: trimmed.to_string(),
-        value: format_date(target),
+        value,
     })
 }
 
@@ -337,6 +408,39 @@ mod tests {
         let expected = format_date(today - 14);
         let result = convert("2 weeks ago").unwrap();
         assert_eq!(result.value, expected);
+    }
+
+    #[test]
+    fn minutes_from_now_uses_current_wall_clock() {
+        let (year, month, day, hour, minute) = native::local_now();
+        let start = days_from_civil(year as i64, month, day) * 86_400
+            + i64::from(hour) * 3_600
+            + i64::from(minute) * 60;
+        let target = start + 15 * 60;
+        let expected = format!(
+            "{}, {}",
+            format_date(target.div_euclid(86_400)),
+            format_clock(target.rem_euclid(86_400) / 60)
+        );
+        assert_eq!(convert("15 mins from now").unwrap().value, expected);
+    }
+
+    #[test]
+    fn supports_multi_part_relative_offsets() {
+        assert!(convert("in 2 hours 30 minutes").is_some());
+        assert!(convert("1 year 3 months ago").is_some());
+        assert!(
+            convert("2 months ago at 5pm")
+                .unwrap()
+                .value
+                .ends_with("5:00 PM")
+        );
+    }
+
+    #[test]
+    fn clock_arithmetic_accepts_duration_units() {
+        assert_eq!(convert("4pm + 30 min").unwrap().value, "4:30 PM");
+        assert_eq!(convert("9:15am - 45 mins").unwrap().value, "8:30 AM");
     }
 
     #[test]

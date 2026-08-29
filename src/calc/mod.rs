@@ -83,6 +83,8 @@ fn is_candidate(input: &str) -> bool {
                 lower.as_str(),
                 "pi" | "e" | "tau" | "today" | "tomorrow" | "yesterday"
             )
+            || lower.starts_with("in ")
+            || lower.starts_with("now ")
             || lower
                 .split_once('(')
                 .is_some_and(|(name, _)| name.chars().all(|c| c.is_ascii_alphabetic()))
@@ -192,6 +194,14 @@ mod tests {
         assert!(provider.auto_claim("0x1A to decimal"));
         assert!(provider.auto_claim("26 to hex"));
         assert!(!provider.auto_claim("26 to miles")); // "miles" isn't a recognized base name
+    }
+
+    #[test]
+    fn auto_claim_relative_time() {
+        let provider = CalcProvider::new();
+        assert!(provider.auto_claim("15 mins from now"));
+        assert!(provider.auto_claim("in 2 hours 30 minutes"));
+        assert_eq!(provider.search("4pm + 30 min")[0].title, "4:30 PM");
     }
 
     #[test]
