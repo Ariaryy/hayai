@@ -94,7 +94,8 @@ fn format_utc_offset(minutes: i32) -> String {
 
 fn timezone_label(token: &str, offset: i32) -> String {
     if token == SYSTEM_TIMEZONE {
-        return format!("System timezone ({})", format_utc_offset(offset));
+        let name = native::system_timezone_name().unwrap_or_else(|| "Local time".to_string());
+        return format!("{name} ({})", format_utc_offset(offset));
     }
     let lower = token.to_ascii_lowercase();
     let identity = match lower.as_str() {
@@ -517,7 +518,7 @@ mod tests {
         let local = convert("12pm utc").unwrap();
         assert_eq!(local.expression, "12:00 PM UTC");
         let labels = timezone_labels("12pm utc").unwrap();
-        assert!(labels.1.starts_with("System timezone (GMT"));
+        assert!(labels.1.contains("(GMT"));
     }
 
     #[test]

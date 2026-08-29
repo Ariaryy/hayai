@@ -1331,6 +1331,27 @@ pub fn system_currency_code() -> Option<String> {
     }
 }
 
+/// Returns Windows' canonical name for the configured local timezone (for
+/// example, "India Standard Time") without loading a timezone database.
+pub fn system_timezone_name() -> Option<String> {
+    use windows_sys::Win32::System::Time::{
+        DYNAMIC_TIME_ZONE_INFORMATION, GetDynamicTimeZoneInformation,
+    };
+
+    let mut info = DYNAMIC_TIME_ZONE_INFORMATION::default();
+    let status = unsafe { GetDynamicTimeZoneInformation(&mut info) };
+    if status == u32::MAX {
+        return None;
+    }
+    let name = if info.TimeZoneKeyName[0] != 0 {
+        &info.TimeZoneKeyName[..]
+    } else {
+        &info.StandardName[..]
+    };
+    let len = name.iter().position(|character| *character == 0)?;
+    String::from_utf16(&name[..len]).ok()
+}
+
 /// The user's current local wall-clock time (year, month, day, hour,
 /// minute) — the "now" anchor for date/time arithmetic like "5 days from
 /// now" or "3pm + 5". Reads OS local time directly rather than computing a

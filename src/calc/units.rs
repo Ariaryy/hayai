@@ -182,6 +182,11 @@ const SPEED: &[Unit] = &[
         factor: 1.0,
     },
     Unit {
+        names: &["km/s", "kilometer/second", "kilometers/second"],
+        label: "Kilometer per Second",
+        factor: 1000.0,
+    },
+    Unit {
         names: &["c", "lightspeed", "speedoflight"],
         label: "Speed of Light",
         factor: 299_792_458.0,
@@ -271,14 +276,15 @@ fn parse_conversion(input: &str) -> Option<(f64, String, String)> {
         let (to, matched) = grammar::parse_keyword_then_target(rest);
         matched.then_some((1.0, from, to))
     })?;
-    let compact_slashes = |token: String| {
-        if token.contains('/') {
-            token.split_whitespace().collect()
-        } else {
-            token
-        }
-    };
-    Some((amount, compact_slashes(from), compact_slashes(to)))
+    Some((amount, compact_unit_token(&from), compact_unit_token(&to)))
+}
+
+fn compact_unit_token(token: &str) -> String {
+    if token.contains('/') {
+        token.split_whitespace().collect()
+    } else {
+        token.to_string()
+    }
 }
 
 fn format_unit_number(value: f64) -> String {
@@ -290,23 +296,41 @@ fn format_unit_number(value: f64) -> String {
     format_number(value)
 }
 
-pub(super) fn conversion_detail(input: &str) -> Option<(String, String)> {
-    let (_, from, to) = parse_conversion(input)?;
-    if let (Some(from_temp), Some(to_temp)) = (find_temp(&from), find_temp(&to)) {
+fn labels_for_pair(from: &str, to: &str) -> Option<(String, String)> {
+    if let (Some(from_temp), Some(to_temp)) = (find_temp(from), find_temp(to)) {
         return Some((
             temp_label(from_temp).to_string(),
             temp_label(to_temp).to_string(),
         ));
     }
 
-    let (from_dimension, _) = find_unit(&from)?;
-    let (to_dimension, _) = find_unit(&to)?;
+    let (from_dimension, _) = find_unit(from)?;
+    let (to_dimension, _) = find_unit(to)?;
     (from_dimension == to_dimension).then(|| {
         (
-            unit_label(&from).unwrap().to_string(),
-            unit_label(&to).unwrap().to_string(),
+            unit_label(from).unwrap().to_string(),
+            unit_label(to).unwrap().to_string(),
         )
     })
+}
+
+pub(super) fn conversion_detail(input: &str, result: &EvalResult) -> Option<(String, String)> {
+    if let Some((_, from, to)) = parse_conversion(input) {
+        return labels_for_pair(&from, &to);
+    }
+
+    // The general expression engine also performs useful implicit SI
+    // conversions (for example, "1 c" -> "299792458 m/s"). Recover the
+    // source and emitted target units so those results use the same card.
+    let input = input.trim();
+    let (_, consumed) = grammar::parse_amount(input)?;
+    let from = input[consumed..].trim().to_ascii_lowercase();
+    if from.is_empty() || from.contains(char::is_whitespace) {
+        return None;
+    }
+    let target_start = result.value.find(char::is_whitespace)?;
+    let to = compact_unit_token(&result.value[target_start..].trim().to_ascii_lowercase());
+    labels_for_pair(&from, &to)
 }
 
 /// Attempts a unit conversion. `None` means either the input isn't shaped
@@ -345,7 +369,7 @@ mod tests {
         let r = convert("10 km in miles").unwrap();
         assert!(r.value.starts_with("6.2"));
         assert_eq!(
-            conversion_detail("1 inch to cm"),
+            conversion_detail("1 inch to cm", &r),
             Some(("Inch".into(), "Centimeter".into()))
         );
         let implied = convert("inch to cm").unwrap();
@@ -380,15 +404,22 @@ mod tests {
         assert_eq!(picometers.expression, "1 pm");
         assert_eq!(picometers.value, "1 × 10^-12 m");
         assert_eq!(
-            conversion_detail("1 pm to m"),
+            conversion_detail("1 pm to m", &picometers),
             Some(("Picometer".into(), "Meter".into()))
         );
 
         let light = convert("1 c to m / s").unwrap();
         assert_eq!(light.value, "299,792,458 m/s");
         assert_eq!(
-            conversion_detail("1 c to m / s"),
+            conversion_detail("1 c to m / s", &light),
             Some(("Speed of Light".into(), "Meter per Second".into()))
+        );
+
+        let kilometers = convert("1 km/s to m/s").unwrap();
+        assert_eq!(kilometers.value, "1,000 m/s");
+        assert_eq!(
+            conversion_detail("1 km/s to m/s", &kilometers),
+            Some(("Kilometer per Second".into(), "Meter per Second".into()))
         );
     }
 

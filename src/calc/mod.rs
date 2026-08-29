@@ -100,7 +100,7 @@ fn is_candidate(input: &str) -> bool {
 }
 
 fn result_item(query: &str, result: EvalResult, fx: &currency::FxCache) -> CommandItem {
-    let calculation_detail = units::conversion_detail(query)
+    let calculation_detail = units::conversion_detail(query, &result)
         .map(|(source_label, target_label)| CalculationDetail::Units {
             source_label,
             target_label,
@@ -223,6 +223,14 @@ mod tests {
             picometers[0].calculation_detail,
             Some(CalculationDetail::Units { .. })
         ));
+        let light = provider.search("1 c");
+        assert!(
+            matches!(
+                light[0].calculation_detail,
+                Some(CalculationDetail::Units { .. })
+            ),
+            "unexpected light-speed result: {light:?}"
+        );
         assert!(!provider.auto_claim("10 km in kg"));
     }
 
