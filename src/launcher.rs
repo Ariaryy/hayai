@@ -12,7 +12,7 @@ use gpui::{
     size,
 };
 use gpui_component::{
-    ActiveTheme, Icon, IconName, IndexPath, Root, Selectable, Sizable, Size, h_flex,
+    ActiveTheme, IndexPath, Root, Selectable, Sizable, Size, h_flex,
     input::{Escape, Input, InputEvent, InputState, MoveDown, MoveUp},
     list::{List, ListDelegate, ListItem, ListState},
 };
@@ -1295,7 +1295,7 @@ impl gpui::RenderOnce for ResultRow {
             ResultRow::render_plain(title, subtitle, icon, cx)
         };
         if calculator {
-            base.selected(false).py_1().child(content)
+            base.selected(false).px_0().py_1().child(content)
         } else {
             base.py_1p5().rounded(cx.theme().radius).child(content)
         }
@@ -1369,13 +1369,13 @@ impl ResultRow {
         div()
             .flex()
             .flex_col()
-            .gap_2()
+            .gap_1()
             .w_full()
             .child(
                 div()
-                    .px_2()
-                    .text_sm()
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .px_1()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
                     .text_color(cx.theme().muted_foreground)
                     .child("Calculator"),
             )
@@ -1383,7 +1383,7 @@ impl ResultRow {
                 h_flex()
                     .items_center()
                     .w_full()
-                    .min_h(px(108.0))
+                    .min_h(px(96.0))
                     .rounded(cx.theme().radius)
                     .bg(cx.theme().list_active)
                     .child(
@@ -1394,7 +1394,7 @@ impl ResultRow {
                             .flex_col()
                             .items_center()
                             .justify_center()
-                            .px_4()
+                            .px_2()
                             .when_some(subtitle, |col, expression| {
                                 col.child(
                                     div()
@@ -1408,8 +1408,8 @@ impl ResultRow {
                     )
                     .child(
                         div()
-                            .w(px(52.0))
-                            .h(px(82.0))
+                            .w(px(44.0))
+                            .h(px(70.0))
                             .flex_none()
                             .flex()
                             .flex_col()
@@ -1417,9 +1417,12 @@ impl ResultRow {
                             .justify_center()
                             .child(div().w(px(1.0)).flex_1().bg(cx.theme().border))
                             .child(
-                                Icon::new(IconName::ArrowRight)
-                                    .size_4()
-                                    .text_color(cx.theme().muted_foreground),
+                                div()
+                                    .px_1()
+                                    .text_lg()
+                                    .font_weight(FontWeight::BOLD)
+                                    .text_color(cx.theme().foreground)
+                                    .child("→"),
                             )
                             .child(div().w(px(1.0)).flex_1().bg(cx.theme().border)),
                     )
@@ -1431,10 +1434,11 @@ impl ResultRow {
                             .flex_col()
                             .items_center()
                             .justify_center()
-                            .px_4()
+                            .px_2()
                             .child(
                                 div()
                                     .text_xl()
+                                    .text_center()
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(cx.theme().foreground)
                                     .child(title),

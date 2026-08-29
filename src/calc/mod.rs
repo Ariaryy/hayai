@@ -73,6 +73,14 @@ fn evaluate(input: &str, fx: &currency::FxCache) -> Option<EvalResult> {
 /// provider), then each evaluator's own full parse decides for real.
 fn is_candidate(input: &str) -> bool {
     let lower = input.to_ascii_lowercase();
+    let constant_expression = ["pi", "e", "tau"].iter().any(|constant| {
+        lower.strip_prefix(constant).is_some_and(|rest| {
+            !rest.is_empty()
+                && rest
+                    .chars()
+                    .any(|c| matches!(c, '+' | '-' | '*' | '/' | '%' | '^'))
+        })
+    });
     input.chars().next().is_some_and(|c| {
         c.is_ascii_digit()
             || c == '('
@@ -80,10 +88,8 @@ fn is_candidate(input: &str) -> bool {
             || c == '-'
             || c == '@'
             || currency::is_symbol(c)
-            || matches!(
-                lower.as_str(),
-                "pi" | "e" | "tau" | "today" | "tomorrow" | "yesterday"
-            )
+            || matches!(lower.as_str(), "today" | "tomorrow" | "yesterday")
+            || constant_expression
             || lower.starts_with("in ")
             || lower.starts_with("now ")
             || lower
@@ -185,6 +191,11 @@ mod tests {
         assert!(provider.auto_claim("2+2*3"));
         assert!(provider.auto_claim("7"));
         assert!(!provider.auto_claim("1password"));
+        assert!(!provider.auto_claim("e"));
+        assert!(!provider.auto_claim("pi"));
+        assert!(!provider.auto_claim("tau"));
+        assert!(provider.auto_claim("e^2"));
+        assert!(provider.auto_claim("pi * 2"));
     }
 
     #[test]
