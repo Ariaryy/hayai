@@ -97,7 +97,28 @@ fn format_expression_for_display(expression: &str) -> String {
             let bare_token = token.trim_end_matches([',', '.']);
             let normalized_token = bare_token.to_ascii_lowercase();
             let punctuation = &token[bare_token.len()..];
-            if matches!(normalized_token.as_str(), "am" | "pm") {
+            let follows_clock = index > 0 && tokens[index - 1].contains(':');
+            let precedes_timezone = tokens.get(index + 1).is_some_and(|next| {
+                matches!(
+                    next.to_ascii_lowercase().as_str(),
+                    "utc"
+                        | "gmt"
+                        | "est"
+                        | "edt"
+                        | "cst"
+                        | "cdt"
+                        | "mst"
+                        | "mdt"
+                        | "pst"
+                        | "pdt"
+                        | "ist"
+                        | "jst"
+                        | "kst"
+                )
+            });
+            if (follows_clock || precedes_timezone)
+                && matches!(normalized_token.as_str(), "am" | "pm")
+            {
                 return format!("{}{punctuation}", normalized_token.to_ascii_uppercase());
             }
             if let Some((clock, meridiem)) = normalized_token
@@ -1789,6 +1810,7 @@ mod tests {
             "12 PM IST to CST"
         );
         assert_eq!(format_expression_for_display("utc to jst"), "UTC to JST");
+        assert_eq!(format_expression_for_display("1 pm"), "1 pm");
         assert_eq!(
             format_expression_for_display("1 usd to inr"),
             "1 USD to INR"

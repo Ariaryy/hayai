@@ -13,6 +13,9 @@
 use super::EvalResult;
 use super::grammar;
 use crate::native;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+const SYSTEM_TIMEZONE: &str = "__system_timezone";
 
 /// Recognized timezone/city tokens (lowercase) mapped to a fixed UTC offset
 /// in minutes. Bare `cst` and `ist` retain their established North American
@@ -54,11 +57,26 @@ const TIMEZONES: &[(&[&str], i32)] = &[
 ];
 
 fn find_offset(token: &str) -> Option<i32> {
+    if token == SYSTEM_TIMEZONE {
+        return current_system_offset_minutes();
+    }
     let token = token.to_lowercase();
     TIMEZONES
         .iter()
         .find(|(names, _)| names.contains(&token.as_str()))
         .map(|(_, offset)| *offset)
+}
+
+fn current_system_offset_minutes() -> Option<i32> {
+    let utc_minutes = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_secs()
+        .checked_div(60)? as i64;
+    let (year, month, day, hour, minute) = native::local_now();
+    let local_minutes =
+        days_from_civil(year as i64, month, day) * 24 * 60 + hour as i64 * 60 + minute as i64;
+    i32::try_from(local_minutes - utc_minutes).ok()
 }
 
 fn format_utc_offset(minutes: i32) -> String {
@@ -75,6 +93,9 @@ fn format_utc_offset(minutes: i32) -> String {
 }
 
 fn timezone_label(token: &str, offset: i32) -> String {
+    if token == SYSTEM_TIMEZONE {
+        return format!("System timezone ({})", format_utc_offset(offset));
+    }
     let lower = token.to_ascii_lowercase();
     let identity = match lower.as_str() {
         "cst" | "chicago" => "America/Chicago · CST",
@@ -101,7 +122,9 @@ fn timezone_tokens(input: &str) -> Option<(String, String, i32, i32)> {
     let rest = input[first_end..].trim_start();
     let (from_token, keyword_and_target) = if let Some((_, clock_rest)) = parse_leading_clock(input)
     {
-        let timezone_end = clock_rest.find(char::is_whitespace)?;
+        let timezone_end = clock_rest
+            .find(char::is_whitespace)
+            .unwrap_or(clock_rest.len());
         (
             &clock_rest[..timezone_end],
             clock_rest[timezone_end..].trim_start(),
@@ -111,9 +134,13 @@ fn timezone_tokens(input: &str) -> Option<(String, String, i32, i32)> {
     };
     let from_offset = find_offset(from_token)?;
     let (to_token, matched) = grammar::parse_keyword_then_target(keyword_and_target);
-    if !matched {
+    let to_token = if matched {
+        to_token
+    } else if parse_leading_clock(input).is_some() && keyword_and_target.is_empty() {
+        SYSTEM_TIMEZONE.to_string()
+    } else {
         return None;
-    }
+    };
     let to_offset = find_offset(&to_token)?;
     Some((from_token.to_string(), to_token, from_offset, to_offset))
 }
@@ -266,21 +293,8 @@ fn parse_clock_arithmetic(input: &str) -> Option<EvalResult> {
 /// timezones using the fixed offset table above.
 fn parse_timezone_conversion(input: &str) -> Option<EvalResult> {
     let input = input.trim();
-    let ((hour, minute), rest) = parse_leading_clock(input)?;
-
-    let tz_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-    if tz_end == 0 {
-        return None;
-    }
-    let from_token = &rest[..tz_end];
-    let from_offset = find_offset(from_token)?;
-    let rest = rest[tz_end..].trim_start();
-
-    let (to_token, matched) = grammar::parse_keyword_then_target(rest);
-    if !matched {
-        return None;
-    }
-    let to_offset = find_offset(&to_token)?;
+    let ((hour, minute), _) = parse_leading_clock(input)?;
+    let (from_token, to_token, from_offset, to_offset) = timezone_tokens(input)?;
 
     let source = hour as i64 * 60 + minute as i64;
     let target = source - from_offset as i64 + to_offset as i64;
@@ -293,13 +307,14 @@ fn parse_timezone_conversion(input: &str) -> Option<EvalResult> {
         n => format!(" ({n} days)"),
     };
 
+    let target_zone = if to_token == SYSTEM_TIMEZONE {
+        String::new()
+    } else {
+        format!(" {}", to_token.to_uppercase())
+    };
     Some(EvalResult {
         expression: format!("{} {}", format_clock(source), from_token.to_uppercase()),
-        value: format!(
-            "{}{day_note} {}",
-            format_clock(target),
-            to_token.to_uppercase()
-        ),
+        value: format!("{}{day_note}{target_zone}", format_clock(target)),
     })
 }
 
@@ -498,6 +513,11 @@ mod tests {
         assert_eq!(spaced.expression, "12:00 PM IST");
         assert_eq!(spaced.value, "12:30 AM CST");
         assert!(timezone_labels("12 pm ist to cst").is_some());
+
+        let local = convert("12pm utc").unwrap();
+        assert_eq!(local.expression, "12:00 PM UTC");
+        let labels = timezone_labels("12pm utc").unwrap();
+        assert!(labels.1.starts_with("System timezone (GMT"));
     }
 
     #[test]

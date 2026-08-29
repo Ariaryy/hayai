@@ -216,6 +216,13 @@ mod tests {
     fn auto_claim_units() {
         let provider = CalcProvider::new();
         assert!(provider.auto_claim("10 km in miles"));
+        assert!(provider.auto_claim("1pm to m"));
+        let picometers = provider.search("1pm to m");
+        assert_eq!(picometers[0].subtitle.as_deref(), Some("1 pm"));
+        assert!(matches!(
+            picometers[0].calculation_detail,
+            Some(CalculationDetail::Units { .. })
+        ));
         assert!(!provider.auto_claim("10 km in kg"));
     }
 
@@ -245,6 +252,7 @@ mod tests {
     fn auto_claim_timezone_difference() {
         let provider = CalcProvider::new();
         assert!(provider.auto_claim("IST to CST"));
+        assert!(provider.auto_claim("12pm UTC"));
         let result = provider.search("IST to CST");
         assert_eq!(result[0].title, "11 hr 30 min behind");
     }

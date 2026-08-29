@@ -16,6 +16,7 @@ enum Dimension {
     Length,
     Mass,
     Data,
+    Speed,
 }
 
 const LENGTH: &[Unit] = &[
@@ -50,6 +51,11 @@ const LENGTH: &[Unit] = &[
         ],
         label: "Millimeter",
         factor: 0.001,
+    },
+    Unit {
+        names: &["pm", "picometer", "picometers", "picometre", "picometres"],
+        label: "Picometer",
+        factor: 0.000_000_000_001,
     },
     Unit {
         names: &["mile", "miles", "mi"],
@@ -169,11 +175,25 @@ const DATA: &[Unit] = &[
     },
 ];
 
+const SPEED: &[Unit] = &[
+    Unit {
+        names: &["m/s", "meter/second", "meters/second"],
+        label: "Meter per Second",
+        factor: 1.0,
+    },
+    Unit {
+        names: &["c", "lightspeed", "speedoflight"],
+        label: "Speed of Light",
+        factor: 299_792_458.0,
+    },
+];
+
 fn find_unit(token: &str) -> Option<(Dimension, f64)> {
     for (dimension, table) in [
         (Dimension::Length, LENGTH),
         (Dimension::Mass, MASS),
         (Dimension::Data, DATA),
+        (Dimension::Speed, SPEED),
     ] {
         if let Some(unit) = table.iter().find(|u| u.names.contains(&token)) {
             return Some((dimension, unit.factor));
@@ -187,6 +207,7 @@ fn unit_label(token: &str) -> Option<&'static str> {
         .iter()
         .chain(MASS)
         .chain(DATA)
+        .chain(SPEED)
         .find(|unit| unit.names.contains(&token))
         .map(|unit| unit.label)
 }
@@ -233,15 +254,40 @@ fn temp_label(temp: Temp) -> &'static str {
     }
 }
 
+fn temp_symbol(temp: Temp) -> &'static str {
+    match temp {
+        Temp::Celsius => "°C",
+        Temp::Fahrenheit => "°F",
+        Temp::Kelvin => "K",
+    }
+}
+
 fn parse_conversion(input: &str) -> Option<(f64, String, String)> {
-    grammar::parse_conversion(input).or_else(|| {
+    let (amount, from, to) = grammar::parse_conversion(input).or_else(|| {
         let input = input.trim();
         let from_end = input.find(char::is_whitespace)?;
         let from = input[..from_end].to_lowercase();
         let rest = input[from_end..].trim_start();
         let (to, matched) = grammar::parse_keyword_then_target(rest);
         matched.then_some((1.0, from, to))
-    })
+    })?;
+    let compact_slashes = |token: String| {
+        if token.contains('/') {
+            token.split_whitespace().collect()
+        } else {
+            token
+        }
+    };
+    Some((amount, compact_slashes(from), compact_slashes(to)))
+}
+
+fn format_unit_number(value: f64) -> String {
+    if value != 0.0 && value.abs() < 0.000_001 {
+        let scientific = format!("{value:e}");
+        let (mantissa, exponent) = scientific.split_once('e').unwrap();
+        return format!("{} × 10^{}", mantissa, exponent.parse::<i32>().unwrap());
+    }
+    format_number(value)
 }
 
 pub(super) fn conversion_detail(input: &str) -> Option<(String, String)> {
@@ -268,16 +314,16 @@ pub(super) fn conversion_detail(input: &str) -> Option<(String, String)> {
 /// then tries currency conversion next.
 pub fn convert(input: &str) -> Option<EvalResult> {
     let (amount, from, to) = parse_conversion(input)?;
-    let expression = format!("{} {}", format_number(amount), from);
 
     if let (Some(from_t), Some(to_t)) = (find_temp(&from), find_temp(&to)) {
         let result = to_t.convert_from_celsius(from_t.to_celsius(amount));
         return Some(EvalResult {
-            expression,
-            value: format!("{} {}", format_number(result), to),
+            expression: format!("{} {}", format_number(amount), temp_symbol(from_t)),
+            value: format!("{} {}", format_number(result), temp_symbol(to_t)),
         });
     }
 
+    let expression = format!("{} {}", format_number(amount), from);
     let (from_dim, from_factor) = find_unit(&from)?;
     let (to_dim, to_factor) = find_unit(&to)?;
     if from_dim != to_dim {
@@ -286,7 +332,7 @@ pub fn convert(input: &str) -> Option<EvalResult> {
     let result = amount * from_factor / to_factor;
     Some(EvalResult {
         expression,
-        value: format!("{} {}", format_number(result), to),
+        value: format!("{} {}", format_unit_number(result), to),
     })
 }
 
@@ -322,9 +368,28 @@ mod tests {
     #[test]
     fn temperature() {
         let r = convert("100 c to f").unwrap();
-        assert_eq!(r.value, "212 f");
+        assert_eq!(r.expression, "100 °C");
+        assert_eq!(r.value, "212 °F");
         let r = convert("0 c to k").unwrap();
-        assert_eq!(r.value, "273.15 k");
+        assert_eq!(r.value, "273.15 K");
+    }
+
+    #[test]
+    fn picometers_and_light_speed_use_unit_cards() {
+        let picometers = convert("1 pm to m").unwrap();
+        assert_eq!(picometers.expression, "1 pm");
+        assert_eq!(picometers.value, "1 × 10^-12 m");
+        assert_eq!(
+            conversion_detail("1 pm to m"),
+            Some(("Picometer".into(), "Meter".into()))
+        );
+
+        let light = convert("1 c to m / s").unwrap();
+        assert_eq!(light.value, "299,792,458 m/s");
+        assert_eq!(
+            conversion_detail("1 c to m / s"),
+            Some(("Speed of Light".into(), "Meter per Second".into()))
+        );
     }
 
     #[test]
