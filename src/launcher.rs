@@ -1585,6 +1585,7 @@ impl ResultRow {
             )
             .child(
                 div()
+                    .relative()
                     .flex()
                     .flex_col()
                     .w_full()
@@ -1698,18 +1699,25 @@ impl ResultRow {
                     )
                     .when_some(note, |card, label| {
                         card.child(
-                            div().w_full().pb_2().flex().justify_center().child(
-                                div()
-                                    .px_2()
-                                    .py_0p5()
-                                    .rounded(cx.theme().radius)
-                                    .border_1()
-                                    .border_color(cx.theme().border)
-                                    .bg(cx.theme().tokens.secondary)
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child(label),
-                            ),
+                            div()
+                                .absolute()
+                                .bottom_2()
+                                .left_0()
+                                .right_0()
+                                .flex()
+                                .justify_center()
+                                .child(
+                                    div()
+                                        .px_2()
+                                        .py_0p5()
+                                        .rounded(cx.theme().radius)
+                                        .border_1()
+                                        .border_color(cx.theme().border)
+                                        .bg(cx.theme().tokens.secondary)
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(label),
+                                ),
                         )
                     }),
             )

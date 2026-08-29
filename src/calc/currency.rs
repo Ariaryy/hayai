@@ -381,7 +381,7 @@ pub(super) fn conversion_note(input: &str, cache: &FxCache) -> Option<String> {
     cache
         .as_of_label()
         .and_then(|date| compact_rate_date(&date))
-        .map(|date| format!("Rates · {date}"))
+        .map(|date| format!("Last updated · {date}"))
 }
 
 fn compact_rate_date(date: &str) -> Option<String> {
@@ -444,7 +444,7 @@ mod tests {
         assert_eq!(result.expression, "$100.00 USD");
         assert_eq!(
             conversion_note("100 usd to inr", &cache),
-            Some("Rates · 2026-01-01".into())
+            Some("Last updated · 2026-01-01".into())
         );
 
         let yen = convert("1 yen to inr", &cache).unwrap();
