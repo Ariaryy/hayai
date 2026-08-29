@@ -1545,6 +1545,14 @@ impl ResultRow {
         let conversion_color = cx.theme().muted_foreground;
         let title = SharedString::from(format_result_for_display(&title));
         let (source_label, target_label, note) = match calculation_detail {
+            Some(CalculationDetail::Units {
+                source_label,
+                target_label,
+            }) => (
+                Some(SharedString::from(source_label)),
+                Some(SharedString::from(target_label)),
+                None,
+            ),
             Some(CalculationDetail::Timezones {
                 source_label,
                 target_label,

@@ -100,13 +100,19 @@ fn is_candidate(input: &str) -> bool {
 }
 
 fn result_item(query: &str, result: EvalResult, fx: &currency::FxCache) -> CommandItem {
-    let calculation_detail = time::timezone_labels(query)
-        .map(
-            |(source_label, target_label)| CalculationDetail::Timezones {
-                source_label,
-                target_label,
-            },
-        )
+    let calculation_detail = units::conversion_detail(query)
+        .map(|(source_label, target_label)| CalculationDetail::Units {
+            source_label,
+            target_label,
+        })
+        .or_else(|| {
+            time::timezone_labels(query).map(|(source_label, target_label)| {
+                CalculationDetail::Timezones {
+                    source_label,
+                    target_label,
+                }
+            })
+        })
         .or_else(|| {
             currency::conversion_detail(query, fx).map(
                 |(source_label, target_label, updated_label)| CalculationDetail::Currency {

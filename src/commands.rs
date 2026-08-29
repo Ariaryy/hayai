@@ -27,6 +27,10 @@ pub enum CommandAction {
 
 #[derive(Clone, Debug)]
 pub enum CalculationDetail {
+    Units {
+        source_label: String,
+        target_label: String,
+    },
     Timezones {
         source_label: String,
         target_label: String,
