@@ -124,23 +124,25 @@ fn format_expression_for_display(expression: &str) -> String {
 
 fn format_result_for_display(result: &str) -> String {
     let mut formatted = format_expression_for_display(result);
-    let mut non_breaking_spaces = [" AM", " PM"]
+    let mut clock_positions = [" AM", " PM"]
         .into_iter()
         .flat_map(|suffix| formatted.match_indices(suffix).map(|(index, _)| index))
-        .filter(|index| {
-            formatted[..*index]
-                .split_whitespace()
-                .next_back()
-                .and_then(|clock| clock.split_once(':'))
-                .is_some_and(|(hour, minute)| {
-                    hour.parse::<u8>().is_ok() && minute.parse::<u8>().is_ok()
-                })
+        .filter_map(|meridiem_space| {
+            let clock = formatted[..meridiem_space].split_whitespace().next_back()?;
+            let (hour, minute) = clock.split_once(':')?;
+            (hour.parse::<u8>().is_ok() && minute.parse::<u8>().is_ok()).then(|| {
+                let clock_start = formatted[..meridiem_space].rfind(clock).unwrap_or(0);
+                (meridiem_space, clock_start)
+            })
         })
         .collect::<Vec<_>>();
-    non_breaking_spaces.sort_unstable_by(|left, right| right.cmp(left));
+    clock_positions.sort_unstable_by_key(|position| std::cmp::Reverse(position.0));
 
-    for index in non_breaking_spaces {
-        formatted.replace_range(index..index + 1, "\u{00a0}");
+    for (meridiem_space, clock_start) in clock_positions {
+        if clock_start > 0 && formatted[..clock_start].trim_end().ends_with(',') {
+            formatted.replace_range(clock_start - 1..clock_start, "\n");
+        }
+        formatted.replace_range(meridiem_space..meridiem_space + 1, "\u{00a0}");
     }
     formatted
 }
@@ -1653,7 +1655,7 @@ mod tests {
     fn keeps_clock_and_meridiem_on_the_same_line() {
         assert_eq!(
             format_result_for_display("Sunday, August 30, 2026, 2:35 AM"),
-            "Sunday, August 30, 2026, 2:35\u{00a0}AM"
+            "Sunday, August 30, 2026,\n2:35\u{00a0}AM"
         );
         assert_eq!(
             format_result_for_display("9:05 PM IST"),
