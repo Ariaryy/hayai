@@ -1685,7 +1685,7 @@ impl ResultRow {
                                         div()
                                             .px_1()
                                             .text_lg()
-                                            .font_weight(FontWeight::BOLD)
+                                            .font_weight(FontWeight::MEDIUM)
                                             .text_color(conversion_color)
                                             .child("→"),
                                     )
