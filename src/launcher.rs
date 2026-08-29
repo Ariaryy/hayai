@@ -12,7 +12,7 @@ use gpui::{
     size,
 };
 use gpui_component::{
-    ActiveTheme, IndexPath, Root, Selectable, Sizable, Size, h_flex,
+    ActiveTheme, Icon, IconName, IndexPath, Root, Selectable, Sizable, Size, h_flex,
     input::{Escape, Input, InputEvent, InputState, MoveDown, MoveUp},
     list::{List, ListDelegate, ListItem, ListState},
 };
@@ -1294,7 +1294,11 @@ impl gpui::RenderOnce for ResultRow {
         } else {
             ResultRow::render_plain(title, subtitle, icon, cx)
         };
-        base.py_1p5().rounded(cx.theme().radius).child(content)
+        if calculator {
+            base.selected(false).py_1().child(content)
+        } else {
+            base.py_1p5().rounded(cx.theme().radius).child(content)
+        }
     }
 }
 
@@ -1356,7 +1360,7 @@ impl ResultRow {
                 .rounded(cx.theme().radius)
                 .border_1()
                 .border_color(cx.theme().border)
-                .bg(cx.theme().tokens.muted)
+                .bg(cx.theme().tokens.secondary)
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
                 .child(label)
@@ -1379,7 +1383,9 @@ impl ResultRow {
                 h_flex()
                     .items_center()
                     .w_full()
-                    .min_h(px(74.0))
+                    .min_h(px(108.0))
+                    .rounded(cx.theme().radius)
+                    .bg(cx.theme().list_active)
                     .child(
                         div()
                             .flex_1()
@@ -1388,11 +1394,11 @@ impl ResultRow {
                             .flex_col()
                             .items_center()
                             .justify_center()
-                            .px_3()
+                            .px_4()
                             .when_some(subtitle, |col, expression| {
                                 col.child(
                                     div()
-                                        .text_lg()
+                                        .text_xl()
                                         .font_weight(FontWeight::SEMIBOLD)
                                         .text_color(cx.theme().foreground)
                                         .child(expression),
@@ -1403,18 +1409,19 @@ impl ResultRow {
                     .child(
                         div()
                             .w(px(52.0))
-                            .h(px(54.0))
+                            .h(px(82.0))
                             .flex_none()
                             .flex()
+                            .flex_col()
                             .items_center()
                             .justify_center()
-                            .border_l_1()
-                            .border_r_1()
-                            .border_color(cx.theme().border)
-                            .text_xs()
-                            .font_weight(FontWeight::SEMIBOLD)
-                            .text_color(cx.theme().muted_foreground)
-                            .child("TO"),
+                            .child(div().w(px(1.0)).flex_1().bg(cx.theme().border))
+                            .child(
+                                Icon::new(IconName::ArrowRight)
+                                    .size_4()
+                                    .text_color(cx.theme().muted_foreground),
+                            )
+                            .child(div().w(px(1.0)).flex_1().bg(cx.theme().border)),
                     )
                     .child(
                         div()
@@ -1424,10 +1431,10 @@ impl ResultRow {
                             .flex_col()
                             .items_center()
                             .justify_center()
-                            .px_3()
+                            .px_4()
                             .child(
                                 div()
-                                    .text_lg()
+                                    .text_xl()
                                     .font_weight(FontWeight::BOLD)
                                     .text_color(cx.theme().foreground)
                                     .child(title),

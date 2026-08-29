@@ -23,7 +23,6 @@ use crate::commands::{
 };
 
 pub struct EvalResult {
-    /// The human-readable question, shown small (e.g. "10 km", "100 USD").
     pub expression: String,
     /// The answer, shown large/bold — also what gets copied on Enter.
     pub value: String,
@@ -94,16 +93,20 @@ fn is_candidate(input: &str) -> bool {
 }
 
 fn result_item(query: &str, result: EvalResult) -> CommandItem {
+    let calculation_detail =
+        time::timezone_labels(query).map(|(source_label, target_label)| CalculationDetail {
+            source_label,
+            target_label,
+        });
     CommandItem {
         id: format!("calc:{query}"),
         title: result.value.clone(),
-        subtitle: Some(result.expression),
-        calculation_detail: time::timezone_labels(query).map(|(source_label, target_label)| {
-            CalculationDetail {
-                source_label,
-                target_label,
-            }
+        subtitle: Some(if calculation_detail.is_some() {
+            query.to_string()
+        } else {
+            result.expression
         }),
+        calculation_detail,
         icon: IconSource::None,
         action: CommandAction::CopyToClipboard(result.value),
     }

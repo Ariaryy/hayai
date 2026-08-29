@@ -63,14 +63,14 @@ fn find_offset(token: &str) -> Option<i32> {
 
 fn format_utc_offset(minutes: i32) -> String {
     if minutes == 0 {
-        return "UTC".to_string();
+        return "GMT".to_string();
     }
     let sign = if minutes < 0 { '-' } else { '+' };
     let minutes = minutes.abs();
     if minutes % 60 == 0 {
-        format!("UTC{sign}{}", minutes / 60)
+        format!("GMT{sign}{}", minutes / 60)
     } else {
-        format!("UTC{sign}{}:{:02}", minutes / 60, minutes % 60)
+        format!("GMT{sign}{}:{:02}", minutes / 60, minutes % 60)
     }
 }
 
@@ -447,11 +447,11 @@ mod tests {
     #[test]
     fn ambiguous_abbreviations_get_explicit_region_labels() {
         let labels = timezone_labels("12pm cst to ist").unwrap();
-        assert_eq!(labels.0, "America/Chicago · CST (UTC-6)");
-        assert_eq!(labels.1, "Asia/Kolkata · IST (UTC+5:30)");
+        assert_eq!(labels.0, "America/Chicago · CST (GMT-6)");
+        assert_eq!(labels.1, "Asia/Kolkata · IST (GMT+5:30)");
 
         let china = timezone_labels("12pm china to ist").unwrap();
-        assert_eq!(china.0, "Asia/Shanghai · CST (UTC+8)");
+        assert_eq!(china.0, "Asia/Shanghai · CST (GMT+8)");
     }
 
     #[test]
