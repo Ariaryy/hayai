@@ -16,7 +16,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::EvalResult;
-use super::format::format_currency;
+use super::format::{format_currency, format_number};
 use super::grammar;
 use crate::native;
 
@@ -135,10 +135,6 @@ impl FxCache {
             .as_ref()?
             .get(&code)
             .copied()
-    }
-
-    fn as_of_label(&self) -> Option<String> {
-        self.inner.read().unwrap().as_of.clone()
     }
 }
 
@@ -336,14 +332,54 @@ fn symbol_prefix(code: &str) -> Option<&'static str> {
     }
 }
 
-fn display_amount(code: &str, amount: f64) -> String {
+fn display_result(code: &str, amount: f64) -> String {
     match symbol_prefix(code) {
-        Some(symbol) => format!(
-            "{symbol}{} {}",
-            format_currency(amount),
-            code.to_uppercase()
-        ),
-        None => format!("{} {}", format_currency(amount), code.to_uppercase()),
+        Some(symbol) => format!("{symbol}{}", format_currency(amount)),
+        None => format_currency(amount),
+    }
+}
+
+fn currency_name(code: &str) -> &'static str {
+    match code {
+        "usd" => "US Dollar",
+        "eur" => "Euro",
+        "gbp" => "British Pound",
+        "jpy" => "Japanese Yen",
+        "inr" => "Indian Rupee",
+        "aud" => "Australian Dollar",
+        "cad" => "Canadian Dollar",
+        "chf" => "Swiss Franc",
+        "cny" => "Chinese Yuan",
+        "sgd" => "Singapore Dollar",
+        "hkd" => "Hong Kong Dollar",
+        "nzd" => "New Zealand Dollar",
+        "sek" => "Swedish Krona",
+        "nok" => "Norwegian Krone",
+        "dkk" => "Danish Krone",
+        "krw" => "South Korean Won",
+        "mxn" => "Mexican Peso",
+        "brl" => "Brazilian Real",
+        "zar" => "South African Rand",
+        "rub" => "Russian Ruble",
+        "try" => "Turkish Lira",
+        "aed" => "UAE Dirham",
+        "sar" => "Saudi Riyal",
+        "thb" => "Thai Baht",
+        "myr" => "Malaysian Ringgit",
+        "idr" => "Indonesian Rupiah",
+        "php" => "Philippine Peso",
+        "vnd" => "Vietnamese Dong",
+        "pln" => "Polish Zloty",
+        "czk" => "Czech Koruna",
+        "huf" => "Hungarian Forint",
+        "ils" => "Israeli Shekel",
+        "twd" => "Taiwan Dollar",
+        "pkr" => "Pakistani Rupee",
+        "bdt" => "Bangladeshi Taka",
+        "egp" => "Egyptian Pound",
+        "ngn" => "Nigerian Naira",
+        "kes" => "Kenyan Shilling",
+        _ => "Currency",
     }
 }
 
@@ -368,20 +404,44 @@ pub fn convert(input: &str, cache: &FxCache) -> Option<EvalResult> {
     let to_rate = cache.rate_for(&to)?;
     let converted = amount / from_rate * to_rate;
     Some(EvalResult {
-        expression: display_amount(&from, amount),
-        value: display_amount(&to, converted),
+        expression: format!("{} {}", format_number(amount), from.to_ascii_uppercase()),
+        value: display_result(&to, converted),
     })
 }
 
-pub(super) fn conversion_note(input: &str, cache: &FxCache) -> Option<String> {
-    let _ = parse_tokens(input).or_else(|| {
+pub(super) fn conversion_detail(input: &str, cache: &FxCache) -> Option<(String, String, String)> {
+    let (_, from, to) = parse_tokens(input).or_else(|| {
         let (amount, from) = parse_bare_amount(input)?;
         Some((amount, from, cache.default_target()?))
     })?;
-    cache
-        .as_of_label()
-        .and_then(|date| compact_rate_date(&date))
-        .map(|date| format!("Last updated · {date}"))
+    let guard = cache.inner.read().unwrap();
+    let updated_label = guard.fetched_at.map(relative_update_label).or_else(|| {
+        guard
+            .as_of
+            .as_deref()
+            .and_then(compact_rate_date)
+            .map(|date| format!("Updated {date}"))
+    })?;
+    Some((
+        currency_name(&from).to_string(),
+        currency_name(&to).to_string(),
+        updated_label,
+    ))
+}
+
+fn relative_update_label(updated_at: SystemTime) -> String {
+    let age = SystemTime::now()
+        .duration_since(updated_at)
+        .unwrap_or_default();
+    match age.as_secs() {
+        0..=59 => "Updated less than a minute ago".to_string(),
+        60..=119 => "Updated 1 minute ago".to_string(),
+        120..=3_599 => format!("Updated {} minutes ago", age.as_secs() / 60),
+        3_600..=7_199 => "Updated 1 hour ago".to_string(),
+        7_200..=86_399 => format!("Updated {} hours ago", age.as_secs() / 3_600),
+        86_400..=172_799 => "Updated 1 day ago".to_string(),
+        seconds => format!("Updated {} days ago", seconds / 86_400),
+    }
 }
 
 fn compact_rate_date(date: &str) -> Option<String> {
@@ -440,39 +500,43 @@ mod tests {
     fn converts_with_cached_rates() {
         let cache = cache_with_rates(&[("usd", 1.0), ("inr", 83.0), ("jpy", 150.0)]);
         let result = convert("100 usd to inr", &cache).unwrap();
-        assert_eq!(result.value, "₹8,300.00 INR");
-        assert_eq!(result.expression, "$100.00 USD");
+        assert_eq!(result.value, "₹8,300.00");
+        assert_eq!(result.expression, "100 USD");
         assert_eq!(
-            conversion_note("100 usd to inr", &cache),
-            Some("Last updated · 2026-01-01".into())
+            conversion_detail("100 usd to inr", &cache),
+            Some((
+                "US Dollar".into(),
+                "Indian Rupee".into(),
+                "Updated less than a minute ago".into()
+            ))
         );
 
         let yen = convert("1 yen to inr", &cache).unwrap();
-        assert_eq!(yen.expression, "¥1.00 JPY");
-        assert_eq!(yen.value, "₹0.55 INR");
+        assert_eq!(yen.expression, "1 JPY");
+        assert_eq!(yen.value, "₹0.55");
     }
 
     #[test]
     fn converts_symbol_form() {
         let cache = cache_with_rates(&[("usd", 1.0), ("eur", 0.9)]);
         let result = convert("$100 to eur", &cache).unwrap();
-        assert_eq!(result.value, "€90.00 EUR");
+        assert_eq!(result.value, "€90.00");
     }
 
     #[test]
     fn converts_k_suffix_amount() {
         let cache = cache_with_rates(&[("usd", 1.0), ("inr", 83.0)]);
         let result = convert("5k usd to inr", &cache).unwrap();
-        assert_eq!(result.value, "₹415,000.00 INR");
+        assert_eq!(result.value, "₹415,000.00");
         let result = convert("$5k to inr", &cache).unwrap();
-        assert_eq!(result.value, "₹415,000.00 INR");
+        assert_eq!(result.value, "₹415,000.00");
     }
 
     #[test]
     fn converts_bare_amount_to_regional_default() {
         let cache = cache_with_rates_and_default(&[("usd", 1.0), ("inr", 83.0)], Some("inr"));
         let result = convert("$100", &cache).unwrap();
-        assert_eq!(result.value, "₹8,300.00 INR");
+        assert_eq!(result.value, "₹8,300.00");
     }
 
     #[test]

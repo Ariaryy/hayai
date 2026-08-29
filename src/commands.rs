@@ -31,7 +31,11 @@ pub enum CalculationDetail {
         source_label: String,
         target_label: String,
     },
-    Note(String),
+    Currency {
+        source_label: String,
+        target_label: String,
+        updated_label: String,
+    },
 }
 
 #[derive(Clone, Debug)]

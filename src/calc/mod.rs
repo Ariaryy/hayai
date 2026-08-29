@@ -107,7 +107,15 @@ fn result_item(query: &str, result: EvalResult, fx: &currency::FxCache) -> Comma
                 target_label,
             },
         )
-        .or_else(|| currency::conversion_note(query, fx).map(CalculationDetail::Note));
+        .or_else(|| {
+            currency::conversion_detail(query, fx).map(
+                |(source_label, target_label, updated_label)| CalculationDetail::Currency {
+                    source_label,
+                    target_label,
+                    updated_label,
+                },
+            )
+        });
     let is_timezone = matches!(
         calculation_detail,
         Some(CalculationDetail::Timezones { .. })

@@ -1553,9 +1553,18 @@ impl ResultRow {
                 Some(SharedString::from(target_label)),
                 None,
             ),
-            Some(CalculationDetail::Note(note)) => (None, None, Some(SharedString::from(note))),
+            Some(CalculationDetail::Currency {
+                source_label,
+                target_label,
+                updated_label,
+            }) => (
+                Some(SharedString::from(source_label)),
+                Some(SharedString::from(target_label)),
+                Some(SharedString::from(updated_label)),
+            ),
             None => (None, None, None),
         };
+        let center_width = if note.is_some() { 176.0 } else { 44.0 };
         let zone_chip = |label: SharedString, cx: &App| {
             div()
                 .mt_1()
@@ -1585,7 +1594,6 @@ impl ResultRow {
             )
             .child(
                 div()
-                    .relative()
                     .flex()
                     .flex_col()
                     .w_full()
@@ -1657,7 +1665,7 @@ impl ResultRow {
                             )
                             .child(
                                 div()
-                                    .w(px(44.0))
+                                    .w(px(center_width))
                                     .h(px(70.0))
                                     .flex_none()
                                     .flex()
@@ -1673,6 +1681,16 @@ impl ResultRow {
                                             .text_color(conversion_color)
                                             .child("→"),
                                     )
+                                    .when_some(note, |center, label| {
+                                        center.child(
+                                            div()
+                                                .text_xs()
+                                                .text_center()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(conversion_color)
+                                                .child(label),
+                                        )
+                                    })
                                     .child(div().w(px(1.0)).flex_1().bg(conversion_color)),
                             )
                             .child(
@@ -1696,30 +1714,7 @@ impl ResultRow {
                                         col.child(zone_chip(label, cx))
                                     }),
                             ),
-                    )
-                    .when_some(note, |card, label| {
-                        card.child(
-                            div()
-                                .absolute()
-                                .bottom_2()
-                                .left_0()
-                                .right_0()
-                                .flex()
-                                .justify_center()
-                                .child(
-                                    div()
-                                        .px_2()
-                                        .py_0p5()
-                                        .rounded(cx.theme().radius)
-                                        .border_1()
-                                        .border_color(cx.theme().border)
-                                        .bg(cx.theme().tokens.secondary)
-                                        .text_xs()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(label),
-                                ),
-                        )
-                    }),
+                    ),
             )
             .into_any_element()
     }
