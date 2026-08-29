@@ -28,11 +28,11 @@ const LAUNCHER_HEIGHT: f32 = 400.0;
 fn format_expression_for_display(expression: &str) -> String {
     const SUPERSCRIPT_DIGITS: [char; 10] = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
 
-    let mut formatted = String::with_capacity(expression.len());
+    let mut superscripted = String::with_capacity(expression.len());
     let mut characters = expression.chars().peekable();
     while let Some(character) = characters.next() {
         if character != '^' {
-            formatted.push(character);
+            superscripted.push(character);
             continue;
         }
 
@@ -47,15 +47,79 @@ fn format_expression_for_display(expression: &str) -> String {
         }
 
         if exponent.is_empty() || exponent == "⁻" {
-            formatted.push('^');
+            superscripted.push('^');
             if exponent == "⁻" {
-                formatted.push('-');
+                superscripted.push('-');
             }
         } else {
-            formatted.push_str(&exponent);
+            superscripted.push_str(&exponent);
         }
     }
-    formatted
+
+    let mut formatted = String::with_capacity(superscripted.len());
+    let mut characters = superscripted.chars().peekable();
+    while let Some(character) = characters.next() {
+        if !matches!(character, '+' | '-' | '*' | '/' | '%' | '=') {
+            formatted.push(character);
+            continue;
+        }
+
+        let previous = formatted
+            .chars()
+            .rev()
+            .find(|character| !character.is_whitespace());
+        let next = characters
+            .clone()
+            .find(|character| !character.is_whitespace());
+        let is_binary = previous.is_some_and(|previous| {
+            !matches!(previous, '+' | '-' | '*' | '/' | '%' | '=' | '(' | '^')
+        }) && next.is_some();
+
+        if is_binary {
+            while formatted.ends_with(char::is_whitespace) {
+                formatted.pop();
+            }
+            formatted.push(' ');
+            formatted.push(character);
+            formatted.push(' ');
+            while characters.peek().is_some_and(|next| next.is_whitespace()) {
+                characters.next();
+            }
+        } else {
+            formatted.push(character);
+        }
+    }
+    let tokens = formatted.split_whitespace().collect::<Vec<_>>();
+    tokens
+        .iter()
+        .enumerate()
+        .map(|(index, token)| {
+            let Some(amount) = index
+                .checked_sub(1)
+                .and_then(|previous| tokens[previous].parse::<f64>().ok())
+            else {
+                return (*token).to_string();
+            };
+            let unit = token.trim_end_matches([',', '.']).to_ascii_lowercase();
+            let singular = (amount.abs() - 1.0).abs() < f64::EPSILON;
+            let canonical = match unit.as_str() {
+                "year" | "years" | "yr" | "yrs" => Some(("year", "years")),
+                "month" | "months" | "mo" => Some(("month", "months")),
+                "week" | "weeks" | "wk" | "wks" => Some(("week", "weeks")),
+                "day" | "days" | "d" => Some(("day", "days")),
+                "hour" | "hours" | "hr" | "hrs" | "h" => Some(("hour", "hours")),
+                "minute" | "minutes" | "min" | "mins" => Some(("minute", "minutes")),
+                "second" | "seconds" | "sec" | "secs" | "s" => Some(("second", "seconds")),
+                _ => None,
+            };
+            let Some((one, many)) = canonical else {
+                return (*token).to_string();
+            };
+            let punctuation = &token[unit.len()..];
+            format!("{}{punctuation}", if singular { one } else { many })
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Run a query through the delegate, then reset `ListState`'s own selection
@@ -1535,5 +1599,30 @@ mod tests {
         assert_eq!(format_expression_for_display("43560 ft^2"), "43560 ft²");
         assert_eq!(format_expression_for_display("m^-12"), "m⁻¹²");
         assert_eq!(format_expression_for_display("2^x"), "2^x");
+    }
+
+    #[test]
+    fn spaces_binary_operators_without_splitting_unary_signs() {
+        assert_eq!(format_expression_for_display("12 -2"), "12 - 2");
+        assert_eq!(format_expression_for_display("12+2* 3"), "12 + 2 * 3");
+        assert_eq!(format_expression_for_display("5*-2"), "5 * -2");
+        assert_eq!(format_expression_for_display("-12/3"), "-12 / 3");
+    }
+
+    #[test]
+    fn expands_and_pluralizes_duration_units() {
+        assert_eq!(
+            format_expression_for_display("12 hr from now"),
+            "12 hours from now"
+        );
+        assert_eq!(
+            format_expression_for_display("12 hrs from now"),
+            "12 hours from now"
+        );
+        assert_eq!(format_expression_for_display("1 hrs ago"), "1 hour ago");
+        assert_eq!(
+            format_expression_for_display("in 2 wk 1 d"),
+            "in 2 weeks 1 day"
+        );
     }
 }
