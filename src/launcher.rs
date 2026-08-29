@@ -144,13 +144,9 @@ fn format_expression_for_display(expression: &str) -> String {
                 return format!("{}{punctuation}", normalized_token.to_ascii_uppercase());
             }
 
-            let Some(amount) = index
+            let amount = index
                 .checked_sub(1)
-                .and_then(|previous| tokens[previous].parse::<f64>().ok())
-            else {
-                return (*token).to_string();
-            };
-            let singular = (amount.abs() - 1.0).abs() < f64::EPSILON;
+                .and_then(|previous| tokens[previous].parse::<f64>().ok());
             let canonical = match normalized_token.as_str() {
                 "year" | "years" | "yr" | "yrs" => Some(("year", "years")),
                 "month" | "months" | "mo" => Some(("month", "months")),
@@ -161,7 +157,8 @@ fn format_expression_for_display(expression: &str) -> String {
                 "second" | "seconds" | "sec" | "secs" | "s" => Some(("second", "seconds")),
                 _ => None,
             };
-            if let Some((one, many)) = canonical {
+            if let (Some(amount), Some((one, many))) = (amount, canonical) {
+                let singular = (amount.abs() - 1.0).abs() < f64::EPSILON;
                 return format!("{}{punctuation}", if singular { one } else { many });
             }
 
@@ -1547,10 +1544,18 @@ impl ResultRow {
     ) -> AnyElement {
         let conversion_color = cx.theme().muted_foreground;
         let title = SharedString::from(format_result_for_display(&title));
-        let source_label = calculation_detail
-            .as_ref()
-            .map(|detail| SharedString::from(detail.source_label.clone()));
-        let target_label = calculation_detail.map(|detail| SharedString::from(detail.target_label));
+        let (source_label, target_label, note) = match calculation_detail {
+            Some(CalculationDetail::Timezones {
+                source_label,
+                target_label,
+            }) => (
+                Some(SharedString::from(source_label)),
+                Some(SharedString::from(target_label)),
+                None,
+            ),
+            Some(CalculationDetail::Note(note)) => (None, None, Some(SharedString::from(note))),
+            None => (None, None, None),
+        };
         let zone_chip = |label: SharedString, cx: &App| {
             div()
                 .mt_1()
@@ -1579,105 +1584,134 @@ impl ResultRow {
                     .child("Calculator"),
             )
             .child(
-                h_flex()
-                    .items_center()
+                div()
+                    .flex()
+                    .flex_col()
                     .w_full()
                     .min_h(px(96.0))
                     .rounded(cx.theme().radius)
                     .bg(cx.theme().list_active)
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
+                        h_flex()
                             .items_center()
-                            .justify_center()
-                            .px_2()
-                            .when_some(subtitle, |col, expression| {
-                                let expression = format_expression_for_display(&expression);
-                                let mut search_start = 0;
-                                let highlights = expression
-                                    .split_whitespace()
-                                    .filter_map(|word| {
-                                        let offset =
-                                            expression[search_start..].find(word)? + search_start;
-                                        search_start = offset + word.len();
-                                        let connector = word
-                                            .trim_matches(|character: char| {
-                                                !character.is_alphabetic()
+                            .w_full()
+                            .flex_1()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .justify_center()
+                                    .px_2()
+                                    .when_some(subtitle, |col, expression| {
+                                        let expression = format_expression_for_display(&expression);
+                                        let mut search_start = 0;
+                                        let highlights = expression
+                                            .split_whitespace()
+                                            .filter_map(|word| {
+                                                let offset = expression[search_start..]
+                                                    .find(word)?
+                                                    + search_start;
+                                                search_start = offset + word.len();
+                                                let connector = word
+                                                    .trim_matches(|character: char| {
+                                                        !character.is_alphabetic()
+                                                    })
+                                                    .to_ascii_lowercase();
+
+                                                matches!(
+                                                    connector.as_str(),
+                                                    "to" | "in"
+                                                        | "as"
+                                                        | "from"
+                                                        | "into"
+                                                        | "after"
+                                                        | "before"
+                                                )
+                                                .then(|| {
+                                                    (
+                                                        offset..offset + word.len(),
+                                                        HighlightStyle::color(conversion_color),
+                                                    )
+                                                })
                                             })
-                                            .to_ascii_lowercase();
+                                            .collect::<Vec<_>>();
 
-                                        matches!(
-                                            connector.as_str(),
-                                            "to" | "in"
-                                                | "as"
-                                                | "from"
-                                                | "into"
-                                                | "after"
-                                                | "before"
+                                        col.child(
+                                            div()
+                                                .text_xl()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(cx.theme().foreground)
+                                                .child(
+                                                    StyledText::new(expression)
+                                                        .with_highlights(highlights),
+                                                ),
                                         )
-                                        .then(|| {
-                                            (
-                                                offset..offset + word.len(),
-                                                HighlightStyle::color(conversion_color),
-                                            )
-                                        })
                                     })
-                                    .collect::<Vec<_>>();
-
-                                col.child(
-                                    div()
-                                        .text_xl()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(cx.theme().foreground)
-                                        .child(
-                                            StyledText::new(expression).with_highlights(highlights),
-                                        ),
-                                )
-                            })
-                            .when_some(source_label, |col, label| col.child(zone_chip(label, cx))),
-                    )
-                    .child(
-                        div()
-                            .w(px(44.0))
-                            .h(px(70.0))
-                            .flex_none()
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .justify_center()
-                            .child(div().w(px(1.0)).flex_1().bg(conversion_color))
+                                    .when_some(source_label, |col, label| {
+                                        col.child(zone_chip(label, cx))
+                                    }),
+                            )
                             .child(
                                 div()
-                                    .px_1()
-                                    .text_lg()
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(conversion_color)
-                                    .child("→"),
+                                    .w(px(44.0))
+                                    .h(px(70.0))
+                                    .flex_none()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(div().w(px(1.0)).flex_1().bg(conversion_color))
+                                    .child(
+                                        div()
+                                            .px_1()
+                                            .text_lg()
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(conversion_color)
+                                            .child("→"),
+                                    )
+                                    .child(div().w(px(1.0)).flex_1().bg(conversion_color)),
                             )
-                            .child(div().w(px(1.0)).flex_1().bg(conversion_color)),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .items_center()
-                            .justify_center()
-                            .px_2()
                             .child(
                                 div()
-                                    .text_xl()
-                                    .text_center()
-                                    .font_weight(FontWeight::BOLD)
-                                    .text_color(cx.theme().foreground)
-                                    .child(title),
-                            )
-                            .when_some(target_label, |col, label| col.child(zone_chip(label, cx))),
-                    ),
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .justify_center()
+                                    .px_2()
+                                    .child(
+                                        div()
+                                            .text_xl()
+                                            .text_center()
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(cx.theme().foreground)
+                                            .child(title),
+                                    )
+                                    .when_some(target_label, |col, label| {
+                                        col.child(zone_chip(label, cx))
+                                    }),
+                            ),
+                    )
+                    .when_some(note, |card, label| {
+                        card.child(
+                            div().w_full().pb_2().flex().justify_center().child(
+                                div()
+                                    .px_2()
+                                    .py_0p5()
+                                    .rounded(cx.theme().radius)
+                                    .border_1()
+                                    .border_color(cx.theme().border)
+                                    .bg(cx.theme().tokens.secondary)
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(label),
+                            ),
+                        )
+                    }),
             )
             .into_any_element()
     }
@@ -1742,5 +1776,9 @@ mod tests {
             "12 PM IST to CST"
         );
         assert_eq!(format_expression_for_display("utc to jst"), "UTC to JST");
+        assert_eq!(
+            format_expression_for_display("1 usd to inr"),
+            "1 USD to INR"
+        );
     }
 }

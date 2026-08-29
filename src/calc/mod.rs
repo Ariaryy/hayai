@@ -101,15 +101,21 @@ fn is_candidate(input: &str) -> bool {
 
 fn result_item(query: &str, result: EvalResult, fx: &currency::FxCache) -> CommandItem {
     let calculation_detail = time::timezone_labels(query)
-        .or_else(|| currency::conversion_labels(query, fx))
-        .map(|(source_label, target_label)| CalculationDetail {
-            source_label,
-            target_label,
-        });
+        .map(
+            |(source_label, target_label)| CalculationDetail::Timezones {
+                source_label,
+                target_label,
+            },
+        )
+        .or_else(|| currency::conversion_note(query, fx).map(CalculationDetail::Note));
+    let is_timezone = matches!(
+        calculation_detail,
+        Some(CalculationDetail::Timezones { .. })
+    );
     CommandItem {
         id: format!("calc:{query}"),
         title: result.value.clone(),
-        subtitle: Some(if calculation_detail.is_some() {
+        subtitle: Some(if is_timezone {
             query.to_string()
         } else {
             result.expression

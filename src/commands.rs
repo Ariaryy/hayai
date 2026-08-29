@@ -26,9 +26,12 @@ pub enum CommandAction {
 }
 
 #[derive(Clone, Debug)]
-pub struct CalculationDetail {
-    pub source_label: String,
-    pub target_label: String,
+pub enum CalculationDetail {
+    Timezones {
+        source_label: String,
+        target_label: String,
+    },
+    Note(String),
 }
 
 #[derive(Clone, Debug)]

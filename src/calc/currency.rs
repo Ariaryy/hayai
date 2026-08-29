@@ -53,6 +53,20 @@ fn is_known(code: &str) -> bool {
     KNOWN_CODES.contains(&code)
 }
 
+fn normalize_code(token: &str) -> Option<&str> {
+    match token {
+        "dollar" | "dollars" => Some("usd"),
+        "euro" | "euros" => Some("eur"),
+        "pound" | "pounds" | "sterling" => Some("gbp"),
+        "yen" => Some("jpy"),
+        "rupee" | "rupees" => Some("inr"),
+        "yuan" | "renminbi" => Some("cny"),
+        "won" => Some("krw"),
+        code if is_known(code) => Some(code),
+        _ => None,
+    }
+}
+
 struct FxSnapshot {
     rates: Option<HashMap<String, f64>>,
     as_of: Option<String>,
@@ -215,11 +229,11 @@ fn parse_tokens(input: &str) -> Option<(f64, String, String)> {
         return Some((amount, code.to_string(), to));
     }
     let (amount, from, to) = grammar::parse_conversion(input)?;
-    if is_known(&from) && is_known(&to) {
-        Some((amount, from, to))
-    } else {
-        None
-    }
+    Some((
+        amount,
+        normalize_code(&from)?.to_string(),
+        normalize_code(&to)?.to_string(),
+    ))
 }
 
 /// Parses the "$100 to eur" shape: a leading currency symbol attaches
@@ -261,7 +275,7 @@ fn parse_bare_amount(input: &str) -> Option<(f64, String)> {
         return None;
     }
     let code = code.to_lowercase();
-    is_known(&code).then_some((amount, code))
+    Some((amount, normalize_code(&code)?.to_string()))
 }
 
 /// Whether `input` is a bare currency amount (see `parse_bare_amount`) that
@@ -324,7 +338,11 @@ fn symbol_prefix(code: &str) -> Option<&'static str> {
 
 fn display_amount(code: &str, amount: f64) -> String {
     match symbol_prefix(code) {
-        Some(symbol) => format!("{symbol}{}", format_currency(amount)),
+        Some(symbol) => format!(
+            "{symbol}{} {}",
+            format_currency(amount),
+            code.to_uppercase()
+        ),
         None => format!("{} {}", format_currency(amount), code.to_uppercase()),
     }
 }
@@ -355,19 +373,15 @@ pub fn convert(input: &str, cache: &FxCache) -> Option<EvalResult> {
     })
 }
 
-pub(super) fn conversion_labels(input: &str, cache: &FxCache) -> Option<(String, String)> {
-    let (_, from, to) = parse_tokens(input).or_else(|| {
+pub(super) fn conversion_note(input: &str, cache: &FxCache) -> Option<String> {
+    let _ = parse_tokens(input).or_else(|| {
         let (amount, from) = parse_bare_amount(input)?;
         Some((amount, from, cache.default_target()?))
     })?;
-    let source = match cache
+    cache
         .as_of_label()
         .and_then(|date| compact_rate_date(&date))
-    {
-        Some(date) => format!("{} · rates {date}", from.to_ascii_uppercase()),
-        None => from.to_ascii_uppercase(),
-    };
-    Some((source, to.to_ascii_uppercase()))
+        .map(|date| format!("Rates · {date}"))
 }
 
 fn compact_rate_date(date: &str) -> Option<String> {
@@ -412,6 +426,8 @@ mod tests {
     #[test]
     fn recognizes_code_form() {
         assert!(recognizes("100 usd to inr"));
+        assert!(recognizes("1 yen to inr"));
+        assert!(recognizes("5 dollars to rupees"));
         assert!(!recognizes("100 km to inr"));
     }
 
@@ -422,37 +438,41 @@ mod tests {
 
     #[test]
     fn converts_with_cached_rates() {
-        let cache = cache_with_rates(&[("usd", 1.0), ("inr", 83.0)]);
+        let cache = cache_with_rates(&[("usd", 1.0), ("inr", 83.0), ("jpy", 150.0)]);
         let result = convert("100 usd to inr", &cache).unwrap();
-        assert_eq!(result.value, "₹8,300.00");
-        assert_eq!(result.expression, "$100.00");
+        assert_eq!(result.value, "₹8,300.00 INR");
+        assert_eq!(result.expression, "$100.00 USD");
         assert_eq!(
-            conversion_labels("100 usd to inr", &cache),
-            Some(("USD · rates 2026-01-01".into(), "INR".into()))
+            conversion_note("100 usd to inr", &cache),
+            Some("Rates · 2026-01-01".into())
         );
+
+        let yen = convert("1 yen to inr", &cache).unwrap();
+        assert_eq!(yen.expression, "¥1.00 JPY");
+        assert_eq!(yen.value, "₹0.55 INR");
     }
 
     #[test]
     fn converts_symbol_form() {
         let cache = cache_with_rates(&[("usd", 1.0), ("eur", 0.9)]);
         let result = convert("$100 to eur", &cache).unwrap();
-        assert_eq!(result.value, "€90.00");
+        assert_eq!(result.value, "€90.00 EUR");
     }
 
     #[test]
     fn converts_k_suffix_amount() {
         let cache = cache_with_rates(&[("usd", 1.0), ("inr", 83.0)]);
         let result = convert("5k usd to inr", &cache).unwrap();
-        assert_eq!(result.value, "₹415,000.00");
+        assert_eq!(result.value, "₹415,000.00 INR");
         let result = convert("$5k to inr", &cache).unwrap();
-        assert_eq!(result.value, "₹415,000.00");
+        assert_eq!(result.value, "₹415,000.00 INR");
     }
 
     #[test]
     fn converts_bare_amount_to_regional_default() {
         let cache = cache_with_rates_and_default(&[("usd", 1.0), ("inr", 83.0)], Some("inr"));
         let result = convert("$100", &cache).unwrap();
-        assert_eq!(result.value, "₹8,300.00");
+        assert_eq!(result.value, "₹8,300.00 INR");
     }
 
     #[test]
