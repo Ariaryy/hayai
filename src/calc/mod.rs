@@ -65,7 +65,23 @@ fn evaluate(input: &str, fx: &currency::FxCache) -> Option<EvalResult> {
     if let Some(result) = engine::evaluate(input, Some(fx)) {
         return Some(result);
     }
-    None
+    evaluate_incomplete_arithmetic(input, fx)
+}
+
+/// Keeps the previous valid arithmetic result visible while the user is in
+/// the middle of typing the next operation ("12 + 12 +"). Completed input
+/// still goes through the strict evaluators above; this fallback only trims
+/// a trailing run of operator characters and preserves the typed expression
+/// for display.
+fn evaluate_incomplete_arithmetic(input: &str, fx: &currency::FxCache) -> Option<EvalResult> {
+    let trimmed = input.trim_end();
+    let prefix = trimmed.trim_end_matches(['+', '-', '*', '/', '%', '^', '=', '<', '>', '&', '|']);
+    if prefix.len() == trimmed.len() || prefix.trim().is_empty() {
+        return None;
+    }
+    let mut result = engine::evaluate(prefix.trim_end(), Some(fx))?;
+    result.expression = trimmed.to_string();
+    Some(result)
 }
 
 /// Two-stage false-positive gate: a cheap first-character check declines
@@ -158,6 +174,7 @@ impl CommandProvider for CalcProvider {
             || bases::convert(trimmed).is_some()
             || time::convert(trimmed).is_some()
             || engine::evaluate(trimmed, Some(&self.fx)).is_some()
+            || evaluate_incomplete_arithmetic(trimmed, &self.fx).is_some()
     }
 
     fn search(&self, query: &str) -> Vec<CommandItem> {
@@ -279,6 +296,22 @@ mod tests {
         let items = provider.search("2+2");
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].title, "4");
+    }
+
+    #[test]
+    fn keeps_last_result_during_trailing_operator_input() {
+        let provider = CalcProvider::new();
+        for query in ["12 + 12 +", "12 + 12 -", "12 + 12 *", "12 + 12 /"] {
+            assert!(
+                provider.auto_claim(query),
+                "calculator did not claim {query}"
+            );
+            let items = provider.search(query);
+            assert_eq!(items.len(), 1, "missing preview for {query}");
+            assert_eq!(items[0].title, "24");
+            assert_eq!(items[0].subtitle.as_deref(), Some(query));
+        }
+        assert!(provider.search("+").is_empty());
     }
 
     #[test]
