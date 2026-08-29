@@ -161,10 +161,30 @@ fn format_expression_for_display(expression: &str) -> String {
                 "second" | "seconds" | "sec" | "secs" | "s" => Some(("second", "seconds")),
                 _ => None,
             };
-            let Some((one, many)) = canonical else {
-                return (*token).to_string();
-            };
-            format!("{}{punctuation}", if singular { one } else { many })
+            if let Some((one, many)) = canonical {
+                return format!("{}{punctuation}", if singular { one } else { many });
+            }
+
+            let adjacent_to_conversion = index
+                .checked_sub(1)
+                .and_then(|previous| tokens.get(previous))
+                .is_some_and(|token| {
+                    matches!(token.to_ascii_lowercase().as_str(), "to" | "in" | "as")
+                        || token.parse::<f64>().is_ok()
+                })
+                || tokens.get(index + 1).is_some_and(|token| {
+                    matches!(token.to_ascii_lowercase().as_str(), "to" | "in" | "as")
+                });
+            if normalized_token.len() == 3
+                && normalized_token
+                    .chars()
+                    .all(|character| character.is_ascii_alphabetic())
+                && adjacent_to_conversion
+            {
+                return format!("{}{punctuation}", normalized_token.to_ascii_uppercase());
+            }
+
+            (*token).to_string()
         })
         .collect::<Vec<_>>()
         .join(" ")

@@ -349,14 +349,40 @@ pub fn convert(input: &str, cache: &FxCache) -> Option<EvalResult> {
     let from_rate = cache.rate_for(&from)?;
     let to_rate = cache.rate_for(&to)?;
     let converted = amount / from_rate * to_rate;
-    let staleness = cache
-        .as_of_label()
-        .map(|date| format!(" (rates from {date})"))
-        .unwrap_or_default();
     Some(EvalResult {
-        expression: format!("{}{staleness}", display_amount(&from, amount)),
+        expression: display_amount(&from, amount),
         value: display_amount(&to, converted),
     })
+}
+
+pub(super) fn conversion_labels(input: &str, cache: &FxCache) -> Option<(String, String)> {
+    let (_, from, to) = parse_tokens(input).or_else(|| {
+        let (amount, from) = parse_bare_amount(input)?;
+        Some((amount, from, cache.default_target()?))
+    })?;
+    let source = match cache
+        .as_of_label()
+        .and_then(|date| compact_rate_date(&date))
+    {
+        Some(date) => format!("{} · rates {date}", from.to_ascii_uppercase()),
+        None => from.to_ascii_uppercase(),
+    };
+    Some((source, to.to_ascii_uppercase()))
+}
+
+fn compact_rate_date(date: &str) -> Option<String> {
+    if date.len() == 10
+        && date.as_bytes().get(4) == Some(&b'-')
+        && date.as_bytes().get(7) == Some(&b'-')
+    {
+        return Some(date.to_string());
+    }
+    let mut parts = date.split_whitespace();
+    let _weekday = parts.next()?;
+    let day = parts.next()?;
+    let month = parts.next()?;
+    let year = parts.next()?;
+    Some(format!("{day} {month} {year}"))
 }
 
 #[cfg(test)]
@@ -399,6 +425,11 @@ mod tests {
         let cache = cache_with_rates(&[("usd", 1.0), ("inr", 83.0)]);
         let result = convert("100 usd to inr", &cache).unwrap();
         assert_eq!(result.value, "₹8,300.00");
+        assert_eq!(result.expression, "$100.00");
+        assert_eq!(
+            conversion_labels("100 usd to inr", &cache),
+            Some(("USD · rates 2026-01-01".into(), "INR".into()))
+        );
     }
 
     #[test]

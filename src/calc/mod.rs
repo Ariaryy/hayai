@@ -99,9 +99,10 @@ fn is_candidate(input: &str) -> bool {
     })
 }
 
-fn result_item(query: &str, result: EvalResult) -> CommandItem {
-    let calculation_detail =
-        time::timezone_labels(query).map(|(source_label, target_label)| CalculationDetail {
+fn result_item(query: &str, result: EvalResult, fx: &currency::FxCache) -> CommandItem {
+    let calculation_detail = time::timezone_labels(query)
+        .or_else(|| currency::conversion_labels(query, fx))
+        .map(|(source_label, target_label)| CalculationDetail {
             source_label,
             target_label,
         });
@@ -153,7 +154,7 @@ impl CommandProvider for CalcProvider {
             return Vec::new();
         }
         match evaluate(trimmed, &self.fx) {
-            Some(result) => vec![result_item(trimmed, result)],
+            Some(result) => vec![result_item(trimmed, result, &self.fx)],
             None => Vec::new(),
         }
     }
@@ -168,7 +169,7 @@ impl CommandProvider for CalcProvider {
         Some(Box::new(move || {
             currency::fetch_blocking(&fx);
             match evaluate(&query, &fx) {
-                Some(result) => vec![result_item(&query, result)],
+                Some(result) => vec![result_item(&query, result, &fx)],
                 None => vec![CommandItem {
                     id: "calc:fx-error".into(),
                     title: "Couldn't fetch exchange rates".into(),
