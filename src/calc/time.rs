@@ -122,7 +122,7 @@ fn parse_timezone_difference(input: &str) -> Option<EvalResult> {
     if parse_leading_clock(input).is_some() {
         return None;
     }
-    let (from, to, from_offset, to_offset) = timezone_tokens(input)?;
+    let (from, _, from_offset, to_offset) = timezone_tokens(input)?;
     let difference = to_offset - from_offset;
     let value = if difference == 0 {
         "Same UTC offset".to_string()
@@ -141,7 +141,7 @@ fn parse_timezone_difference(input: &str) -> Option<EvalResult> {
         )
     };
     Some(EvalResult {
-        expression: format!("{} to {}", from.to_uppercase(), to.to_uppercase()),
+        expression: from.to_uppercase(),
         value,
     })
 }
@@ -491,9 +491,11 @@ mod tests {
     #[test]
     fn timezone_conversion_same_day() {
         let result = convert("9am est to pst").unwrap();
+        assert_eq!(result.expression, "9:00 AM EST");
         assert_eq!(result.value, "6:00 AM PST");
 
         let spaced = convert("12 pm ist to cst").unwrap();
+        assert_eq!(spaced.expression, "12:00 PM IST");
         assert_eq!(spaced.value, "12:30 AM CST");
         assert!(timezone_labels("12 pm ist to cst").is_some());
     }
@@ -514,7 +516,9 @@ mod tests {
 
     #[test]
     fn compares_timezone_offsets_without_a_clock() {
-        assert_eq!(convert("ist to cst").unwrap().value, "11 hr 30 min behind");
+        let result = convert("ist to cst").unwrap();
+        assert_eq!(result.expression, "IST");
+        assert_eq!(result.value, "11 hr 30 min behind");
         assert_eq!(convert("cst to ist").unwrap().value, "11 hr 30 min ahead");
         assert_eq!(convert("utc to gmt").unwrap().value, "Same UTC offset");
     }

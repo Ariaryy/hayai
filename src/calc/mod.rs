@@ -122,18 +122,10 @@ fn result_item(query: &str, result: EvalResult, fx: &currency::FxCache) -> Comma
                 },
             )
         });
-    let is_timezone = matches!(
-        calculation_detail,
-        Some(CalculationDetail::Timezones { .. })
-    );
     CommandItem {
         id: format!("calc:{query}"),
         title: result.value.clone(),
-        subtitle: Some(if is_timezone {
-            query.to_string()
-        } else {
-            result.expression
-        }),
+        subtitle: Some(result.expression),
         calculation_detail,
         icon: IconSource::None,
         action: CommandAction::CopyToClipboard(result.value),
