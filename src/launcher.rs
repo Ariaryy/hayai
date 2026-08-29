@@ -1684,6 +1684,8 @@ impl ResultRow {
                                     .when_some(note, |center, label| {
                                         center.child(
                                             div()
+                                                .relative()
+                                                .top(px(-4.0))
                                                 .text_xs()
                                                 .text_center()
                                                 .font_weight(FontWeight::MEDIUM)
