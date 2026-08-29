@@ -16,7 +16,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::EvalResult;
-use super::format::{format_currency, format_number};
+use super::format::format_currency;
 use super::grammar;
 use crate::native;
 
@@ -352,6 +352,15 @@ fn display_result(code: &str, amount: f64) -> String {
     }
 }
 
+fn display_source(code: &str, amount: f64) -> String {
+    let symbol = symbol_prefix(code);
+    let code = code.to_ascii_uppercase();
+    match symbol {
+        Some(symbol) => format!("{symbol}{} {code}", format_currency(amount)),
+        None => format!("{} {code}", format_currency(amount)),
+    }
+}
+
 fn currency_name(code: &str) -> &'static str {
     match code {
         "usd" => "US Dollar",
@@ -417,7 +426,7 @@ pub fn convert(input: &str, cache: &FxCache) -> Option<EvalResult> {
     let to_rate = cache.rate_for(&to)?;
     let converted = amount / from_rate * to_rate;
     Some(EvalResult {
-        expression: format!("{} {}", format_number(amount), from.to_ascii_uppercase()),
+        expression: display_source(&from, amount),
         value: display_result(&to, converted),
     })
 }
@@ -515,7 +524,7 @@ mod tests {
         let cache = cache_with_rates(&[("usd", 1.0), ("inr", 83.0), ("jpy", 150.0)]);
         let result = convert("100 usd to inr", &cache).unwrap();
         assert_eq!(result.value, "₹8,300.00");
-        assert_eq!(result.expression, "100 USD");
+        assert_eq!(result.expression, "$100.00 USD");
         assert_eq!(
             conversion_detail("100 usd to inr", &cache),
             Some((
@@ -526,11 +535,11 @@ mod tests {
         );
 
         let yen = convert("1 yen to inr", &cache).unwrap();
-        assert_eq!(yen.expression, "1 JPY");
+        assert_eq!(yen.expression, "¥1.00 JPY");
         assert_eq!(yen.value, "₹0.55");
 
         let rate = convert("usd to inr", &cache).unwrap();
-        assert_eq!(rate.expression, "1 USD");
+        assert_eq!(rate.expression, "$1.00 USD");
         assert_eq!(rate.value, "₹83.00");
         assert!(conversion_detail("usd to inr", &cache).is_some());
     }
