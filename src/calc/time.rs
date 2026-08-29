@@ -96,19 +96,51 @@ fn timezone_label(token: &str, offset: i32) -> String {
 
 fn timezone_tokens(input: &str) -> Option<(String, String, i32, i32)> {
     let input = input.trim();
-    let time_end = input.find(char::is_whitespace)?;
-    parse_clock(&input[..time_end])?;
-    let rest = input[time_end..].trim_start();
-    let tz_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-    let from_token = &rest[..tz_end];
+    let first_end = input.find(char::is_whitespace)?;
+    let first = &input[..first_end];
+    let rest = input[first_end..].trim_start();
+    let (from_token, keyword_and_target) = if parse_clock(first).is_some() {
+        let timezone_end = rest.find(char::is_whitespace)?;
+        (&rest[..timezone_end], rest[timezone_end..].trim_start())
+    } else {
+        (first, rest)
+    };
     let from_offset = find_offset(from_token)?;
-    let rest = rest[tz_end..].trim_start();
-    let (to_token, matched) = grammar::parse_keyword_then_target(rest);
+    let (to_token, matched) = grammar::parse_keyword_then_target(keyword_and_target);
     if !matched {
         return None;
     }
     let to_offset = find_offset(&to_token)?;
     Some((from_token.to_string(), to_token, from_offset, to_offset))
+}
+
+fn parse_timezone_difference(input: &str) -> Option<EvalResult> {
+    let first = input.split_whitespace().next()?;
+    if parse_clock(first).is_some() {
+        return None;
+    }
+    let (from, to, from_offset, to_offset) = timezone_tokens(input)?;
+    let difference = to_offset - from_offset;
+    let value = if difference == 0 {
+        "Same UTC offset".to_string()
+    } else {
+        let minutes = difference.abs();
+        let hours = minutes / 60;
+        let remaining_minutes = minutes % 60;
+        let amount = match (hours, remaining_minutes) {
+            (0, minutes) => format!("{minutes} min"),
+            (hours, 0) => format!("{hours} hr"),
+            (hours, minutes) => format!("{hours} hr {minutes} min"),
+        };
+        format!(
+            "{amount} {}",
+            if difference > 0 { "ahead" } else { "behind" }
+        )
+    };
+    Some(EvalResult {
+        expression: format!("{} to {}", from.to_uppercase(), to.to_uppercase()),
+        value,
+    })
 }
 
 pub fn timezone_labels(input: &str) -> Option<(String, String)> {
@@ -412,6 +444,7 @@ fn parse_date_arithmetic(input: &str) -> Option<EvalResult> {
 
 pub fn convert(input: &str) -> Option<EvalResult> {
     parse_clock_arithmetic(input)
+        .or_else(|| parse_timezone_difference(input))
         .or_else(|| parse_timezone_conversion(input))
         .or_else(|| parse_date_arithmetic(input))
 }
@@ -452,6 +485,17 @@ mod tests {
 
         let china = timezone_labels("12pm china to ist").unwrap();
         assert_eq!(china.0, "Asia/Shanghai · CST (GMT+8)");
+
+        let without_time = timezone_labels("ist to cst").unwrap();
+        assert_eq!(without_time.0, "Asia/Kolkata · IST (GMT+5:30)");
+        assert_eq!(without_time.1, "America/Chicago · CST (GMT-6)");
+    }
+
+    #[test]
+    fn compares_timezone_offsets_without_a_clock() {
+        assert_eq!(convert("ist to cst").unwrap().value, "11 hr 30 min behind");
+        assert_eq!(convert("cst to ist").unwrap().value, "11 hr 30 min ahead");
+        assert_eq!(convert("utc to gmt").unwrap().value, "Same UTC offset");
     }
 
     #[test]

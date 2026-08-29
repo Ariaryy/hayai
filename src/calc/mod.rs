@@ -92,6 +92,7 @@ fn is_candidate(input: &str) -> bool {
             || constant_expression
             || lower.starts_with("in ")
             || lower.starts_with("now ")
+            || (c.is_ascii_alphabetic() && lower.contains(" to "))
             || lower
                 .split_once('(')
                 .is_some_and(|(name, _)| name.chars().all(|c| c.is_ascii_alphabetic()))
@@ -225,6 +226,14 @@ mod tests {
         assert!(provider.auto_claim("15 mins from now"));
         assert!(provider.auto_claim("in 2 hours 30 minutes"));
         assert_eq!(provider.search("4pm + 30 min")[0].title, "4:30 PM");
+    }
+
+    #[test]
+    fn auto_claim_timezone_difference() {
+        let provider = CalcProvider::new();
+        assert!(provider.auto_claim("IST to CST"));
+        let result = provider.search("IST to CST");
+        assert_eq!(result[0].title, "11 hr 30 min behind");
     }
 
     #[test]
