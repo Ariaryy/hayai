@@ -164,6 +164,7 @@ mod tests {
                 id: "fake".into(),
                 title: query.to_string(),
                 subtitle: None,
+                calculation_detail: None,
                 icon: crate::commands::IconSource::None,
                 action: CommandAction::ShowText(query.to_string()),
             }]
@@ -203,6 +204,7 @@ mod tests {
                     id: "fake-debounced".into(),
                     title: query,
                     subtitle: None,
+                    calculation_detail: None,
                     icon: crate::commands::IconSource::None,
                     action: CommandAction::ShowText(String::new()),
                 }]

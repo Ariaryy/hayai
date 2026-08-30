@@ -3,25 +3,26 @@
 //! keyword routing — see `plugins::PluginRegistry::dispatch`), and stays
 //! reachable explicitly via the ` = ` keyword.
 //!
-//! Arithmetic and units are pure, synchronous, zero-dependency evaluation —
-//! always answered inline, never debounced. Currency needs a rate table
+//! Arithmetic and general unit expressions are evaluated synchronously by
+//! `fend-core` and always answered inline, never debounced. Currency needs a rate table
 //! fetched over the network; `CalcProvider` opts into the pipeline's
 //! existing debounce/background-job machinery (built for file search) but
 //! only actually uses it when a fetch is genuinely needed, so arithmetic
 //! and units stay instant.
 
-mod arithmetic;
 mod bases;
 mod currency;
+mod engine;
 mod format;
 mod grammar;
 mod time;
 mod units;
 
-use crate::commands::{BackgroundSearch, CommandAction, CommandItem, CommandProvider, IconSource};
+use crate::commands::{
+    BackgroundSearch, CalculationDetail, CommandAction, CommandItem, CommandProvider, IconSource,
+};
 
 pub struct EvalResult {
-    /// The human-readable question, shown small (e.g. "10 km", "100 USD").
     pub expression: String,
     /// The answer, shown large/bold — also what gets copied on Enter.
     pub value: String,
@@ -46,41 +47,102 @@ impl Default for CalcProvider {
 }
 
 fn evaluate(input: &str, fx: &currency::FxCache) -> Option<EvalResult> {
-    if let Some(result) = units::convert(input) {
-        return Some(result);
-    }
+    // These adapters provide OS-backed rates and wall-clock data, plus Hayai's
+    // established display conventions for common conversions. The general
+    // expression engine handles arithmetic and compositions of those values.
     if let Some(result) = currency::convert(input, fx) {
-        return Some(result);
-    }
-    if let Some(result) = bases::convert(input) {
         return Some(result);
     }
     if let Some(result) = time::convert(input) {
         return Some(result);
     }
-    if let Some(value) = arithmetic::eval(input) {
-        return Some(EvalResult {
-            expression: input.trim().to_string(),
-            value: format::format_number(value),
-        });
+    if let Some(result) = units::convert(input) {
+        return Some(result);
     }
-    None
+    if let Some(result) = bases::convert(input) {
+        return Some(result);
+    }
+    if let Some(result) = engine::evaluate(input, Some(fx)) {
+        return Some(result);
+    }
+    evaluate_incomplete_arithmetic(input, fx)
+}
+
+/// Keeps the previous valid arithmetic result visible while the user is in
+/// the middle of typing the next operation ("12 + 12 +"). Completed input
+/// still goes through the strict evaluators above; this fallback only trims
+/// a trailing run of operator characters and preserves the typed expression
+/// for display.
+fn evaluate_incomplete_arithmetic(input: &str, fx: &currency::FxCache) -> Option<EvalResult> {
+    let trimmed = input.trim_end();
+    let prefix = trimmed.trim_end_matches(['+', '-', '*', '/', '%', '^', '=', '<', '>', '&', '|']);
+    if prefix.len() == trimmed.len() || prefix.trim().is_empty() {
+        return None;
+    }
+    let mut result = engine::evaluate(prefix.trim_end(), Some(fx))?;
+    result.expression = trimmed.to_string();
+    Some(result)
 }
 
 /// Two-stage false-positive gate: a cheap first-character check declines
 /// non-candidates instantly (this runs on every keystroke across every
 /// provider), then each evaluator's own full parse decides for real.
 fn is_candidate(input: &str) -> bool {
+    let lower = input.to_ascii_lowercase();
+    let constant_expression = ["pi", "e", "tau"].iter().any(|constant| {
+        lower.strip_prefix(constant).is_some_and(|rest| {
+            !rest.is_empty()
+                && rest
+                    .chars()
+                    .any(|c| matches!(c, '+' | '-' | '*' | '/' | '%' | '^'))
+        })
+    });
     input.chars().next().is_some_and(|c| {
-        c.is_ascii_digit() || c == '(' || c == '.' || c == '-' || currency::is_symbol(c)
+        c.is_ascii_digit()
+            || c == '('
+            || c == '.'
+            || c == '-'
+            || c == '@'
+            || currency::is_symbol(c)
+            || matches!(lower.as_str(), "today" | "tomorrow" | "yesterday")
+            || constant_expression
+            || lower.starts_with("in ")
+            || lower.starts_with("now ")
+            || (c.is_ascii_alphabetic() && lower.contains(" to "))
+            || lower
+                .split_once('(')
+                .is_some_and(|(name, _)| name.chars().all(|c| c.is_ascii_alphabetic()))
     })
 }
 
-fn result_item(query: &str, result: EvalResult) -> CommandItem {
+fn result_item(query: &str, result: EvalResult, fx: &currency::FxCache) -> CommandItem {
+    let calculation_detail = units::conversion_detail(query, &result)
+        .map(|(source_label, target_label)| CalculationDetail::Units {
+            source_label,
+            target_label,
+        })
+        .or_else(|| {
+            time::timezone_labels(query).map(|(source_label, target_label)| {
+                CalculationDetail::Timezones {
+                    source_label,
+                    target_label,
+                }
+            })
+        })
+        .or_else(|| {
+            currency::conversion_detail(query, fx).map(
+                |(source_label, target_label, updated_label)| CalculationDetail::Currency {
+                    source_label,
+                    target_label,
+                    updated_label,
+                },
+            )
+        });
     CommandItem {
         id: format!("calc:{query}"),
         title: result.value.clone(),
         subtitle: Some(result.expression),
+        calculation_detail,
         icon: IconSource::None,
         action: CommandAction::CopyToClipboard(result.value),
     }
@@ -107,11 +169,12 @@ impl CommandProvider for CalcProvider {
         if trimmed.is_empty() || !is_candidate(trimmed) {
             return false;
         }
-        arithmetic::eval(trimmed).is_some()
-            || units::convert(trimmed).is_some()
+        units::convert(trimmed).is_some()
             || currency::recognizes_any(trimmed, &self.fx)
             || bases::convert(trimmed).is_some()
             || time::convert(trimmed).is_some()
+            || engine::evaluate(trimmed, Some(&self.fx)).is_some()
+            || evaluate_incomplete_arithmetic(trimmed, &self.fx).is_some()
     }
 
     fn search(&self, query: &str) -> Vec<CommandItem> {
@@ -120,7 +183,7 @@ impl CommandProvider for CalcProvider {
             return Vec::new();
         }
         match evaluate(trimmed, &self.fx) {
-            Some(result) => vec![result_item(trimmed, result)],
+            Some(result) => vec![result_item(trimmed, result, &self.fx)],
             None => Vec::new(),
         }
     }
@@ -135,11 +198,12 @@ impl CommandProvider for CalcProvider {
         Some(Box::new(move || {
             currency::fetch_blocking(&fx);
             match evaluate(&query, &fx) {
-                Some(result) => vec![result_item(&query, result)],
+                Some(result) => vec![result_item(&query, result, &fx)],
                 None => vec![CommandItem {
                     id: "calc:fx-error".into(),
                     title: "Couldn't fetch exchange rates".into(),
                     subtitle: Some("Check your internet connection and try again".into()),
+                    calculation_detail: None,
                     icon: IconSource::None,
                     action: CommandAction::ShowText(String::new()),
                 }],
@@ -156,14 +220,34 @@ mod tests {
     fn auto_claim_arithmetic() {
         let provider = CalcProvider::new();
         assert!(provider.auto_claim("2+2*3"));
-        assert!(!provider.auto_claim("7"));
+        assert!(provider.auto_claim("7"));
         assert!(!provider.auto_claim("1password"));
+        assert!(!provider.auto_claim("e"));
+        assert!(!provider.auto_claim("pi"));
+        assert!(!provider.auto_claim("tau"));
+        assert!(provider.auto_claim("e^2"));
+        assert!(provider.auto_claim("pi * 2"));
     }
 
     #[test]
     fn auto_claim_units() {
         let provider = CalcProvider::new();
         assert!(provider.auto_claim("10 km in miles"));
+        assert!(provider.auto_claim("1pm to m"));
+        let picometers = provider.search("1pm to m");
+        assert_eq!(picometers[0].subtitle.as_deref(), Some("1 pm"));
+        assert!(matches!(
+            picometers[0].calculation_detail,
+            Some(CalculationDetail::Units { .. })
+        ));
+        let light = provider.search("1 c");
+        assert!(
+            matches!(
+                light[0].calculation_detail,
+                Some(CalculationDetail::Units { .. })
+            ),
+            "unexpected light-speed result: {light:?}"
+        );
         assert!(!provider.auto_claim("10 km in kg"));
     }
 
@@ -179,6 +263,23 @@ mod tests {
         assert!(provider.auto_claim("0x1A to decimal"));
         assert!(provider.auto_claim("26 to hex"));
         assert!(!provider.auto_claim("26 to miles")); // "miles" isn't a recognized base name
+    }
+
+    #[test]
+    fn auto_claim_relative_time() {
+        let provider = CalcProvider::new();
+        assert!(provider.auto_claim("15 mins from now"));
+        assert!(provider.auto_claim("in 2 hours 30 minutes"));
+        assert_eq!(provider.search("4pm + 30 min")[0].title, "4:30 PM");
+    }
+
+    #[test]
+    fn auto_claim_timezone_difference() {
+        let provider = CalcProvider::new();
+        assert!(provider.auto_claim("IST to CST"));
+        assert!(provider.auto_claim("12pm UTC"));
+        let result = provider.search("IST to CST");
+        assert_eq!(result[0].title, "11 hr 30 min behind");
     }
 
     #[test]
@@ -198,8 +299,24 @@ mod tests {
     }
 
     #[test]
-    fn search_declines_bare_number() {
+    fn keeps_last_result_during_trailing_operator_input() {
         let provider = CalcProvider::new();
-        assert!(provider.search("7").is_empty());
+        for query in ["12 + 12 +", "12 + 12 -", "12 + 12 *", "12 + 12 /"] {
+            assert!(
+                provider.auto_claim(query),
+                "calculator did not claim {query}"
+            );
+            let items = provider.search(query);
+            assert_eq!(items.len(), 1, "missing preview for {query}");
+            assert_eq!(items[0].title, "24");
+            assert_eq!(items[0].subtitle.as_deref(), Some(query));
+        }
+        assert!(provider.search("+").is_empty());
+    }
+
+    #[test]
+    fn search_accepts_bare_number() {
+        let provider = CalcProvider::new();
+        assert_eq!(provider.search("7")[0].title, "7");
     }
 }

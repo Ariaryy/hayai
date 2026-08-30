@@ -7,9 +7,9 @@ use std::time::Duration;
 use gpui::prelude::*;
 use gpui::{
     AnyElement, AnyWindowHandle, App, Bounds, Context, Entity, FocusHandle, Focusable, FontWeight,
-    Half, IntoElement, MouseButton, RenderImage, SharedString, Subscription, Task, Window,
-    WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, div, img, px, relative,
-    size,
+    Half, HighlightStyle, IntoElement, MouseButton, RenderImage, SharedString, StyledText,
+    Subscription, Task, Window, WindowBackgroundAppearance, WindowBounds, WindowKind,
+    WindowOptions, div, img, px, relative, size,
 };
 use gpui_component::{
     ActiveTheme, IndexPath, Root, Selectable, Sizable, Size, h_flex,
@@ -18,12 +18,220 @@ use gpui_component::{
 };
 
 use crate::apps::{Catalog, CatalogGlobal, IconRequest};
-use crate::commands::{CommandAction, CommandItem, IconSource};
+use crate::commands::{CalculationDetail, CommandAction, CommandItem, IconSource};
 use crate::native;
 use crate::plugins::PluginRegistry;
 
 const LAUNCHER_WIDTH: f32 = 720.0;
 const LAUNCHER_HEIGHT: f32 = 400.0;
+
+fn format_expression_for_display(expression: &str) -> String {
+    const SUPERSCRIPT_DIGITS: [char; 10] = ['⁰', '¹', '²', '³', '⁴', '⁵', '⁶', '⁷', '⁸', '⁹'];
+
+    let mut superscripted = String::with_capacity(expression.len());
+    let mut characters = expression.chars().peekable();
+    while let Some(character) = characters.next() {
+        if character != '^' {
+            superscripted.push(character);
+            continue;
+        }
+
+        let mut exponent = String::new();
+        if characters.peek() == Some(&'-') {
+            characters.next();
+            exponent.push('⁻');
+        }
+        while let Some(digit) = characters.peek().and_then(|next| next.to_digit(10)) {
+            characters.next();
+            exponent.push(SUPERSCRIPT_DIGITS[digit as usize]);
+        }
+
+        if exponent.is_empty() || exponent == "⁻" {
+            superscripted.push('^');
+            if exponent == "⁻" {
+                superscripted.push('-');
+            }
+        } else {
+            superscripted.push_str(&exponent);
+        }
+    }
+
+    let mut formatted = String::with_capacity(superscripted.len());
+    let mut characters = superscripted.chars().peekable();
+    while let Some(character) = characters.next() {
+        if !matches!(character, '+' | '-' | '*' | '/' | '%' | '=') {
+            formatted.push(character);
+            continue;
+        }
+
+        let previous = formatted
+            .chars()
+            .rev()
+            .find(|character| !character.is_whitespace());
+        let next = characters
+            .clone()
+            .find(|character| !character.is_whitespace());
+        let is_binary = previous.is_some_and(|previous| {
+            !matches!(previous, '+' | '-' | '*' | '/' | '%' | '=' | '(' | '^')
+        }) && next.is_some();
+
+        if is_binary {
+            while formatted.ends_with(char::is_whitespace) {
+                formatted.pop();
+            }
+            formatted.push(' ');
+            formatted.push(character);
+            formatted.push(' ');
+            while characters.peek().is_some_and(|next| next.is_whitespace()) {
+                characters.next();
+            }
+        } else {
+            formatted.push(character);
+        }
+    }
+    let tokens = formatted.split_whitespace().collect::<Vec<_>>();
+    tokens
+        .iter()
+        .enumerate()
+        .map(|(index, token)| {
+            let bare_token = token.trim_end_matches([',', '.']);
+            let normalized_token = bare_token.to_ascii_lowercase();
+            let punctuation = &token[bare_token.len()..];
+            let follows_clock = index > 0 && tokens[index - 1].contains(':');
+            let precedes_timezone = tokens.get(index + 1).is_some_and(|next| {
+                matches!(
+                    next.to_ascii_lowercase().as_str(),
+                    "utc"
+                        | "gmt"
+                        | "est"
+                        | "edt"
+                        | "cst"
+                        | "cdt"
+                        | "mst"
+                        | "mdt"
+                        | "pst"
+                        | "pdt"
+                        | "ist"
+                        | "jst"
+                        | "kst"
+                )
+            });
+            if (follows_clock || precedes_timezone)
+                && matches!(normalized_token.as_str(), "am" | "pm")
+            {
+                return format!("{}{punctuation}", normalized_token.to_ascii_uppercase());
+            }
+            if let Some((clock, meridiem)) = normalized_token
+                .strip_suffix("am")
+                .map(|clock| (clock, "AM"))
+                .or_else(|| {
+                    normalized_token
+                        .strip_suffix("pm")
+                        .map(|clock| (clock, "PM"))
+                })
+                && !clock.is_empty()
+                && clock
+                    .chars()
+                    .all(|character| character.is_ascii_digit() || character == ':')
+            {
+                return format!("{clock} {meridiem}{punctuation}");
+            }
+            if matches!(
+                normalized_token.as_str(),
+                "utc"
+                    | "gmt"
+                    | "bst"
+                    | "cet"
+                    | "cest"
+                    | "eet"
+                    | "msk"
+                    | "est"
+                    | "edt"
+                    | "cst"
+                    | "cdt"
+                    | "mst"
+                    | "mdt"
+                    | "pst"
+                    | "pdt"
+                    | "gst"
+                    | "ist"
+                    | "sgt"
+                    | "jst"
+                    | "kst"
+                    | "aest"
+                    | "aedt"
+                    | "nzst"
+            ) {
+                return format!("{}{punctuation}", normalized_token.to_ascii_uppercase());
+            }
+
+            let amount = index
+                .checked_sub(1)
+                .and_then(|previous| tokens[previous].parse::<f64>().ok());
+            let canonical = match normalized_token.as_str() {
+                "year" | "years" | "yr" | "yrs" => Some(("year", "years")),
+                "month" | "months" | "mo" => Some(("month", "months")),
+                "week" | "weeks" | "wk" | "wks" => Some(("week", "weeks")),
+                "day" | "days" | "d" => Some(("day", "days")),
+                "hour" | "hours" | "hr" | "hrs" | "h" => Some(("hour", "hours")),
+                "minute" | "minutes" | "min" | "mins" => Some(("minute", "minutes")),
+                "second" | "seconds" | "sec" | "secs" | "s" => Some(("second", "seconds")),
+                _ => None,
+            };
+            if let (Some(amount), Some((one, many))) = (amount, canonical) {
+                let singular = (amount.abs() - 1.0).abs() < f64::EPSILON;
+                return format!("{}{punctuation}", if singular { one } else { many });
+            }
+
+            let adjacent_to_conversion = index
+                .checked_sub(1)
+                .and_then(|previous| tokens.get(previous))
+                .is_some_and(|token| {
+                    matches!(token.to_ascii_lowercase().as_str(), "to" | "in" | "as")
+                        || token.parse::<f64>().is_ok()
+                })
+                || tokens.get(index + 1).is_some_and(|token| {
+                    matches!(token.to_ascii_lowercase().as_str(), "to" | "in" | "as")
+                });
+            if normalized_token.len() == 3
+                && normalized_token
+                    .chars()
+                    .all(|character| character.is_ascii_alphabetic())
+                && adjacent_to_conversion
+            {
+                return format!("{}{punctuation}", normalized_token.to_ascii_uppercase());
+            }
+
+            (*token).to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn format_result_for_display(result: &str) -> String {
+    let mut formatted = format_expression_for_display(result);
+    let mut clock_positions = [" AM", " PM"]
+        .into_iter()
+        .flat_map(|suffix| formatted.match_indices(suffix).map(|(index, _)| index))
+        .filter_map(|meridiem_space| {
+            let clock = formatted[..meridiem_space].split_whitespace().next_back()?;
+            let (hour, minute) = clock.split_once(':')?;
+            (hour.parse::<u8>().is_ok() && minute.parse::<u8>().is_ok()).then(|| {
+                let clock_start = formatted[..meridiem_space].rfind(clock).unwrap_or(0);
+                (meridiem_space, clock_start)
+            })
+        })
+        .collect::<Vec<_>>();
+    clock_positions.sort_unstable_by_key(|position| std::cmp::Reverse(position.0));
+
+    for (meridiem_space, clock_start) in clock_positions {
+        if clock_start > 0 && formatted[..clock_start].trim_end().ends_with(',') {
+            formatted.replace_range(clock_start - 1..clock_start, "\n");
+        }
+        formatted.replace_range(meridiem_space..meridiem_space + 1, "\u{00a0}");
+    }
+    formatted
+}
 
 /// Run a query through the delegate, then reset `ListState`'s own selection
 /// to the first row. `ListState::render_list_item` reads its *own*
@@ -1120,6 +1328,7 @@ impl ListDelegate for ResultListDelegate {
             ix,
             item.title,
             item.subtitle,
+            item.calculation_detail,
             icon,
             selected,
             calculator,
@@ -1225,6 +1434,7 @@ struct ResultRow {
     base: ListItem,
     title: SharedString,
     subtitle: Option<SharedString>,
+    calculation_detail: Option<CalculationDetail>,
     icon: Option<Arc<RenderImage>>,
     selected: bool,
     /// Calculator results (see `ResultListDelegate::render_item`) render as
@@ -1238,6 +1448,7 @@ impl ResultRow {
         id: IndexPath,
         title: String,
         subtitle: Option<String>,
+        calculation_detail: Option<CalculationDetail>,
         icon: Option<Arc<RenderImage>>,
         selected: bool,
         calculator: bool,
@@ -1246,6 +1457,7 @@ impl ResultRow {
             base: ListItem::new(id).selected(selected),
             title: title.into(),
             subtitle: subtitle.map(Into::into),
+            calculation_detail,
             icon,
             selected,
             calculator,
@@ -1280,16 +1492,28 @@ impl gpui::RenderOnce for ResultRow {
             base,
             title,
             subtitle,
+            calculation_detail,
             icon,
             selected: _,
             calculator,
         } = self;
         let content: AnyElement = if calculator {
-            ResultRow::render_calculator(title, subtitle, cx)
+            ResultRow::render_calculator(title, subtitle, calculation_detail, cx)
         } else {
             ResultRow::render_plain(title, subtitle, icon, cx)
         };
-        base.py_1p5().rounded(cx.theme().radius).child(content)
+        if calculator {
+            // Calculator results are presentation cards rather than hoverable list rows.
+            // Disabling the wrapper suppresses ListItem's built-in hover fill; the card
+            // supplies all of its own text colors, so the disabled text style cannot leak in.
+            base.selected(false)
+                .disabled(true)
+                .px_0()
+                .py_1()
+                .child(content)
+        } else {
+            base.py_1p5().rounded(cx.theme().radius).child(content)
+        }
     }
 }
 
@@ -1336,58 +1560,260 @@ impl ResultRow {
     fn render_calculator(
         title: SharedString,
         subtitle: Option<SharedString>,
+        calculation_detail: Option<CalculationDetail>,
         cx: &mut App,
     ) -> AnyElement {
-        h_flex()
-            .items_center()
-            .justify_between()
-            .gap_3()
+        let conversion_color = cx.theme().muted_foreground;
+        let title = SharedString::from(format_result_for_display(&title));
+        let (source_label, target_label, note) = match calculation_detail {
+            Some(CalculationDetail::Units {
+                source_label,
+                target_label,
+            }) => (
+                Some(SharedString::from(source_label)),
+                Some(SharedString::from(target_label)),
+                None,
+            ),
+            Some(CalculationDetail::Timezones {
+                source_label,
+                target_label,
+            }) => (
+                Some(SharedString::from(source_label)),
+                Some(SharedString::from(target_label)),
+                None,
+            ),
+            Some(CalculationDetail::Currency {
+                source_label,
+                target_label,
+                updated_label,
+            }) => (
+                Some(SharedString::from(source_label)),
+                Some(SharedString::from(target_label)),
+                Some(SharedString::from(updated_label)),
+            ),
+            None => (None, None, None),
+        };
+        let center_width = if note.is_some() { 176.0 } else { 44.0 };
+        let zone_chip = |label: SharedString, cx: &App| {
+            div()
+                .mt_1()
+                .px_2()
+                .py_0p5()
+                .rounded(cx.theme().radius)
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().tokens.secondary)
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(label)
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .gap_1()
             .w_full()
             .child(
-                h_flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        div()
-                            .w(px(22.0))
-                            .h(px(22.0))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(cx.theme().radius)
-                            .bg(cx.theme().accent)
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("="),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .child("Calculator"),
-                            )
-                            .when_some(subtitle, |col, subtitle| {
-                                col.child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(subtitle),
-                                )
-                            }),
-                    ),
+                div()
+                    .px_1()
+                    .text_xs()
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Calculator"),
             )
             .child(
                 div()
-                    .text_lg()
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(cx.theme().foreground)
-                    .child(title),
+                    .flex()
+                    .flex_col()
+                    .w_full()
+                    .min_h(px(96.0))
+                    .rounded(cx.theme().radius)
+                    .bg(cx.theme().list_active)
+                    .child(
+                        h_flex()
+                            .items_stretch()
+                            .w_full()
+                            .flex_1()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .justify_center()
+                                    .px_2()
+                                    .when_some(subtitle, |col, expression| {
+                                        let expression = format_expression_for_display(&expression);
+                                        let mut search_start = 0;
+                                        let highlights = expression
+                                            .split_whitespace()
+                                            .filter_map(|word| {
+                                                let offset = expression[search_start..]
+                                                    .find(word)?
+                                                    + search_start;
+                                                search_start = offset + word.len();
+                                                let connector = word
+                                                    .trim_matches(|character: char| {
+                                                        !character.is_alphabetic()
+                                                    })
+                                                    .to_ascii_lowercase();
+
+                                                matches!(
+                                                    connector.as_str(),
+                                                    "to" | "in"
+                                                        | "as"
+                                                        | "from"
+                                                        | "into"
+                                                        | "after"
+                                                        | "before"
+                                                )
+                                                .then(|| {
+                                                    (
+                                                        offset..offset + word.len(),
+                                                        HighlightStyle::color(conversion_color),
+                                                    )
+                                                })
+                                            })
+                                            .collect::<Vec<_>>();
+
+                                        col.child(
+                                            div()
+                                                .text_xl()
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_color(cx.theme().foreground)
+                                                .child(
+                                                    StyledText::new(expression)
+                                                        .with_highlights(highlights),
+                                                ),
+                                        )
+                                    })
+                                    .when_some(source_label, |col, label| {
+                                        col.child(zone_chip(label, cx))
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .w(px(center_width))
+                                    .self_stretch()
+                                    .flex_none()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(div().w(px(1.0)).flex_1().bg(conversion_color))
+                                    .child(
+                                        div()
+                                            .px_1()
+                                            .text_lg()
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(conversion_color)
+                                            .child("→"),
+                                    )
+                                    .when_some(note, |center, label| {
+                                        center.child(
+                                            div()
+                                                .relative()
+                                                .top(px(-7.0))
+                                                .text_xs()
+                                                .text_center()
+                                                .font_weight(FontWeight::MEDIUM)
+                                                .text_color(conversion_color)
+                                                .child(label),
+                                        )
+                                    })
+                                    .child(div().w(px(1.0)).flex_1().bg(conversion_color)),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .flex()
+                                    .flex_col()
+                                    .items_center()
+                                    .justify_center()
+                                    .px_2()
+                                    .child(
+                                        div()
+                                            .text_xl()
+                                            .text_center()
+                                            .font_weight(FontWeight::BOLD)
+                                            .text_color(cx.theme().foreground)
+                                            .child(title),
+                                    )
+                                    .when_some(target_label, |col, label| {
+                                        col.child(zone_chip(label, cx))
+                                    }),
+                            ),
+                    ),
             )
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{format_expression_for_display, format_result_for_display};
+
+    #[test]
+    fn displays_numeric_exponents_as_superscripts() {
+        assert_eq!(format_expression_for_display("43560 ft^2"), "43560 ft²");
+        assert_eq!(format_expression_for_display("m^-12"), "m⁻¹²");
+        assert_eq!(format_expression_for_display("2^x"), "2^x");
+    }
+
+    #[test]
+    fn spaces_binary_operators_without_splitting_unary_signs() {
+        assert_eq!(format_expression_for_display("12 -2"), "12 - 2");
+        assert_eq!(format_expression_for_display("12+2* 3"), "12 + 2 * 3");
+        assert_eq!(format_expression_for_display("5*-2"), "5 * -2");
+        assert_eq!(format_expression_for_display("-12/3"), "-12 / 3");
+    }
+
+    #[test]
+    fn expands_and_pluralizes_duration_units() {
+        assert_eq!(
+            format_expression_for_display("12 hr from now"),
+            "12 hours from now"
+        );
+        assert_eq!(
+            format_expression_for_display("12 hrs from now"),
+            "12 hours from now"
+        );
+        assert_eq!(format_expression_for_display("1 hrs ago"), "1 hour ago");
+        assert_eq!(
+            format_expression_for_display("in 2 wk 1 d"),
+            "in 2 weeks 1 day"
+        );
+    }
+
+    #[test]
+    fn keeps_clock_and_meridiem_on_the_same_line() {
+        assert_eq!(
+            format_result_for_display("Sunday, August 30, 2026, 2:35 AM"),
+            "Sunday, August 30, 2026,\n2:35\u{00a0}AM"
+        );
+        assert_eq!(
+            format_result_for_display("9:05 PM IST"),
+            "9:05\u{00a0}PM IST"
+        );
+    }
+
+    #[test]
+    fn displays_timezone_abbreviations_in_uppercase() {
+        assert_eq!(
+            format_expression_for_display("12pm ist to cst"),
+            "12 PM IST to CST"
+        );
+        assert_eq!(
+            format_expression_for_display("12 pm ist to cst"),
+            "12 PM IST to CST"
+        );
+        assert_eq!(format_expression_for_display("utc to jst"), "UTC to JST");
+        assert_eq!(format_expression_for_display("1 pm"), "1 pm");
+        assert_eq!(
+            format_expression_for_display("1 usd to inr"),
+            "1 USD to INR"
+        );
     }
 }

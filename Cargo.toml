@@ -16,6 +16,10 @@ gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee3
 ] }
 gpui-component = { git = "https://github.com/longbridge/gpui-component" }
 anyhow = "1"
+# The calculator's expression and unit engine. It has no third-party
+# dependencies and replaces several partial parsers that each understood a
+# different slice of calculator syntax.
+fend-core = "1.5.8"
 # Only the mpsc channel + StreamExt are used, to wake the GPUI side when the
 # native thread sends a command (replaces a 40ms poll loop). Already in the
 # dependency tree via gpui, so this adds no new compiled code.
@@ -47,6 +51,7 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_LibraryLoader",
     "Win32_System_Memory",
     "Win32_System_SystemInformation",
+    "Win32_System_Time",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",

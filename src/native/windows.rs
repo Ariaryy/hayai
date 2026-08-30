@@ -1008,8 +1008,8 @@ unsafe fn hicon_to_bgra(
         // Some icons come back with a fully-zero alpha channel (they relied on
         // the mask bitmap for transparency). Treat that as fully opaque so the
         // icon isn't rendered invisible.
-        if pixels.chunks_exact(4).all(|px| px[3] == 0) {
-            for px in pixels.chunks_exact_mut(4) {
+        if pixels.as_chunks::<4>().0.iter().all(|px| px[3] == 0) {
+            for px in pixels.as_chunks_mut::<4>().0 {
                 px[3] = 255;
             }
         }
@@ -1329,6 +1329,109 @@ pub fn system_currency_code() -> Option<String> {
             .to_lowercase();
         if code.is_empty() { None } else { Some(code) }
     }
+}
+
+/// Returns Windows' canonical name for the configured local timezone (for
+/// example, "India Standard Time") without loading a timezone database.
+pub fn system_timezone_name() -> Option<String> {
+    use windows_sys::Win32::System::Time::{
+        DYNAMIC_TIME_ZONE_INFORMATION, GetDynamicTimeZoneInformation,
+    };
+
+    let mut info = DYNAMIC_TIME_ZONE_INFORMATION::default();
+    let status = unsafe { GetDynamicTimeZoneInformation(&mut info) };
+    if status == u32::MAX {
+        return None;
+    }
+    let name = if info.TimeZoneKeyName[0] != 0 {
+        &info.TimeZoneKeyName[..]
+    } else {
+        &info.StandardName[..]
+    };
+    let len = name.iter().position(|character| *character == 0)?;
+    String::from_utf16(&name[..len]).ok()
+}
+
+fn dynamic_timezone(
+    key_name: &str,
+) -> Option<windows_sys::Win32::System::Time::DYNAMIC_TIME_ZONE_INFORMATION> {
+    use windows_sys::Win32::System::Time::{
+        DYNAMIC_TIME_ZONE_INFORMATION, EnumDynamicTimeZoneInformation,
+    };
+
+    for index in 0.. {
+        let mut info = DYNAMIC_TIME_ZONE_INFORMATION::default();
+        let status = unsafe { EnumDynamicTimeZoneInformation(index, &mut info) };
+        if status == 259 {
+            return None; // ERROR_NO_MORE_ITEMS
+        }
+        if status != 0 {
+            // Any other Win32 error is persistent for this call. Fail the
+            // lookup instead of spinning on the launcher input path.
+            return None;
+        }
+        let len = info
+            .TimeZoneKeyName
+            .iter()
+            .position(|character| *character == 0)
+            .unwrap_or(info.TimeZoneKeyName.len());
+        let candidate = String::from_utf16_lossy(&info.TimeZoneKeyName[..len]);
+        if candidate.eq_ignore_ascii_case(key_name) {
+            return Some(info);
+        }
+    }
+    None
+}
+
+fn system_time(date_time: (i32, u32, u32, u32, u32)) -> windows_sys::Win32::Foundation::SYSTEMTIME {
+    windows_sys::Win32::Foundation::SYSTEMTIME {
+        wYear: date_time.0.try_into().ok().unwrap_or_default(),
+        wMonth: date_time.1.try_into().ok().unwrap_or_default(),
+        wDayOfWeek: 0,
+        wDay: date_time.2.try_into().ok().unwrap_or_default(),
+        wHour: date_time.3.try_into().ok().unwrap_or_default(),
+        wMinute: date_time.4.try_into().ok().unwrap_or_default(),
+        wSecond: 0,
+        wMilliseconds: 0,
+    }
+}
+
+fn date_time(time: windows_sys::Win32::Foundation::SYSTEMTIME) -> (i32, u32, u32, u32, u32) {
+    (
+        time.wYear.into(),
+        time.wMonth.into(),
+        time.wDay.into(),
+        time.wHour.into(),
+        time.wMinute.into(),
+    )
+}
+
+pub fn timezone_local_to_utc(
+    key_name: &str,
+    local: (i32, u32, u32, u32, u32),
+) -> Option<(i32, u32, u32, u32, u32)> {
+    use windows_sys::Win32::Foundation::SYSTEMTIME;
+    use windows_sys::Win32::System::Time::TzSpecificLocalTimeToSystemTimeEx;
+
+    let timezone = dynamic_timezone(key_name)?;
+    let local = system_time(local);
+    let mut utc = SYSTEMTIME::default();
+    (unsafe { TzSpecificLocalTimeToSystemTimeEx(&timezone, &local, &mut utc) } != 0)
+        .then(|| date_time(utc))
+}
+
+pub fn timezone_utc_to_local(
+    key_name: &str,
+    utc: (i32, u32, u32, u32, u32),
+) -> Option<(i32, u32, u32, u32, u32)> {
+    use windows_sys::Win32::Foundation::SYSTEMTIME;
+    use windows_sys::Win32::System::Time::SystemTimeToTzSpecificLocalTimeEx;
+
+    let timezone = dynamic_timezone(key_name)?;
+    let utc = system_time(utc);
+    let mut local = SYSTEMTIME::default();
+    (unsafe { SystemTimeToTzSpecificLocalTimeEx(&timezone, &utc, &mut local) } != 0)
+        .then(|| date_time(local))
 }
 
 /// The user's current local wall-clock time (year, month, day, hour,

@@ -400,6 +400,7 @@ impl CommandProvider for AppsProvider {
                     id: format!("app:{}", app.path().display()),
                     title: app.name.clone(),
                     subtitle: None,
+                    calculation_detail: None,
                     icon: IconSource::Path(app.path().to_path_buf()),
                     action: CommandAction::LaunchApplication(app.path().to_path_buf()),
                 })

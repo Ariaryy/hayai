@@ -21,7 +21,8 @@ mod windows;
 pub use windows::{
     NativeRuntime, extract_icon_rgba, focus_launcher_window, hide_launcher_window, https_get,
     install_scry_daemon, launch_path, launch_path_as_admin, list_apps_folder, local_now,
-    scry_query, system_currency_code,
+    scry_query, system_currency_code, system_timezone_name, timezone_local_to_utc,
+    timezone_utc_to_local,
 };
 
 #[cfg(not(windows))]
@@ -87,6 +88,27 @@ pub fn https_get(_host: &str, _path: &str) -> Option<String> {
 
 #[cfg(not(windows))]
 pub fn system_currency_code() -> Option<String> {
+    None
+}
+
+#[cfg(not(windows))]
+pub fn system_timezone_name() -> Option<String> {
+    None
+}
+
+#[cfg(not(windows))]
+pub fn timezone_local_to_utc(
+    _key_name: &str,
+    _date_time: (i32, u32, u32, u32, u32),
+) -> Option<(i32, u32, u32, u32, u32)> {
+    None
+}
+
+#[cfg(not(windows))]
+pub fn timezone_utc_to_local(
+    _key_name: &str,
+    _date_time: (i32, u32, u32, u32, u32),
+) -> Option<(i32, u32, u32, u32, u32)> {
     None
 }
 

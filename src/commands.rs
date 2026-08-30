@@ -26,12 +26,30 @@ pub enum CommandAction {
 }
 
 #[derive(Clone, Debug)]
+pub enum CalculationDetail {
+    Units {
+        source_label: String,
+        target_label: String,
+    },
+    Timezones {
+        source_label: String,
+        target_label: String,
+    },
+    Currency {
+        source_label: String,
+        target_label: String,
+        updated_label: String,
+    },
+}
+
+#[derive(Clone, Debug)]
 pub struct CommandItem {
     // Unused until a provider needs stable IDs (e.g. dedup, action follow-up).
     #[allow(dead_code)]
     pub id: String,
     pub title: String,
     pub subtitle: Option<String>,
+    pub calculation_detail: Option<CalculationDetail>,
     pub icon: IconSource,
     pub action: CommandAction,
 }
