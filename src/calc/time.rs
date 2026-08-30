@@ -5,10 +5,9 @@
 //! `days_from_civil`/`civil_from_days` algorithms (public domain,
 //! well-known — see http://howardhinnant.github.io/date_algorithms.html),
 //! and "now" comes from `native::local_now` (OS local wall-clock time, so
-//! DST is already baked in for the *current* date). Timezone conversion
-//! uses a small fixed UTC-offset table below — not DST-aware, since that
-//! would need a real IANA tz database, which this project deliberately
-//! avoids pulling in as a dependency.
+//! DST is already baked in for the *current* date). Explicit abbreviations
+//! use fixed offsets (`CST` always means GMT-6); named cities use Windows'
+//! timezone rules for the requested date, avoiding a bundled timezone database.
 
 use super::EvalResult;
 use super::grammar;
@@ -16,44 +15,199 @@ use crate::native;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const SYSTEM_TIMEZONE: &str = "__system_timezone";
+type CivilDateTime = (i32, u32, u32, u32, u32);
 
-/// Recognized timezone/city tokens (lowercase) mapped to a fixed UTC offset
-/// in minutes. Bare `cst` and `ist` retain their established North American
-/// Central and India meanings; result metadata always exposes that choice.
-/// China is available through `china`, `beijing`, `shanghai`, or `cst_asia`.
+/// Explicit timezone abbreviations mapped to fixed UTC offsets in minutes.
+/// City aliases are deliberately separate below because Windows applies
+/// daylight-saving rules to them for the requested date.
 const TIMEZONES: &[(&[&str], i32)] = &[
-    (&["utc", "gmt", "london"], 0),
+    (&["utc", "gmt"], 0),
     (&["bst"], 60),
-    (
-        &["cet", "paris", "berlin", "madrid", "rome", "amsterdam"],
-        60,
-    ),
+    (&["cet"], 60),
     (&["cest"], 120),
-    (&["eet", "athens", "cairo"], 120),
-    (&["msk", "moscow"], 180),
-    (&["est", "newyork", "nyc", "toronto"], -300),
+    (&["eet"], 120),
+    (&["msk"], 180),
+    (&["est"], -300),
     (&["edt"], -240),
-    (&["cst", "chicago"], -360),
+    (&["cst"], -360),
     (&["cdt"], -300),
-    (&["mst", "denver"], -420),
+    (&["mst"], -420),
     (&["mdt"], -360),
-    (
-        &["pst", "losangeles", "la", "sf", "sanfrancisco", "seattle"],
-        -480,
-    ),
+    (&["pst"], -480),
     (&["pdt"], -420),
-    (&["gst", "dubai"], 240),
-    (
-        &["ist", "mumbai", "delhi", "bangalore", "kolkata", "india"],
-        330,
-    ),
-    (&["sgt", "singapore", "hongkong"], 480),
-    (&["cst_asia", "beijing", "shanghai", "china"], 480),
-    (&["jst", "tokyo"], 540),
-    (&["kst", "seoul"], 540),
-    (&["aest", "sydney", "melbourne"], 600),
+    (&["gst"], 240),
+    (&["ist"], 330),
+    (&["sgt"], 480),
+    (&["cst_asia"], 480),
+    (&["jst"], 540),
+    (&["kst"], 540),
+    (&["aest"], 600),
     (&["aedt"], 660),
-    (&["nzst", "auckland"], 720),
+    (&["nzst"], 720),
+];
+
+struct CityZone {
+    aliases: &'static [&'static str],
+    windows_key: &'static str,
+    identity: &'static str,
+    standard_offset: i32,
+    standard_abbreviation: &'static str,
+    daylight_abbreviation: &'static str,
+}
+
+const CITY_ZONES: &[CityZone] = &[
+    CityZone {
+        aliases: &["london"],
+        windows_key: "GMT Standard Time",
+        identity: "Europe/London",
+        standard_offset: 0,
+        standard_abbreviation: "GMT",
+        daylight_abbreviation: "BST",
+    },
+    CityZone {
+        aliases: &["paris", "madrid"],
+        windows_key: "Romance Standard Time",
+        identity: "Europe/Paris",
+        standard_offset: 60,
+        standard_abbreviation: "CET",
+        daylight_abbreviation: "CEST",
+    },
+    CityZone {
+        aliases: &["berlin", "rome", "amsterdam"],
+        windows_key: "W. Europe Standard Time",
+        identity: "Europe/Berlin",
+        standard_offset: 60,
+        standard_abbreviation: "CET",
+        daylight_abbreviation: "CEST",
+    },
+    CityZone {
+        aliases: &["athens"],
+        windows_key: "GTB Standard Time",
+        identity: "Europe/Athens",
+        standard_offset: 120,
+        standard_abbreviation: "EET",
+        daylight_abbreviation: "EEST",
+    },
+    CityZone {
+        aliases: &["cairo"],
+        windows_key: "Egypt Standard Time",
+        identity: "Africa/Cairo",
+        standard_offset: 120,
+        standard_abbreviation: "EET",
+        daylight_abbreviation: "EEST",
+    },
+    CityZone {
+        aliases: &["moscow"],
+        windows_key: "Russian Standard Time",
+        identity: "Europe/Moscow",
+        standard_offset: 180,
+        standard_abbreviation: "MSK",
+        daylight_abbreviation: "MSK",
+    },
+    CityZone {
+        aliases: &["newyork", "nyc", "toronto"],
+        windows_key: "Eastern Standard Time",
+        identity: "America/New_York",
+        standard_offset: -300,
+        standard_abbreviation: "EST",
+        daylight_abbreviation: "EDT",
+    },
+    CityZone {
+        aliases: &["chicago"],
+        windows_key: "Central Standard Time",
+        identity: "America/Chicago",
+        standard_offset: -360,
+        standard_abbreviation: "CST",
+        daylight_abbreviation: "CDT",
+    },
+    CityZone {
+        aliases: &["denver"],
+        windows_key: "Mountain Standard Time",
+        identity: "America/Denver",
+        standard_offset: -420,
+        standard_abbreviation: "MST",
+        daylight_abbreviation: "MDT",
+    },
+    CityZone {
+        aliases: &["losangeles", "la", "sf", "sanfrancisco", "seattle"],
+        windows_key: "Pacific Standard Time",
+        identity: "America/Los_Angeles",
+        standard_offset: -480,
+        standard_abbreviation: "PST",
+        daylight_abbreviation: "PDT",
+    },
+    CityZone {
+        aliases: &["dubai"],
+        windows_key: "Arabian Standard Time",
+        identity: "Asia/Dubai",
+        standard_offset: 240,
+        standard_abbreviation: "GST",
+        daylight_abbreviation: "GST",
+    },
+    CityZone {
+        aliases: &["mumbai", "delhi", "bangalore", "kolkata", "india"],
+        windows_key: "India Standard Time",
+        identity: "Asia/Kolkata",
+        standard_offset: 330,
+        standard_abbreviation: "IST",
+        daylight_abbreviation: "IST",
+    },
+    CityZone {
+        aliases: &["singapore"],
+        windows_key: "Singapore Standard Time",
+        identity: "Asia/Singapore",
+        standard_offset: 480,
+        standard_abbreviation: "SGT",
+        daylight_abbreviation: "SGT",
+    },
+    CityZone {
+        aliases: &["hongkong"],
+        windows_key: "China Standard Time",
+        identity: "Asia/Hong_Kong",
+        standard_offset: 480,
+        standard_abbreviation: "HKT",
+        daylight_abbreviation: "HKT",
+    },
+    CityZone {
+        aliases: &["beijing", "shanghai", "china"],
+        windows_key: "China Standard Time",
+        identity: "Asia/Shanghai",
+        standard_offset: 480,
+        standard_abbreviation: "CST",
+        daylight_abbreviation: "CST",
+    },
+    CityZone {
+        aliases: &["tokyo", "shibuya"],
+        windows_key: "Tokyo Standard Time",
+        identity: "Asia/Tokyo",
+        standard_offset: 540,
+        standard_abbreviation: "JST",
+        daylight_abbreviation: "JST",
+    },
+    CityZone {
+        aliases: &["seoul"],
+        windows_key: "Korea Standard Time",
+        identity: "Asia/Seoul",
+        standard_offset: 540,
+        standard_abbreviation: "KST",
+        daylight_abbreviation: "KST",
+    },
+    CityZone {
+        aliases: &["sydney", "melbourne"],
+        windows_key: "AUS Eastern Standard Time",
+        identity: "Australia/Sydney",
+        standard_offset: 600,
+        standard_abbreviation: "AEST",
+        daylight_abbreviation: "AEDT",
+    },
+    CityZone {
+        aliases: &["auckland"],
+        windows_key: "New Zealand Standard Time",
+        identity: "Pacific/Auckland",
+        standard_offset: 720,
+        standard_abbreviation: "NZST",
+        daylight_abbreviation: "NZDT",
+    },
 ];
 
 fn find_offset(token: &str) -> Option<i32> {
@@ -65,6 +219,146 @@ fn find_offset(token: &str) -> Option<i32> {
         .iter()
         .find(|(names, _)| names.contains(&token.as_str()))
         .map(|(_, offset)| *offset)
+}
+
+#[derive(Clone)]
+enum ZoneKind {
+    Fixed(i32),
+    Windows(String),
+}
+
+#[derive(Clone)]
+struct ResolvedZone {
+    kind: ZoneKind,
+    identity: String,
+    standard_offset: i32,
+    standard_abbreviation: String,
+    daylight_abbreviation: String,
+}
+
+impl ResolvedZone {
+    fn abbreviation(&self, offset: i32) -> &str {
+        if offset == self.standard_offset {
+            &self.standard_abbreviation
+        } else {
+            &self.daylight_abbreviation
+        }
+    }
+
+    fn label(&self, offset: i32) -> String {
+        format!(
+            "{} · {} ({})",
+            self.identity,
+            self.abbreviation(offset),
+            format_utc_offset(offset)
+        )
+    }
+}
+
+fn city_zone_for_key(key: &str) -> Option<&'static CityZone> {
+    CITY_ZONES
+        .iter()
+        .find(|zone| zone.windows_key.eq_ignore_ascii_case(key))
+}
+
+fn resolve_zone(token: &str) -> Option<ResolvedZone> {
+    let lower = token.to_ascii_lowercase();
+    if lower == SYSTEM_TIMEZONE {
+        let key = native::system_timezone_name()?;
+        let known = city_zone_for_key(&key);
+        return Some(ResolvedZone {
+            kind: ZoneKind::Windows(key.clone()),
+            identity: key,
+            standard_offset: known.map_or(current_system_offset_minutes()?, |zone| {
+                zone.standard_offset
+            }),
+            standard_abbreviation: known.map_or_else(
+                || "LOCAL".to_string(),
+                |zone| zone.standard_abbreviation.to_string(),
+            ),
+            daylight_abbreviation: known.map_or_else(
+                || "LOCAL".to_string(),
+                |zone| zone.daylight_abbreviation.to_string(),
+            ),
+        });
+    }
+    if let Some(zone) = CITY_ZONES
+        .iter()
+        .find(|zone| zone.aliases.contains(&lower.as_str()))
+    {
+        return Some(ResolvedZone {
+            kind: ZoneKind::Windows(zone.windows_key.to_string()),
+            identity: zone.identity.to_string(),
+            standard_offset: zone.standard_offset,
+            standard_abbreviation: zone.standard_abbreviation.to_string(),
+            daylight_abbreviation: zone.daylight_abbreviation.to_string(),
+        });
+    }
+    let offset = find_offset(&lower)?;
+    let abbreviation = match lower.as_str() {
+        "cst_asia" => "CST".to_string(),
+        _ => lower.to_ascii_uppercase(),
+    };
+    let identity = match lower.as_str() {
+        "cst" | "cdt" => "America/Chicago",
+        "est" | "edt" => "America/New_York",
+        "mst" | "mdt" => "America/Denver",
+        "pst" | "pdt" => "America/Los_Angeles",
+        "ist" => "Asia/Kolkata",
+        "jst" => "Asia/Tokyo",
+        "kst" => "Asia/Seoul",
+        "sgt" => "Asia/Singapore",
+        "cst_asia" => "Asia/Shanghai",
+        "aest" | "aedt" => "Australia/Sydney",
+        "nzst" => "Pacific/Auckland",
+        "utc" | "gmt" => "Etc/UTC",
+        _ => abbreviation.as_str(),
+    }
+    .to_string();
+    Some(ResolvedZone {
+        kind: ZoneKind::Fixed(offset),
+        identity,
+        standard_offset: offset,
+        standard_abbreviation: abbreviation.clone(),
+        daylight_abbreviation: abbreviation,
+    })
+}
+
+fn date_time_minutes(date_time: CivilDateTime) -> i64 {
+    days_from_civil(date_time.0 as i64, date_time.1, date_time.2) * 24 * 60
+        + date_time.3 as i64 * 60
+        + date_time.4 as i64
+}
+
+fn minutes_date_time(minutes: i64) -> CivilDateTime {
+    let days = minutes.div_euclid(24 * 60);
+    let minute_of_day = minutes.rem_euclid(24 * 60);
+    let (year, month, day) = civil_from_days(days);
+    (
+        year as i32,
+        month,
+        day,
+        (minute_of_day / 60) as u32,
+        (minute_of_day % 60) as u32,
+    )
+}
+
+fn zone_to_utc(zone: &ResolvedZone, local: CivilDateTime) -> Option<(CivilDateTime, i32)> {
+    let utc = match &zone.kind {
+        ZoneKind::Fixed(offset) => minutes_date_time(date_time_minutes(local) - *offset as i64),
+        ZoneKind::Windows(key) => native::timezone_local_to_utc(key, local)?,
+    };
+    let offset = (date_time_minutes(local) - date_time_minutes(utc)) as i32;
+    Some((utc, offset))
+}
+
+fn zone_from_utc(zone: &ResolvedZone, utc: CivilDateTime) -> Option<(CivilDateTime, i32)> {
+    let local = match &zone.kind {
+        ZoneKind::Fixed(offset) => minutes_date_time(date_time_minutes(utc) + *offset as i64),
+        ZoneKind::Windows(key) => native::timezone_utc_to_local(key, utc)?,
+    };
+    let offset = (date_time_minutes(local) - date_time_minutes(utc)) as i32;
+    Some((local, offset))
 }
 
 fn current_system_offset_minutes() -> Option<i32> {
@@ -92,30 +386,6 @@ fn format_utc_offset(minutes: i32) -> String {
     }
 }
 
-fn timezone_label(token: &str, offset: i32) -> String {
-    if token == SYSTEM_TIMEZONE {
-        let name = native::system_timezone_name().unwrap_or_else(|| "Local time".to_string());
-        return format!("{name} ({})", format_utc_offset(offset));
-    }
-    let lower = token.to_ascii_lowercase();
-    let identity = match lower.as_str() {
-        "cst" | "chicago" => "America/Chicago · CST",
-        "cdt" => "America/Chicago · CDT",
-        "cst_asia" | "beijing" | "shanghai" | "china" => "Asia/Shanghai · CST",
-        "ist" | "mumbai" | "delhi" | "bangalore" | "kolkata" | "india" => "Asia/Kolkata · IST",
-        "est" | "newyork" | "nyc" | "toronto" => "America/New_York · EST",
-        "edt" => "America/New_York · EDT",
-        "pst" | "losangeles" | "la" | "sf" | "sanfrancisco" | "seattle" => {
-            "America/Los_Angeles · PST"
-        }
-        "pdt" => "America/Los_Angeles · PDT",
-        "jst" | "tokyo" => "Asia/Tokyo · JST",
-        "utc" | "gmt" | "london" => "Etc/UTC",
-        _ => token,
-    };
-    format!("{identity} ({})", format_utc_offset(offset))
-}
-
 fn timezone_tokens(input: &str) -> Option<(String, String, i32, i32)> {
     let input = input.trim();
     let first_end = input.find(char::is_whitespace)?;
@@ -133,7 +403,7 @@ fn timezone_tokens(input: &str) -> Option<(String, String, i32, i32)> {
     } else {
         (first, rest)
     };
-    let from_offset = find_offset(from_token)?;
+    let source_zone = resolve_zone(from_token)?;
     let (to_token, matched) = grammar::parse_keyword_then_target(keyword_and_target);
     let to_token = if matched {
         to_token
@@ -142,7 +412,11 @@ fn timezone_tokens(input: &str) -> Option<(String, String, i32, i32)> {
     } else {
         return None;
     };
-    let to_offset = find_offset(&to_token)?;
+    let target_zone = resolve_zone(&to_token)?;
+    let (year, month, day, _, _) = native::local_now();
+    let sample = (year, month, day, 12, 0);
+    let (_, from_offset) = zone_to_utc(&source_zone, sample)?;
+    let (_, to_offset) = zone_to_utc(&target_zone, sample)?;
     Some((from_token.to_string(), to_token, from_offset, to_offset))
 }
 
@@ -175,11 +449,17 @@ fn parse_timezone_difference(input: &str) -> Option<EvalResult> {
 }
 
 pub fn timezone_labels(input: &str) -> Option<(String, String)> {
+    if let Some(parsed) = parse_zoned_clock(input) {
+        let source = resolve_zone(&parsed.from_token)?;
+        let target = resolve_zone(&parsed.to_token)?;
+        let (utc, source_offset) = zone_to_utc(&source, parsed.local)?;
+        let (_, target_offset) = zone_from_utc(&target, utc)?;
+        return Some((source.label(source_offset), target.label(target_offset)));
+    }
     let (from, to, from_offset, to_offset) = timezone_tokens(input)?;
-    Some((
-        timezone_label(&from, from_offset),
-        timezone_label(&to, to_offset),
-    ))
+    let source = resolve_zone(&from)?;
+    let target = resolve_zone(&to)?;
+    Some((source.label(from_offset), target.label(to_offset)))
 }
 
 /// Parses a clock-time token like `"3pm"`, `"3:30pm"`, or `"15:30"` into
@@ -248,6 +528,80 @@ fn parse_leading_clock(input: &str) -> Option<((u32, u32), &str)> {
     Some((clock, rest[meridiem_end..].trim_start()))
 }
 
+struct ParsedZonedClock {
+    local: CivilDateTime,
+    from_token: String,
+    to_token: String,
+    explicit_date: bool,
+}
+
+fn month_number(token: &str) -> Option<u32> {
+    let lower = token.to_ascii_lowercase();
+    [
+        "january",
+        "february",
+        "march",
+        "april",
+        "may",
+        "june",
+        "july",
+        "august",
+        "september",
+        "october",
+        "november",
+        "december",
+    ]
+    .iter()
+    .position(|month| month.starts_with(&lower) && lower.len() >= 3)
+    .map(|index| index as u32 + 1)
+}
+
+fn parse_zoned_clock(input: &str) -> Option<ParsedZonedClock> {
+    let input = input.trim();
+    let lower = input.to_ascii_lowercase();
+    let (year, month, day, clock_input, explicit_date) = if let Some(at) = lower.find(" at ") {
+        let date = input[..at].split_whitespace().collect::<Vec<_>>();
+        if !(2..=3).contains(&date.len()) {
+            return None;
+        }
+        let day = date[0].trim_end_matches([',', '.']).parse::<u32>().ok()?;
+        let month = month_number(date[1].trim_end_matches([',', '.']))?;
+        let year = if let Some(year) = date.get(2) {
+            year.trim_end_matches([',', '.']).parse::<i32>().ok()?
+        } else {
+            native::local_now().0
+        };
+        (year, month, day, &input[at + 4..], true)
+    } else {
+        let (year, month, day, _, _) = native::local_now();
+        (year, month, day, input, false)
+    };
+
+    let ((hour, minute), rest) = parse_leading_clock(clock_input)?;
+    let from_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    if from_end == 0 {
+        return None;
+    }
+    let from_token = rest[..from_end].to_ascii_lowercase();
+    resolve_zone(&from_token)?;
+    let remainder = rest[from_end..].trim_start();
+    let (target, matched) = grammar::parse_keyword_then_target(remainder);
+    let to_token = if matched {
+        target
+    } else if remainder.is_empty() {
+        SYSTEM_TIMEZONE.to_string()
+    } else {
+        return None;
+    };
+    resolve_zone(&to_token)?;
+    Some(ParsedZonedClock {
+        local: (year, month, day, hour, minute),
+        from_token,
+        to_token,
+        explicit_date,
+    })
+}
+
 fn format_clock(total_minutes: i64) -> String {
     let m = total_minutes.rem_euclid(24 * 60);
     let hour24 = m / 60;
@@ -290,16 +644,17 @@ fn parse_clock_arithmetic(input: &str) -> Option<EvalResult> {
     })
 }
 
-/// "3pm est to pst" / "15:00 utc in ist" — converts a clock time between
-/// timezones using the fixed offset table above.
+/// Converts clock times between fixed abbreviations, DST-aware named places,
+/// and the current Windows timezone, with an optional leading calendar date.
 fn parse_timezone_conversion(input: &str) -> Option<EvalResult> {
-    let input = input.trim();
-    let ((hour, minute), _) = parse_leading_clock(input)?;
-    let (from_token, to_token, from_offset, to_offset) = timezone_tokens(input)?;
-
-    let source = hour as i64 * 60 + minute as i64;
-    let target = source - from_offset as i64 + to_offset as i64;
-    let day_shift = target.div_euclid(24 * 60);
+    let parsed = parse_zoned_clock(input)?;
+    let source_zone = resolve_zone(&parsed.from_token)?;
+    let target_zone = resolve_zone(&parsed.to_token)?;
+    let (utc, source_offset) = zone_to_utc(&source_zone, parsed.local)?;
+    let (target, target_offset) = zone_from_utc(&target_zone, utc)?;
+    let source_days = days_from_civil(parsed.local.0 as i64, parsed.local.1, parsed.local.2);
+    let target_days = days_from_civil(target.0 as i64, target.1, target.2);
+    let day_shift = target_days - source_days;
     let day_note = match day_shift {
         0 => String::new(),
         1 => " (+1 day)".to_string(),
@@ -308,14 +663,29 @@ fn parse_timezone_conversion(input: &str) -> Option<EvalResult> {
         n => format!(" ({n} days)"),
     };
 
-    let target_zone = if to_token == SYSTEM_TIMEZONE {
-        String::new()
+    let source_abbreviation = source_zone.abbreviation(source_offset);
+    let target_abbreviation = target_zone.abbreviation(target_offset);
+    let source_clock = parsed.local.3 as i64 * 60 + parsed.local.4 as i64;
+    let target_clock = target.3 as i64 * 60 + target.4 as i64;
+    let value = if parsed.explicit_date {
+        format!(
+            "{} {}, {}, {} {}",
+            MONTHS[target.1 as usize - 1],
+            target.2,
+            target.0,
+            format_clock(target_clock),
+            target_abbreviation
+        )
     } else {
-        format!(" {}", to_token.to_uppercase())
+        format!(
+            "{}{day_note} {}",
+            format_clock(target_clock),
+            target_abbreviation
+        )
     };
     Some(EvalResult {
-        expression: format!("{} {}", format_clock(source), from_token.to_uppercase()),
-        value: format!("{}{day_note}{target_zone}", format_clock(target)),
+        expression: format!("{} {source_abbreviation}", format_clock(source_clock)),
+        value,
     })
 }
 
@@ -517,8 +887,10 @@ mod tests {
 
         let local = convert("12pm utc").unwrap();
         assert_eq!(local.expression, "12:00 PM UTC");
+        assert!(local.value.split_whitespace().count() >= 3);
         let labels = timezone_labels("12pm utc").unwrap();
         assert!(labels.1.contains("(GMT"));
+        assert!(!labels.1.starts_with("System timezone"));
     }
 
     #[test]
@@ -548,6 +920,31 @@ mod tests {
     fn timezone_conversion_notes_day_shift() {
         let result = convert("11pm est to ist").unwrap();
         assert_eq!(result.value, "9:30 AM (+1 day) IST");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn city_conversions_follow_windows_daylight_rules() {
+        let city = convert("29 August 2026 at 12pm chicago to ist").unwrap();
+        assert_eq!(city.expression, "12:00 PM CDT");
+        assert_eq!(city.value, "August 29, 2026, 10:30 PM IST");
+        let labels = timezone_labels("29 August 2026 at 12pm chicago to ist").unwrap();
+        assert_eq!(labels.0, "America/Chicago · CDT (GMT-5)");
+
+        let fixed = convert("29 August 2026 at 12pm cst to ist").unwrap();
+        assert_eq!(fixed.expression, "12:00 PM CST");
+        assert_eq!(fixed.value, "August 29, 2026, 11:30 PM IST");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn parses_dated_city_timezone_phrases() {
+        let result = convert("3 Aug 2026 at 10pm shibuya to pst").unwrap();
+        assert_eq!(result.expression, "10:00 PM JST");
+        assert_eq!(result.value, "August 3, 2026, 5:00 AM PST");
+        let labels = timezone_labels("3 Aug 2026 at 10pm shibuya to pst").unwrap();
+        assert_eq!(labels.0, "Asia/Tokyo · JST (GMT+9)");
+        assert_eq!(labels.1, "America/Los_Angeles · PST (GMT-8)");
     }
 
     #[test]

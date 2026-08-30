@@ -24,7 +24,7 @@ below); don't add more without checking the number.
 | `src/commands.rs` | `CommandProvider` trait + `CommandItem`/`CommandAction` model. |
 | `src/plugins.rs` | `PluginRegistry` over `CommandProvider`, dispatched from `LauncherRoot`'s search path (auto-claim NL detection, then keyword routing). |
 | `src/files.rs` | `FileSearchProvider` — Scry Search (`scryd`)-backed file search (`native::scry_query`), debounced via `CommandProvider::wants_debounce`/`background_search`. |
-| `src/calc/` | `CalcProvider`, claimed via the ` = ` keyword or NL auto-claim (`is_candidate` cheap gate + each evaluator's own parse). Evaluator chain in `calc::evaluate`, tried in order: `units` (dimension/temperature conversion), `currency` (live FX rates, symbol/code forms, regional-default bare amounts), `bases` (hex/dec/oct/bin), `time` (clock arithmetic, timezone conversion, relative-date arithmetic — hand-rolled civil-calendar math, no `chrono`), `arithmetic` (plain expressions, recursive-descent). `grammar::parse_amount` is the shared amount parser (handles the `k`-thousands shorthand, e.g. `"5k"` = 5000) used by `units`/`currency`/the conversion half of `grammar::parse_conversion` — deliberately *not* used by `arithmetic`, so `k` only works in conversion contexts, never in plain calculator expressions. |
+| `src/calc/` | `CalcProvider`, claimed via the ` = ` keyword or NL auto-claim (`is_candidate` cheap gate + each evaluator's own parse). Evaluator chain in `calc::evaluate`, tried in order: currency (live FX rates), time (clock/timezone/relative-date arithmetic), units (common normalized conversions and metadata), bases, then `engine` (`fend-core` for broad arithmetic and unit expressions). Named timezone places use Windows timezone rules for DST-aware conversion; explicit abbreviations remain fixed offsets. `grammar::parse_amount` handles conversion-only `k` shorthand (`"5k"` = 5000), never plain arithmetic. |
 | `src/startup.rs` | `register()`/`unregister()` — writes/deletes the `HKCU\...\Run` entry for launch-on-login, via `winreg` (not raw FFI, matching the sibling `Panora` project's established pattern). Called from `main.rs`'s Velopack install/uninstall fast-callback hooks, never on a normal run. |
 
 ### Threading / control flow
@@ -270,7 +270,7 @@ cargo build           # dev — first build after a rev bump can take several mi
 cargo build --release # no console window, optimized
 cargo run             # launches; press Alt+Space to toggle, tray right-click to quit
 ```
-There are no automated tests yet. Manual verification for window behavior:
+Run `cargo test` for calculator and provider coverage. Manually verify window behavior:
 1. `Alt+Space` opens the launcher centered and focused.
 2. `Esc` hides it **back to the tray** (process keeps running — verify the tray icon is
    still there and `Alt+Space` reopens it).

@@ -63,3 +63,22 @@ release build. Prefer lazy work, bounded collections, existing background
 workers, and OS-maintained indexes. A latency improvement that materially
 increases idle CPU, memory, or background I/O needs measurements and an
 explicitly documented tradeoff.
+
+### Calculator engine measurement (2026-08-29)
+
+The calculator expansion adds `fend-core`, a dependency with no transitive
+dependencies, for broad arithmetic and unit expressions. Release binaries at
+`main` (`3e2e67c`) and `feature/calculator-engine` were each started with the
+launcher hidden, allowed 15 seconds for the application catalog scan to settle,
+sampled three times, opened through `Alt+Space`, and sampled three more times.
+The minimum working set from each settled group was:
+
+| Build | Idle RSS | Active RSS |
+|---|---:|---:|
+| `main` | 60.44 MiB | 106.00 MiB |
+| Calculator branch | 60.36 MiB | 94.78 MiB |
+
+The measurement shows no idle RSS regression. Active working-set values vary
+with GPUI and catalog paging, but the calculator branch was also lower in this
+comparison. The Windows timezone implementation uses OS APIs and adds no new
+runtime dependency or resident timezone database.

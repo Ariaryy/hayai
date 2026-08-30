@@ -3,8 +3,8 @@
 //! keyword routing — see `plugins::PluginRegistry::dispatch`), and stays
 //! reachable explicitly via the ` = ` keyword.
 //!
-//! Arithmetic and units are pure, synchronous, zero-dependency evaluation —
-//! always answered inline, never debounced. Currency needs a rate table
+//! Arithmetic and general unit expressions are evaluated synchronously by
+//! `fend-core` and always answered inline, never debounced. Currency needs a rate table
 //! fetched over the network; `CalcProvider` opts into the pipeline's
 //! existing debounce/background-job machinery (built for file search) but
 //! only actually uses it when a fetch is genuinely needed, so arithmetic
