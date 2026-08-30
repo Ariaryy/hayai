@@ -807,10 +807,8 @@ fn parse_date_arithmetic(input: &str) -> Option<EvalResult> {
         (value, -1)
     } else if let Some(value) = relative.strip_suffix(" later") {
         (value, 1)
-    } else if let Some(value) = relative.strip_prefix("in ") {
-        (value, 1)
     } else {
-        return None;
+        (relative.strip_prefix("in ")?, 1)
     };
     let mut duration = parse_duration(duration_text.trim())?;
     duration.months *= sign;

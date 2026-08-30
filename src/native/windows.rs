@@ -1008,8 +1008,8 @@ unsafe fn hicon_to_bgra(
         // Some icons come back with a fully-zero alpha channel (they relied on
         // the mask bitmap for transparency). Treat that as fully opaque so the
         // icon isn't rendered invisible.
-        if pixels.chunks_exact(4).all(|px| px[3] == 0) {
-            for px in pixels.chunks_exact_mut(4) {
+        if pixels.as_chunks::<4>().0.iter().all(|px| px[3] == 0) {
+            for px in pixels.as_chunks_mut::<4>().0 {
                 px[3] = 255;
             }
         }
