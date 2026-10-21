@@ -51,8 +51,10 @@ Download the latest installer or portable ZIP from
 | Installer | Installs Hayai, starts it at login, and bundles the matching Scry Search daemon and setup scripts. |
 | Portable ZIP | Extract the archive and run `hayai.exe`. No shortcuts or launch-at-login entry are installed. |
 
-App search and the calculator work without elevation. File search prompts
-once for elevation to set up its per-user daemon if it has not been installed.
+App search and the calculator work without elevation. When you enter file
+mode, Hayai prompts you to install Scry Search if its daemon is not already
+running in the background. Select the installation action and press `Enter`;
+Windows requests elevation to install and start the per-user daemon.
 
 Hayai is not code-signed yet, so Windows SmartScreen may warn about downloaded
 builds. Verify that the file came from this repository's Releases page and, if
