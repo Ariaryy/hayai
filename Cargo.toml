@@ -57,3 +57,8 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
 ] }
+
+# GPUI -> stacksafe-macro uses this build-time crate. Keep its proc_macro
+# re-export valid on newer Rust without changing the pinned GUI dependencies.
+[patch.crates-io]
+proc-macro-error2 = { path = "vendor/proc-macro-error2" }
