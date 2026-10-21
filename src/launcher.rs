@@ -2136,6 +2136,10 @@ impl ResultRow {
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
+                                .w_full()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis_middle()
                                 .child(subtitle),
                         )
                     }),
