@@ -14,3 +14,7 @@ loads that shared resource; the installer script also uses this ICO automaticall
 Windows builds require the MSVC toolchain and Windows 10/11 SDK resource compiler.
 
 The Python rendering packages are development tools only.
+
+`icons/scry.svg` is Scry Search's app icon, used on the file-search setup screen.
+It is copied from the [Scry Search repository](https://github.com/Ariaryy/scry-search)
+under the MIT license; see `icons/scry-LICENSE.txt`.

@@ -143,6 +143,7 @@ fn path_to_item(path: &Path) -> CommandItem {
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| path.to_string_lossy().into_owned()),
         subtitle: path.parent().map(|p| p.to_string_lossy().into_owned()),
+        file_size: None,
         calculation_detail: None,
         icon: IconSource::Path(path.to_path_buf()),
         action: CommandAction::OpenFile(path.to_path_buf()),
@@ -195,10 +196,7 @@ fn scoped_scry_query(scope: &Path, remainder: &str) -> String {
     let scope = scope.trim_end_matches('\\');
     format!("{scope}\\{}", remainder.replace(' ', "\\"))
 }
-fn format_size(bytes: u64) -> String {
-    if bytes == 0 {
-        return String::new();
-    }
+pub(crate) fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = 1024 * KB;
     const GB: u64 = 1024 * MB;
@@ -282,14 +280,34 @@ impl CommandProvider for FileSearchProvider {
                 return directory_listing(&dir, &query);
             }
             match native::scry_query(&scry_query, max_results) {
-                None => vec![CommandItem {
-                    id: "files:not-running".into(),
-                    title: "Enable file search".into(),
-                    subtitle: Some("Install and start the elevated Scry Search daemon".into()),
-                    calculation_detail: None,
-                    icon: IconSource::None,
-                    action: CommandAction::InstallFileSearch,
-                }],
+                None => {
+                    let installed = native::scry_is_installed();
+                    vec![CommandItem {
+                        id: "files:not-running".into(),
+                        title: if installed {
+                            "Start file search"
+                        } else {
+                            "Set up file search"
+                        }
+                        .into(),
+                        subtitle: Some(
+                            if installed {
+                                "Press Enter to start Scry Search in the background."
+                            } else {
+                                "Press Enter to install Scry Search and enable file search."
+                            }
+                            .into(),
+                        ),
+                        file_size: None,
+                        calculation_detail: None,
+                        icon: IconSource::None,
+                        action: if installed {
+                            CommandAction::StartFileSearch
+                        } else {
+                            CommandAction::InstallFileSearch
+                        },
+                    }]
+                }
                 Some(mut hits) => {
                     hits.retain(|hit| {
                         let full_path = hit.parent.join(&hit.name);
@@ -320,15 +338,12 @@ impl CommandProvider for FileSearchProvider {
                         .map(|hit| {
                             let full_path = hit.parent.join(&hit.name);
                             let parent_str = hit.parent.to_string_lossy();
-                            let subtitle = if !hit.is_folder && hit.size > 0 {
-                                format!("{parent_str} · {}", format_size(hit.size))
-                            } else {
-                                parent_str.into_owned()
-                            };
+                            let subtitle = parent_str.into_owned();
                             CommandItem {
                                 id: full_path.to_string_lossy().into_owned(),
                                 title: hit.name,
                                 subtitle: Some(subtitle),
+                                file_size: (!hit.is_folder).then_some(hit.size),
                                 calculation_detail: None,
                                 // TODO: per-extension icon dedup — each hit currently
                                 // grows the catalog's path-keyed icon cache by one

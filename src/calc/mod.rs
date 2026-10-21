@@ -139,6 +139,7 @@ fn result_item(query: &str, result: EvalResult, fx: &currency::FxCache) -> Comma
             )
         });
     CommandItem {
+        file_size: None,
         id: format!("calc:{query}"),
         title: result.value.clone(),
         subtitle: Some(result.expression),
@@ -203,6 +204,7 @@ impl CommandProvider for CalcProvider {
                     id: "calc:fx-error".into(),
                     title: "Couldn't fetch exchange rates".into(),
                     subtitle: Some("Check your internet connection and try again".into()),
+                    file_size: None,
                     calculation_detail: None,
                     icon: IconSource::None,
                     action: CommandAction::ShowText(String::new()),
