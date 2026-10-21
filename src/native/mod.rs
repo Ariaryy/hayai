@@ -14,14 +14,21 @@ pub struct IconImage {
     pub bgra: Vec<u8>,
 }
 
+pub struct AssociatedApp {
+    pub id: String,
+    pub name: String,
+    pub icon: Option<IconImage>,
+}
+
 #[cfg(windows)]
 mod windows;
 
 #[cfg(windows)]
 pub use windows::{
-    NativeRuntime, extract_icon_rgba, focus_launcher_window, hide_launcher_window, https_get,
-    install_scry_daemon, launch_path, launch_path_as_admin, list_apps_folder, local_now,
-    scry_query, system_currency_code, system_timezone_name, timezone_local_to_utc,
+    NativeRuntime, associated_apps, extract_icon_rgba, focus_launcher_window, hide_launcher_window,
+    https_get, install_scry_daemon, launch_path, launch_path_as_admin, list_apps_folder, local_now,
+    open_with, open_with_app, render_hidden_launcher_frame, scry_is_installed, scry_query,
+    start_scry_daemon, system_currency_code, system_timezone_name, timezone_local_to_utc,
     timezone_utc_to_local,
 };
 
@@ -45,6 +52,9 @@ pub fn focus_launcher_window(_window: &gpui::Window) {}
 pub fn hide_launcher_window(_window: &gpui::Window) {}
 
 #[cfg(not(windows))]
+pub fn render_hidden_launcher_frame(_window: &gpui::Window) {}
+
+#[cfg(not(windows))]
 pub fn extract_icon_rgba(_path: &std::path::Path) -> Option<IconImage> {
     None
 }
@@ -54,6 +64,17 @@ pub fn launch_path(_path: &std::path::Path) {}
 
 #[cfg(not(windows))]
 pub fn launch_path_as_admin(_path: &std::path::Path) {}
+
+#[cfg(not(windows))]
+pub fn open_with(_path: &std::path::Path) {}
+
+#[cfg(not(windows))]
+pub fn associated_apps(_path: &std::path::Path) -> Vec<AssociatedApp> {
+    Vec::new()
+}
+
+#[cfg(not(windows))]
+pub fn open_with_app(_path: &std::path::Path, _id: &str) {}
 
 #[cfg(not(windows))]
 pub fn list_apps_folder() -> Vec<(String, std::path::PathBuf)> {
@@ -78,6 +99,16 @@ pub fn scry_query(_query: &str, _max_results: u32) -> Option<Vec<FileHit>> {
 
 #[cfg(not(windows))]
 pub fn install_scry_daemon() -> bool {
+    false
+}
+
+#[cfg(not(windows))]
+pub fn scry_is_installed() -> bool {
+    false
+}
+
+#[cfg(not(windows))]
+pub fn start_scry_daemon() -> bool {
     false
 }
 

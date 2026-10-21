@@ -19,6 +19,36 @@ use launcher::{LauncherGlobal, LauncherState};
 use native::{NativeCommand, NativeRuntime};
 use plugins::{PluginRegistry, RegistryGlobal};
 
+struct LauncherAssets;
+
+impl gpui::AssetSource for LauncherAssets {
+    fn load(&self, path: &str) -> anyhow::Result<Option<std::borrow::Cow<'static, [u8]>>> {
+        let bytes: Option<&'static [u8]> = match path {
+            "icons/enter.svg" => Some(include_bytes!("../assets/icons/enter.svg")),
+            "icons/spinner.svg" => Some(include_bytes!("../assets/icons/spinner.svg")),
+            "icons/scry.svg" => Some(include_bytes!("../assets/icons/scry.svg")),
+            "icons/application.svg" => Some(include_bytes!("../assets/icons/application.svg")),
+            "icons/search-empty.svg" => Some(include_bytes!("../assets/icons/search-empty.svg")),
+            _ => None,
+        };
+        Ok(bytes.map(std::borrow::Cow::Borrowed))
+    }
+
+    fn list(&self, path: &str) -> anyhow::Result<Vec<gpui::SharedString>> {
+        Ok([
+            "icons/enter.svg",
+            "icons/spinner.svg",
+            "icons/scry.svg",
+            "icons/search-empty.svg",
+            "icons/application.svg",
+        ]
+        .into_iter()
+        .filter(|asset| asset.starts_with(path))
+        .map(Into::into)
+        .collect())
+    }
+}
+
 fn main() {
     // Register/remove the HKCU Run-key startup entry as part of Velopack's
     // install/uninstall lifecycle. `run()` exits the process itself when
@@ -37,28 +67,30 @@ fn main() {
     let (native_tx, native_rx) = futures::channel::mpsc::unbounded();
     let native_runtime = NativeRuntime::start(native_tx);
 
-    gpui_platform::application().run(move |cx: &mut App| {
-        // Must be called before using any gpui-component features.
-        gpui_component::init(cx);
-        Theme::change(ThemeMode::Dark, None, cx);
-        apply_launcher_theme(cx);
+    gpui_platform::application()
+        .with_assets(LauncherAssets)
+        .run(move |cx: &mut App| {
+            // Must be called before using any gpui-component features.
+            gpui_component::init(cx);
+            Theme::change(ThemeMode::Dark, None, cx);
+            apply_launcher_theme(cx);
 
-        LauncherState::install(cx);
-        // Scan runs on the background pool (Catalog::install kicks it off);
-        // icons are decoded lazily on render.
-        Catalog::install(cx);
-        FileRecentsGlobal::install(cx);
+            LauncherState::install(cx);
+            // Scan runs on the background pool (Catalog::install kicks it off);
+            // icons are decoded lazily on render.
+            Catalog::install(cx);
+            FileRecentsGlobal::install(cx);
 
-        let catalog = cx.global::<CatalogGlobal>().clone_handle();
-        let file_recents = cx.global::<FileRecentsGlobal>().clone_handle();
-        let mut registry = PluginRegistry::new();
-        registry.register(AppsProvider::new(catalog));
-        registry.register(FileSearchProvider::new(file_recents));
-        registry.register(CalcProvider::new());
-        RegistryGlobal::install(cx, registry);
+            let catalog = cx.global::<CatalogGlobal>().clone_handle();
+            let file_recents = cx.global::<FileRecentsGlobal>().clone_handle();
+            let mut registry = PluginRegistry::new();
+            registry.register(AppsProvider::new(catalog));
+            registry.register(FileSearchProvider::new(file_recents));
+            registry.register(CalcProvider::new());
+            RegistryGlobal::install(cx, registry);
 
-        drive_native_commands(cx, native_rx, native_runtime);
-    });
+            drive_native_commands(cx, native_rx, native_runtime);
+        });
 }
 
 /// Override gpui-component's default (blue-accented) dark theme with a

@@ -23,6 +23,7 @@ pub enum CommandAction {
     #[allow(dead_code)]
     ShowText(String),
     InstallFileSearch,
+    StartFileSearch,
 }
 
 #[derive(Clone, Debug)]
@@ -49,6 +50,8 @@ pub struct CommandItem {
     pub id: String,
     pub title: String,
     pub subtitle: Option<String>,
+    /// Indexed file size in bytes; absent for folders or unavailable metadata.
+    pub file_size: Option<u64>,
     pub calculation_detail: Option<CalculationDetail>,
     pub icon: IconSource,
     pub action: CommandAction,

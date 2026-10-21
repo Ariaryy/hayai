@@ -1,4 +1,8 @@
 use std::io;
+
+#[path = "associations.rs"]
+mod associations;
+pub use associations::{associated_apps, open_with_app};
 use std::ptr::{null, null_mut};
 use std::sync::{OnceLock, mpsc};
 use std::thread;
@@ -184,6 +188,20 @@ pub fn focus_launcher_window(window: &gpui::Window) {
     }
 }
 
+pub fn render_hidden_launcher_frame(window: &gpui::Window) {
+    if let Some(hwnd) = hwnd_of(window) {
+        // Pinned gpui_windows/events.rs: WM_GPUI_FORCE_UPDATE_WINDOW is
+        // WM_USER + 5 and draws/presents even while hidden, bypassing inactive
+        // frame throttling. Post after the reset so the current window/entity
+        // updates have unwound before GPUI re-enters them to paint.
+        // One event per hide, never a wait or visibility gate on show.
+        const WM_GPUI_FORCE_UPDATE_WINDOW: u32 = 0x0400 + 5;
+        unsafe {
+            PostMessageW(hwnd, WM_GPUI_FORCE_UPDATE_WINDOW, 0, 0);
+        }
+    }
+}
+
 const TRAY_MENU_TOGGLE: usize = 1;
 const TRAY_MENU_QUIT: usize = 2;
 
@@ -271,6 +289,29 @@ pub fn launch_path_as_admin(path: &Path) {
     }
 }
 
+/// Show Windows' application picker, off the UI thread. A dedicated STA keeps
+/// the shell dialog's apartment independent of GPUI's reusable worker threads.
+pub fn open_with(path: &Path) {
+    let file = wide_null(&path.to_string_lossy());
+    let _ = std::thread::Builder::new()
+        .name("open-with".into())
+        .spawn(move || unsafe {
+            use windows_sys::Win32::UI::Shell::{OAIF_EXEC, OPENASINFO, SHOpenWithDialog};
+            let result = CoInitializeEx(null(), COINIT_APARTMENTTHREADED as u32);
+            if result < 0 {
+                return;
+            }
+            let info = OPENASINFO {
+                pcszFile: file.as_ptr(),
+                pcszClass: null(),
+                // Required to open the chosen file rather than show a Settings hint.
+                oaifInFlags: OAIF_EXEC,
+            };
+            let _ = SHOpenWithDialog(null_mut_hwnd(), &info);
+            windows_sys::Win32::System::Com::CoUninitialize();
+        });
+}
+
 /// Launch the bundled daemon setup through UAC. Returns false when the release
 /// payload is incomplete; the setup script owns task registration and startup.
 pub fn install_scry_daemon() -> bool {
@@ -303,6 +344,29 @@ pub fn install_scry_daemon() -> bool {
         )
     };
     result as usize > 32
+}
+
+/// Match the per-user location used by Scry's bundled install-daemon.ps1.
+/// Called only after a failed daemon query, on the background pool.
+pub fn scry_is_installed() -> bool {
+    std::env::var_os("LOCALAPPDATA").is_some_and(|root| {
+        PathBuf::from(root)
+            .join("Programs/Scry Search/bin/scryd.exe")
+            .is_file()
+    })
+}
+
+pub fn start_scry_daemon() -> bool {
+    use std::os::windows::process::CommandExt;
+    // Starting an installed daemon must not escalate or open the installer:
+    // Hayai stays focused and shows readiness progress in its existing window.
+    std::process::Command::new("schtasks.exe")
+        .args(["/Run", "/TN", "Scry Search Daemon"])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW: no console flash.
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 /// Query a running `scryd` daemon instance over its named pipe IPC or
