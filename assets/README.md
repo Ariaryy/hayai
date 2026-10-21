@@ -1,0 +1,16 @@
+# App icons
+
+`hayai.svg` is the source artwork. The ICO file contains
+16, 24, 32, 48, 64, 128, and 256 pixel images for Windows scaling.
+
+Regenerate after editing the SVG:
+
+```powershell
+uv run --with resvg-py --with pillow python scripts/generate-icons.py
+```
+
+Hayai's build script embeds `hayai.ico` as Windows resource 1. The native tray
+loads that shared resource; the installer script also uses this ICO automatically.
+Windows builds require the MSVC toolchain and Windows 10/11 SDK resource compiler.
+
+The Python rendering packages are development tools only.

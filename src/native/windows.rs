@@ -34,12 +34,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, AppendMenuW, BringWindowToTop, CreatePopupMenu, CreateWindowExW,
     DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GWL_EXSTYLE,
     GetCursorPos, GetIconInfo, GetMessageW, GetWindowLongPtrW, GetWindowRect, HWND_MESSAGE,
-    HWND_TOPMOST, ICONINFO, IDI_APPLICATION, LoadIconW, MF_STRING, MSG, PostMessageW,
-    PostQuitMessage, RegisterClassW, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos,
-    ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP,
-    WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_EX_APPWINDOW,
-    WS_EX_TOOLWINDOW, WS_OVERLAPPED,
+    HWND_TOPMOST, ICONINFO, LoadIconW, MF_STRING, MSG, PostMessageW, PostQuitMessage,
+    RegisterClassW, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP, WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP,
+    WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
 };
 use windows_sys::core::{GUID, HRESULT, IUnknown_Vtbl};
 
@@ -1097,7 +1096,14 @@ fn add_tray_icon(hwnd: HWND) -> io::Result<()> {
     let mut data = notify_icon_data(hwnd);
     data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     data.uCallbackMessage = WM_TRAY_ICON;
-    data.hIcon = unsafe { LoadIconW(null_mut_hwnd(), IDI_APPLICATION) };
+    // Resource 1 is embedded at build time. LoadIconW returns a shared handle,
+    // so it must not be destroyed by the tray cleanup path.
+    // Win32 MAKEINTRESOURCE encodes the numeric ID in the pointer address;
+    // this is not a dereferenceable pointer (dangling::<u16>() would encode 2).
+    data.hIcon = unsafe { LoadIconW(GetModuleHandleW(null()), std::ptr::without_provenance(1)) };
+    if data.hIcon.is_null() {
+        return Err(io::Error::last_os_error());
+    }
     copy_wide_fixed(&mut data.szTip, "Hayai - Alt+Space");
 
     if unsafe { Shell_NotifyIconW(NIM_ADD, &data) } == 0 {
