@@ -1,3 +1,4 @@
+use futures::StreamExt;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -26,6 +27,18 @@ const LAUNCHER_WIDTH: f32 = 720.0;
 const LAUNCHER_HEIGHT: f32 = 400.0;
 
 const SCRY_SETUP_ICON_SIZE: f32 = 56.0;
+const HAYAI_ROW_ICON_SIZE: f32 = 28.0;
+
+fn render_update_icon(renderer: &gpui::SvgRenderer, scale: f32) -> Option<Arc<RenderImage>> {
+    // Keep spare raster resolution for fractional Windows scaling. The same
+    // cached SVG render serves the notification and Check for updates row.
+    renderer
+        .render_single_frame(
+            include_bytes!("../assets/icons/update.svg"),
+            HAYAI_ROW_ICON_SIZE * 2.0 * scale / 1024.0,
+        )
+        .ok()
+}
 
 fn render_scry_setup_icon(renderer: &gpui::SvgRenderer, scale: f32) -> Option<Arc<RenderImage>> {
     // GPUI supplies 2x supersampling; size the SVG to the physical display
@@ -258,8 +271,31 @@ fn perform_search_and_select_first(
     cx: &mut Context<ListState<ResultListDelegate>>,
 ) {
     std::mem::drop(list.delegate_mut().perform_search(query, window, cx));
-    let ix = (list.delegate().items_count(0, cx) > 0).then(IndexPath::default);
+    refresh_result_layout(list, window, cx);
+}
+
+fn refresh_result_layout(
+    list: &mut ListState<ResultListDelegate>,
+    window: &mut Window,
+    cx: &mut Context<ListState<ResultListDelegate>>,
+) {
+    let notification =
+        list.delegate().last_query.is_empty() && list.delegate().notification_visible();
+    let ix = if notification {
+        Some(IndexPath::default())
+    } else {
+        (!list.delegate().results.is_empty()).then(|| list.delegate().index_path(0))
+    };
+    // gpui-component measures one row for the entire list. App-view rows
+    // stay single-line; files retain their uniform two-line layout.
+    let measured = if list.delegate().notification_visible() {
+        IndexPath::default()
+    } else {
+        list.delegate().index_path(0)
+    };
+    list.set_item_to_measure_index(measured, window, cx);
     list.set_selected_index(ix, window, cx);
+    list.delegate_mut().notification_selected = notification;
 }
 
 #[derive(Clone)]
@@ -287,6 +323,12 @@ pub struct LauncherState {
 }
 
 impl LauncherState {
+    pub fn refresh_update(&self, cx: &mut App) {
+        if let Some(view) = &self.view {
+            // Notification arrival must not reset the query or steal selection.
+            view.update(cx, |_, cx| cx.notify());
+        }
+    }
     pub fn install(cx: &mut App) -> Rc<RefCell<Self>> {
         let state = Rc::new(RefCell::new(Self::default()));
         cx.set_global(LauncherGlobal {
@@ -304,6 +346,10 @@ impl LauncherState {
     }
 
     pub fn show(&mut self, cx: &mut App) {
+        self.show_with_focus(false, cx);
+    }
+
+    fn show_with_focus(&mut self, after_approval: bool, cx: &mut App) {
         let reset_view = self.reset_pending.then(|| self.view.clone()).flatten();
         self.reset_pending = false;
         if let (Some(handle), Some(search_input)) = (self.window, self.search_input.clone()) {
@@ -322,7 +368,11 @@ impl LauncherState {
                     // calls SetForegroundWindow etc.), then GPUI focus. Reversed order
                     // (GPUI focus before Win32 focus) would have GPUI's WM_SETFOCUS
                     // handler clobber our focus state.
-                    native::focus_launcher_window(window);
+                    if after_approval {
+                        native::focus_launcher_after_approval(window);
+                    } else {
+                        native::focus_launcher_window(window);
+                    }
                     search_input.update(cx, |input, cx| input.focus(window, cx));
                 })
                 .is_ok();
@@ -371,8 +421,7 @@ impl LauncherState {
                             .searchable(false)
                     });
                     list.update(cx, |list, cx| {
-                        let ix = (list.delegate().items_count(0, cx) > 0).then(IndexPath::default);
-                        list.set_selected_index(ix, window, cx);
+                        perform_search_and_select_first(list, "", window, cx);
                     });
                     let search_input = cx.new(|cx| {
                         InputState::new(window, cx).placeholder("Search apps or calculate...")
@@ -543,6 +592,9 @@ fn shortcut_keycap(content: impl IntoElement, _cx: &App) -> impl IntoElement {
 /// a containing view can do this.
 #[derive(Clone)]
 struct ActionMenu {
+    diagnostics_only: bool,
+    notification: bool,
+    notification_action: &'static str,
     submenu: Option<OpenWithMenu>,
     path: PathBuf,
     is_dir: bool,
@@ -567,6 +619,8 @@ struct OpenWithMenu {
 
 #[derive(Clone, Copy)]
 enum MenuAction {
+    CopyDiagnosticLog,
+    DismissNotification,
     Open,
     OpenWith,
     AssociatedApp(usize),
@@ -622,9 +676,11 @@ impl ActionMenu {
                 ext.eq_ignore_ascii_case("lnk") || ext.eq_ignore_ascii_case("url")
             });
         [
-            Some((
+            (!self.diagnostics_only).then_some((
                 MenuAction::Open,
-                if self.is_app {
+                if self.notification {
+                    self.notification_action
+                } else if self.is_app {
                     "Open application"
                 } else if self.is_dir {
                     "Open folder"
@@ -632,6 +688,10 @@ impl ActionMenu {
                     "Open"
                 },
             )),
+            (self.notification && !self.diagnostics_only)
+                .then_some((MenuAction::DismissNotification, "Dismiss")),
+            (self.notification || self.diagnostics_only)
+                .then_some((MenuAction::CopyDiagnosticLog, "Copy diagnostic log")),
             open_with.then_some((MenuAction::OpenWith, "Open with…")),
             local_path.then_some((
                 MenuAction::Reveal,
@@ -742,8 +802,40 @@ impl LauncherRoot {
                 this.on_intercepted_key(key, control_k, window, cx);
             });
         });
+        let renderer = cx.svg_renderer();
+        let icon_list = list.clone();
+        let scale = window.scale_factor();
+        cx.spawn(async move |_, cx| {
+            let icons = cx
+                .background_spawn(async move {
+                    let brand = renderer
+                        .render_single_frame(
+                            include_bytes!("../assets/hayai.svg"),
+                            56.0 * scale / 1024.0,
+                        )
+                        .ok();
+                    let update = render_update_icon(&renderer, scale);
+                    (brand, update)
+                })
+                .await;
+            icon_list.update(cx, |list, cx| {
+                list.delegate_mut().brand_icon = icons.0;
+                list.delegate_mut().update_icon = icons.1;
+                cx.notify();
+            });
+        })
+        .detach();
         let _subscriptions = vec![
             cx.subscribe_in(&search_input, window, Self::on_search_event),
+            cx.observe_in(&list, window, |this, list, window, cx| {
+                let delegate = list.read(cx).delegate();
+                let return_to_apps =
+                    delegate.scry_installing && (this.file_mode || delegate.show_scry_updates);
+                if return_to_apps {
+                    this.reset_to_apps(window, cx);
+                }
+                cx.notify();
+            }),
             intercept,
         ];
         Self {
@@ -814,7 +906,12 @@ impl LauncherRoot {
         });
         self.list.update(cx, |list, cx| {
             perform_search_and_select_first(list, "", window, cx);
-            list.scroll_to_item(IndexPath::default(), gpui::ScrollStrategy::Top, window, cx);
+            let first = if list.delegate().notification_visible() {
+                IndexPath::default()
+            } else {
+                list.delegate().index_path(0)
+            };
+            list.scroll_to_item(first, gpui::ScrollStrategy::Top, window, cx);
         });
         cx.notify();
     }
@@ -853,11 +950,46 @@ impl LauncherRoot {
 
     fn selected_action_menu(&self, cx: &App) -> Option<ActionMenu> {
         let delegate = self.list.read(cx).delegate();
+        if delegate.show_updates || delegate.show_scry_updates || delegate.needs_pinned_scry() {
+            return Some(ActionMenu {
+                diagnostics_only: true,
+                notification: false,
+                notification_action: "",
+                submenu: None,
+                path: PathBuf::new(),
+                is_dir: false,
+                is_app: false,
+                can_run_as_admin: false,
+                selected: 0,
+            });
+        }
+        if delegate.calculator_view() {
+            return None;
+        }
+        if delegate.search_pending {
+            return None;
+        }
+        if delegate.notification_selected && delegate.notification_visible() {
+            return Some(ActionMenu {
+                diagnostics_only: false,
+                notification: true,
+                notification_action: self.selected_action_label(cx),
+                submenu: None,
+                path: PathBuf::new(),
+                is_dir: false,
+                is_app: false,
+                can_run_as_admin: false,
+                selected: 0,
+            });
+        }
         delegate
             .selected_index
-            .and_then(|ix| delegate.results.get(ix.row))
+            .and_then(|ix| delegate.item(ix))
             .and_then(|item| match &item.action {
                 CommandAction::OpenFile(path) => Some(ActionMenu {
+                    diagnostics_only: false,
+                    notification: false,
+                    notification_action: "",
                     submenu: None,
                     path: path.clone(),
                     is_dir: path.is_dir(),
@@ -866,6 +998,9 @@ impl LauncherRoot {
                     selected: 0,
                 }),
                 CommandAction::LaunchApplication(path) => Some(ActionMenu {
+                    diagnostics_only: false,
+                    notification: false,
+                    notification_action: "",
                     submenu: None,
                     path: path.clone(),
                     is_dir: false,
@@ -877,10 +1012,25 @@ impl LauncherRoot {
                                 .is_some_and(|ext| ext.eq_ignore_ascii_case("lnk"))),
                     selected: 0,
                 }),
+                CommandAction::CheckForUpdates => Some(ActionMenu {
+                    diagnostics_only: true,
+                    notification: false,
+                    notification_action: "",
+                    submenu: None,
+                    path: PathBuf::new(),
+                    is_dir: false,
+                    is_app: false,
+                    can_run_as_admin: false,
+                    selected: 0,
+                }),
                 CommandAction::CopyToClipboard(_)
                 | CommandAction::ShowText(_)
                 | CommandAction::InstallFileSearch
-                | CommandAction::StartFileSearch => None,
+                | CommandAction::StartFileSearch
+                | CommandAction::UpdateFileSearch
+                | CommandAction::CheckFileSearchUpdates
+                | CommandAction::AboutHayai
+                | CommandAction::RestartToUpdate => None,
             })
     }
 
@@ -911,6 +1061,46 @@ impl LauncherRoot {
             return;
         };
         match action {
+            MenuAction::CopyDiagnosticLog => {
+                let delegate = self.list.read(cx).delegate();
+                let combined = !delegate.show_updates
+                    && !delegate.show_scry_updates
+                    && !delegate.notification_selected
+                    && delegate
+                        .selected_index
+                        .and_then(|ix| delegate.item(ix))
+                        .is_some_and(|item| matches!(item.action, CommandAction::CheckForUpdates));
+                let scry = delegate.show_scry_updates
+                    || delegate.selected_notification() == Some(UpdateNotification::Scry);
+                let log = if combined {
+                    format!(
+                        "=== Hayai ===\n{}\n=== Scry Search ===\n{}",
+                        crate::updates::DIAGNOSTICS.snapshot(),
+                        crate::scry_updates::DIAGNOSTICS.snapshot()
+                    )
+                } else if scry {
+                    crate::scry_updates::DIAGNOSTICS.snapshot()
+                } else {
+                    crate::updates::DIAGNOSTICS.snapshot()
+                };
+                cx.write_to_clipboard(gpui::ClipboardItem::new_string(log));
+            }
+            MenuAction::DismissNotification => {
+                self.list.update(cx, |list, cx| {
+                    if list.delegate().selected_notification() == Some(UpdateNotification::Scry) {
+                        list.delegate_mut().scry_update_dismissed = true;
+                    } else {
+                        list.delegate_mut().update_dismissed = true;
+                    }
+                    list.delegate_mut().notification_selected = false;
+                    let ix = (!list.delegate().results.is_empty())
+                        .then(|| list.delegate().index_path(0));
+                    let measured = list.delegate().index_path(0);
+                    list.set_item_to_measure_index(measured, window, cx);
+                    list.set_selected_index(ix, window, cx);
+                    cx.notify();
+                });
+            }
             MenuAction::Open => self.list.update(cx, |list, cx| {
                 list.delegate_mut().confirm(false, window, cx);
             }),
@@ -1057,6 +1247,13 @@ impl LauncherRoot {
                 });
             }
             InputEvent::PressEnter { .. } => {
+                if self.list.read(cx).delegate().show_about {
+                    self.list.update(cx, |list, cx| {
+                        list.delegate_mut().show_about = false;
+                        cx.notify();
+                    });
+                    return;
+                }
                 if self.action_menu.is_some() {
                     if let Some(action) = self.selected_menu_action() {
                         self.run_menu_action(action, window, cx);
@@ -1144,7 +1341,7 @@ impl LauncherRoot {
                 .read(cx)
                 .delegate()
                 .results
-                .get(ix.row)
+                .get(self.list.read(cx).delegate().flat_index(ix))
                 .and_then(|item| match &item.action {
                     CommandAction::OpenFile(path) if path.is_dir() => Some(path.clone()),
                     _ => None,
@@ -1163,29 +1360,80 @@ impl LauncherRoot {
             cx.notify();
         }
         self.list.update(cx, |list, cx| {
-            let count = list.delegate().items_count(0, cx);
+            let count = list.delegate().results.len();
+            if list.delegate().notification_visible() {
+                let notices = list.delegate().notification_count();
+                let current = if list.delegate().notification_selected {
+                    list.selected_index().map_or(0, |ix| ix.row)
+                } else {
+                    list.selected_index()
+                        .map(|ix| list.delegate().flat_index(ix) + notices)
+                        .unwrap_or(0)
+                };
+                let next =
+                    (current as isize + delta).rem_euclid((count + notices) as isize) as usize;
+                list.set_selected_index(
+                    Some(
+                        next.checked_sub(notices)
+                            .map(|flat| list.delegate().index_path(flat))
+                            .unwrap_or(IndexPath {
+                                section: 0,
+                                row: next,
+                                ..Default::default()
+                            }),
+                    ),
+                    window,
+                    cx,
+                );
+                list.delegate_mut().notification_selected = next < notices;
+                list.scroll_to_selected_item(window, cx);
+                cx.notify();
+                return;
+            }
             if count == 0 {
                 return;
             }
             let current = list
                 .selected_index()
-                .map(|ix| ix.row as isize)
+                .map(|ix| list.delegate().flat_index(ix) as isize)
                 .unwrap_or(-1);
             let next = (current + delta).rem_euclid(count as isize) as usize;
-            list.set_selected_index(Some(IndexPath::new(next)), window, cx);
+            let ix = list.delegate().index_path(next);
+            list.set_selected_index(Some(ix), window, cx);
             list.scroll_to_selected_item(window, cx);
         });
     }
 
     fn on_move_up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
+        if self.list.read(cx).delegate().show_about
+            || self.list.read(cx).delegate().show_updates
+            || self.list.read(cx).delegate().show_scry_updates
+        {
+            return;
+        }
         if self.move_menu_selection(-1, cx) {
+            return;
+        }
+        if self.list.read(cx).delegate().notification_visible() {
+            if self.list.read(cx).delegate().notification_selected
+                && self
+                    .list
+                    .read(cx)
+                    .selected_index()
+                    .is_some_and(|ix| ix.row == 0)
+                && self.search_input.read(cx).value().is_empty()
+            {
+                self.recall_history(1, window, cx);
+                return;
+            }
+            self.move_selection(-1, window, cx);
             return;
         }
         let at_top = self
             .list
             .read(cx)
             .selected_index()
-            .map(|ix| ix.row)
+            .map(|ix| self.list.read(cx).delegate().flat_index(ix))
             .unwrap_or(0)
             == 0;
         if self.search_input.read(cx).value().is_empty() && at_top {
@@ -1202,6 +1450,12 @@ impl LauncherRoot {
     }
 
     fn on_move_down(&mut self, _: &MoveDown, window: &mut Window, cx: &mut Context<Self>) {
+        if self.list.read(cx).delegate().show_about
+            || self.list.read(cx).delegate().show_updates
+            || self.list.read(cx).delegate().show_scry_updates
+        {
+            return;
+        }
         if self.move_menu_selection(1, cx) {
             return;
         }
@@ -1264,6 +1518,18 @@ impl LauncherRoot {
             cx.notify();
             return;
         }
+        if self.list.read(cx).delegate().show_about
+            || self.list.read(cx).delegate().show_updates
+            || self.list.read(cx).delegate().show_scry_updates
+        {
+            self.list.update(cx, |list, cx| {
+                list.delegate_mut().show_updates = false;
+                list.delegate_mut().show_scry_updates = false;
+                list.delegate_mut().show_about = false;
+                cx.notify();
+            });
+            return;
+        }
         // Escape backs out one level at a time: folder scope first (same
         // stack as Backspace), then file mode entirely, then a non-empty
         // query just gets cleared, and only once all of those are already
@@ -1294,12 +1560,92 @@ impl LauncherRoot {
     /// e.g. "Copy" for calculator rows instead of the app-launch default.
     fn selected_action_label(&self, cx: &App) -> &'static str {
         let delegate = self.list.read(cx).delegate();
+        // The visible page owns the footer even while typing starts a
+        // background search. Pending results must not replace its action.
+        if delegate.show_scry_updates || delegate.needs_pinned_scry() {
+            return if delegate.scry_installing {
+                "Updating…"
+            } else if delegate.scry_checking && !delegate.needs_pinned_scry() {
+                "Checking…"
+            } else if delegate.scry_ready {
+                "Back to search"
+            } else if delegate.scry_target().is_some() {
+                "Update Scry Search"
+            } else {
+                "Check again"
+            };
+        }
+        if delegate.show_updates {
+            return if delegate.restarting_update {
+                "Restarting…"
+            } else if delegate.checking_update {
+                "Checking…"
+            } else if delegate.update_result == Some(crate::updates::CheckResult::Ready) {
+                "Restart to update"
+            } else {
+                "Check again"
+            };
+        }
+        if delegate.show_about {
+            return "Back";
+        }
+        if delegate.file_search && delegate.search_pending {
+            return "Search files";
+        }
+        if delegate.notification_selected {
+            if delegate.selected_notification() == Some(UpdateNotification::Scry) {
+                return if delegate.scry_installing {
+                    "Updating…"
+                } else if delegate.scry_install_attempted && delegate.scry_ready {
+                    "Dismiss"
+                } else if delegate.scry_install_attempted {
+                    "Retry update"
+                } else if delegate.scry_checking {
+                    "Checking…"
+                } else if delegate
+                    .scry_discovery
+                    .as_ref()
+                    .is_some_and(|r| r.state == crate::scry_updates::State::Available)
+                {
+                    "View update"
+                } else {
+                    "Check again"
+                };
+            }
+            return if delegate.checking_update {
+                "Checking…"
+            } else if delegate.restarting_update {
+                "Restarting…"
+            } else {
+                if crate::updates::ready_version().is_some() {
+                    "View update"
+                } else {
+                    "Check again"
+                }
+            };
+        }
         if delegate.starting_scry {
             return "Starting…";
         }
+        if delegate.file_search && delegate.results.is_empty() {
+            return "Search files";
+        }
+        if let Some(item) = delegate.results.first()
+            && item.id.starts_with("files:compatibility:")
+        {
+            return if item.id.ends_with(":error") {
+                "Unavailable"
+            } else if item.id.ends_with(":unavailable") {
+                "Check for updates"
+            } else if item.id.ends_with(":newer") {
+                "Update Hayai"
+            } else {
+                "Update required"
+            };
+        }
         let action = delegate
             .selected_index
-            .and_then(|ix| delegate.results.get(ix.row))
+            .and_then(|ix| delegate.item(ix))
             .map(|item| &item.action);
         match action {
             Some(CommandAction::CopyToClipboard(_)) => "Copy",
@@ -1308,6 +1654,11 @@ impl LauncherRoot {
             Some(CommandAction::ShowText(_)) => "Show",
             Some(CommandAction::InstallFileSearch) => "Install",
             Some(CommandAction::StartFileSearch) => "Start",
+            Some(CommandAction::UpdateFileSearch) => "Update Scry Search",
+            Some(CommandAction::CheckFileSearchUpdates) => "Check for updates",
+            Some(CommandAction::RestartToUpdate) => "Restart to update",
+            Some(CommandAction::CheckForUpdates) => "Check for updates",
+            Some(CommandAction::AboutHayai) => "About Hayai",
             Some(CommandAction::LaunchApplication(_)) | None => "Open Application",
         }
     }
@@ -1321,6 +1672,87 @@ impl Focusable for LauncherRoot {
 
 impl gpui::Render for LauncherRoot {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let delegate = self.list.read(cx).delegate();
+        let about = delegate.show_about;
+        // Compatibility results and explicit update navigation share one page.
+        // A query refresh must not briefly expose the older setup renderer.
+        let scry_page = delegate.show_scry_updates || delegate.needs_pinned_scry();
+        let scry_required = delegate.file_search
+            && delegate
+                .results
+                .iter()
+                .any(|item| item.id == "files:compatibility:update");
+        let scry_setup = delegate.file_search
+            && delegate
+                .results
+                .iter()
+                .any(|item| item.id == "files:compatibility:unavailable");
+        let updates_page = delegate.show_updates || scry_page;
+        let update_loading = if scry_page {
+            delegate.scry_installing || (delegate.scry_checking && !delegate.needs_pinned_scry())
+        } else {
+            delegate.checking_update || delegate.restarting_update
+        };
+        let update_ready = if scry_page {
+            delegate.scry_target().is_some()
+        } else {
+            delegate.update_result == Some(crate::updates::CheckResult::Ready)
+        };
+        let restarting_update = delegate.restarting_update;
+        let update_failed = delegate.update_failed;
+        let required_message = delegate.needs_pinned_scry().then(|| {
+            format!(
+                "Scry Search {} is ready to install.",
+                crate::scry_updates::REQUIRED_VERSION
+            )
+        });
+        let update_message = if scry_page {
+            if delegate.needs_pinned_scry() && !delegate.scry_install_attempted {
+                required_message.as_deref().unwrap_or_default()
+            } else {
+                delegate.scry_message.as_str()
+            }
+        } else {
+            delegate
+                .update_message
+                .unwrap_or("Check for a new Hayai release.")
+        };
+        let update_icon = if scry_page {
+            delegate.scry_icon.clone()
+        } else {
+            delegate.update_icon.clone()
+        };
+        let scry_installing = delegate.scry_installing;
+        let scry_ready = delegate.scry_ready;
+        let scry_status_label = if delegate.scry_checking {
+            "Checking Scry Search…"
+        } else {
+            match delegate.scry_discovery.as_ref().map(|result| &result.state) {
+                Some(crate::scry_updates::State::Available) => "Scry Search update available",
+                Some(crate::scry_updates::State::Current) => "Scry Search is up to date",
+                Some(crate::scry_updates::State::NoCompatibleRelease) => {
+                    "No compatible Scry Search release found"
+                }
+                _ => "Couldn't check Scry Search for updates",
+            }
+        };
+        let show_main_heading = about || updates_page;
+        let actions_disabled = (delegate.search_pending && !updates_page)
+            || about
+            || (!updates_page
+                && !delegate.notification_selected
+                && !delegate
+                    .selected_index
+                    .and_then(|ix| delegate.item(ix))
+                    .is_some_and(|item| {
+                        matches!(
+                            item.action,
+                            CommandAction::LaunchApplication(_)
+                                | CommandAction::OpenFile(_)
+                                | CommandAction::CheckForUpdates
+                        )
+                    }));
+        let brand_icon = delegate.brand_icon.clone();
         let file_setup = {
             let delegate = self.list.read(cx).delegate();
             delegate
@@ -1328,10 +1760,11 @@ impl gpui::Render for LauncherRoot {
                 .first()
                 .filter(|item| {
                     delegate.results.len() == 1
-                        && matches!(
-                            item.action,
-                            CommandAction::InstallFileSearch | CommandAction::StartFileSearch
-                        )
+                        && (item.id.starts_with("files:compatibility:")
+                            || matches!(
+                                item.action,
+                                CommandAction::InstallFileSearch | CommandAction::StartFileSearch
+                            ))
                 })
                 .map(|item| {
                     (
@@ -1341,13 +1774,19 @@ impl gpui::Render for LauncherRoot {
                     )
                 })
         };
-        let setup_screen = file_setup.is_some();
-        let starting_scry = self.list.read(cx).delegate().starting_scry;
+        let setup_screen = file_setup.is_some() || updates_page || about;
+        let updating_scry =
+            self.list.read(cx).delegate().scry_installing || crate::scry_updates::is_updating();
+        let starting_scry = self.list.read(cx).delegate().starting_scry || updating_scry;
         let primary_label = self.selected_action_label(cx);
         let can_enter_folder = self.file_mode && primary_label == "Open Folder";
         // Backspace edits non-empty queries; advertise navigation only when
         // the empty-input handler can actually leave the current scope/mode.
         let can_go_back = (self.file_mode || self.waiting_for_command)
+            && self.search_input.read(cx).value().is_empty();
+        let show_commands_hint = !setup_screen
+            && !self.file_mode
+            && !self.waiting_for_command
             && self.search_input.read(cx).value().is_empty();
         let backspace_label = if !self.folder_scope.is_empty() {
             "Up one level"
@@ -1455,7 +1894,87 @@ impl gpui::Render for LauncherRoot {
                         header.child(breadcrumbs)
                     }),
             )
-            .child(if let Some((title, description, icon)) = file_setup {
+            .when(show_main_heading, |root| root.child(div().flex_none().px_2().pt_2().child(section_heading(if scry_page { "Files" } else { "Hayai" }, cx))))
+            .child(if updates_page {
+                div().flex_1().w_full().flex().flex_col().items_center().justify_center()
+                    .gap_3().text_center()
+                    .child(div().size(px(56.0)).flex_none().flex().items_center().justify_center()
+                        .when(update_loading, |slot| slot.child(
+                            gpui_component::spinner::Spinner::new()
+                                .icon(gpui_component::Icon::default().path("icons/spinner.svg"))
+                                .with_size(px(32.0)).color(cx.theme().muted_foreground)))
+                        .when(!update_loading, |slot| slot.when_some(update_icon,
+                            |slot, icon| slot.child(img(icon).size(px(56.0))))))
+                    .child(div().text_size(px(14.0)).font_weight(FontWeight::MEDIUM)
+                        .child(if scry_page {
+                            if scry_installing { "Updating Scry Search…" }
+                            else if scry_ready { "File search is ready" }
+                            else if scry_required { "Scry Search update required" }
+                            else if scry_setup { "Set up Scry Search" }
+                            else if update_loading { "Checking for updates…" }
+                            else if update_ready { "Scry Search update available" }
+                            else { "Scry Search updates" }
+                        } else if restarting_update { "Restarting to update…" }
+                            else if update_loading { "Checking for updates…" }
+                            else if update_failed { "Couldn't restart to update" }
+                            else if update_ready { "Update ready" } else { "Hayai updates" }))
+                    .child(div().max_w(px(440.0)).text_size(px(13.0))
+                        .text_color(cx.theme().muted_foreground)
+                        .child(if scry_page && scry_required && !scry_ready {
+                            format!("File search requires a newer Scry Search version.\n{update_message}")
+                        } else if scry_page { update_message.to_string() }
+                            else if restarting_update { "Applying the update and restarting Hayai.".to_string() }
+                            else if update_loading { "Checking and downloading the latest release.".to_string() }
+                            else if update_failed { "Try restarting again.".to_string() }
+                            else if update_ready { format!("Hayai {} is ready to install.", crate::updates::ready_version().unwrap_or_default()) }
+                            else { update_message.to_string() }))
+                    .when(!update_loading, |page| page.child(
+                        div().id("update-page-action").mt_1().px_4().py_2().rounded(px(6.0))
+                            .bg(cx.theme().list_active).cursor_pointer()
+                            .hover(|button| button.bg(cx.theme().tokens.list_hover))
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                cx.stop_propagation();
+                                this.list.update(cx, |list, cx| {
+                                    let delegate = list.delegate_mut();
+                                    if delegate.needs_pinned_scry() {
+                                        delegate.show_scry_updates = true;
+                                    }
+                                    delegate.confirm(false, window, cx);
+                                    cx.notify();
+                                });
+                            }))
+                            .child(if scry_page {
+                                if scry_ready { "Back to search" } else if update_ready { "Update Scry Search" } else { "Check again" }
+                            } else if update_ready { "Restart to update" } else { "Check again" })))
+                    .when(!scry_page, |page| page.child(
+                        div().id("scry-update-status").text_xs().text_color(cx.theme().muted_foreground)
+                            .cursor_pointer().underline()
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                                this.list.update(cx, |list, cx| {
+                                    let delegate = list.delegate_mut();
+                                    if delegate.scry_discovery.as_ref().is_some_and(|result| result.state == crate::scry_updates::State::Available) && !delegate.scry_checking {
+                                        delegate.show_updates = false;
+                                        delegate.show_scry_updates = true;
+                                    } else { delegate.check_scry_updates(true, window, cx); }
+                                    cx.notify();
+                                });
+                            }))
+                            .child(scry_status_label)))
+                    .into_any_element()
+            } else if about {
+                div().flex_1().w_full().flex().flex_col().items_center().justify_center().gap_3()
+                    .when_some(brand_icon, |card, icon| card.child(img(icon).size(px(56.0))))
+                    .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child("Hayai"))
+                    .child(div().text_xs().text_color(cx.theme().muted_foreground)
+                        .child(format!("Version {}", env!("CARGO_PKG_VERSION"))))
+                    .child("A fast, lightweight launcher for Windows.")
+                    .child(div().id("hayai-project-link").text_xs().underline().cursor_pointer()
+                        .on_mouse_down(MouseButton::Left, cx.listener(|_, _, window, cx| {
+                            LauncherState::dismiss(window, cx);
+                            cx.open_url("https://github.com/Ariaryy/hayai");
+                        })).child("View project on GitHub"))
+                    .into_any_element()
+            } else if let Some((title, description, icon)) = file_setup {
                 div()
                     .flex_1().w_full().flex().flex_col()
                     .items_center().justify_center().gap_3().text_center()
@@ -1469,7 +1988,8 @@ impl gpui::Render for LauncherRoot {
                         .when(!starting_scry, |slot| slot.when_some(icon,
                             |slot, icon| slot.child(img(icon).size(px(SCRY_SETUP_ICON_SIZE))))))
                     .child(div().text_size(px(14.0)).font_weight(FontWeight::MEDIUM)
-                        .child(if starting_scry { "Starting file search".to_string() } else { title }))
+                        .child(if updating_scry { "Updating Scry Search".to_string() }
+                            else if starting_scry { "Starting file search".to_string() } else { title }))
                     .child(div().max_w(px(380.0)).text_size(px(13.0))
                         .text_color(cx.theme().muted_foreground)
                         .child(if starting_scry { "Waiting for Scry Search to become ready…".to_string() } else { description }))
@@ -1485,7 +2005,8 @@ impl gpui::Render for LauncherRoot {
                         .child("Learn more"))
                     .into_any_element()
             } else {
-                // Keep virtualized rows inside the results viewport.
+                // Clip virtualized rows to the results viewport so scrolling
+                // cannot paint text over the search input or footer.
                 div().flex_1().min_h_0().w_full().overflow_hidden()
                     .child(List::new(&self.list)
                         .scrollbar_visible(false)
@@ -1512,6 +2033,15 @@ impl gpui::Render for LauncherRoot {
                             .flex_1()
                             .min_w_0()
                             .gap_3()
+                            .when(self.action_menu.is_none() && show_commands_hint, |hints| {
+                                hints.child(
+                                    h_flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child("Commands")
+                                        .child(shortcut_keycap("Space", cx)),
+                                )
+                            })
                             .when(self.action_menu.is_none() && can_enter_folder, |hints| {
                                 hints.child(
                                     h_flex()
@@ -1550,7 +2080,7 @@ impl gpui::Render for LauncherRoot {
                                 cx,
                             )),
                     )
-                    .when(!setup_screen, |footer| { footer
+                    .when(!setup_screen || updates_page, |footer| { footer
 .child(div().mx_2().w(px(1.0)).h(px(16.0)).bg(cx.theme().border))
                     .child(
                         h_flex()
@@ -1560,6 +2090,7 @@ impl gpui::Render for LauncherRoot {
                             .px(px(2.5))
                             // The 20px caps retain 3px of vertical breathing room.
                             .rounded(px(7.0))
+                            .when(actions_disabled, |group| group.opacity(0.4))
                             .when(self.action_menu.is_some(), |group| {
                                 group
                                     .bg(gpui::rgb(0x2b2b30))
@@ -1650,7 +2181,91 @@ impl gpui::Render for LauncherRoot {
 /// [`PluginRegistry`], renders one row per [`CommandItem`], and runs the
 /// selected item's action on confirm. Provider-agnostic — apps are just the
 /// current default provider.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum UpdateNotification {
+    Hayai,
+    Scry,
+}
+
+fn notification_kind(row: usize, hayai: bool, scry: bool) -> Option<UpdateNotification> {
+    match (row, hayai, scry) {
+        (0, true, _) => Some(UpdateNotification::Hayai),
+        (0, false, true) | (1, true, true) => Some(UpdateNotification::Scry),
+        _ => None,
+    }
+}
+
+fn result_index_path(flat: usize, main: usize, total: usize) -> IndexPath {
+    // An empty list still measures section one, where future file results go.
+    // Section two exists only when there are actual Hayai command results.
+    let secondary = flat >= main && main < total;
+    IndexPath {
+        section: 1 + usize::from(secondary),
+        row: if secondary { flat - main } else { flat },
+        ..Default::default()
+    }
+}
+
+fn scry_check_notice(
+    state: Option<&crate::scry_updates::State>,
+    checking: bool,
+    manual: bool,
+) -> bool {
+    use crate::scry_updates::State;
+    (checking && manual)
+        || matches!(state, Some(State::Available))
+        || (manual && matches!(state, Some(State::Current | State::NoCompatibleRelease)))
+}
+
+fn reconcile_notification_selection(
+    list: &mut ListState<ResultListDelegate>,
+    previous: Option<UpdateNotification>,
+    window: &mut Window,
+    cx: &mut Context<ListState<ResultListDelegate>>,
+) {
+    let Some(previous) = previous else {
+        return;
+    };
+    let delegate = list.delegate();
+    let ix = (0..delegate.notification_count())
+        .find(|row| delegate.notification_kind(*row) == Some(previous))
+        .map(|row| IndexPath {
+            section: 0,
+            row,
+            ..Default::default()
+        })
+        .or_else(|| (!delegate.results.is_empty()).then(|| delegate.index_path(0)))
+        .or_else(|| delegate.notification_visible().then(IndexPath::default));
+    list.set_selected_index(ix, window, cx);
+}
+
 struct ResultListDelegate {
+    search_pending: bool,
+    update_notice: bool,
+    scry_notice: bool,
+    show_scry_updates: bool,
+    scry_checked: Option<std::time::Instant>,
+    scry_checking: bool,
+    scry_installing: bool,
+    scry_install_attempted: bool,
+    scry_install_target: Option<String>,
+    scry_ready: bool,
+    scry_update_dismissed: bool,
+    scry_discovery: Option<crate::scry_updates::Discovery>,
+    scry_message: String,
+    main_results: usize,
+    update_dismissed: bool,
+    checking_update: bool,
+    update_message: Option<&'static str>,
+    show_about: bool,
+    show_updates: bool,
+    update_result: Option<crate::updates::CheckResult>,
+    apps_view: bool,
+    brand_icon: Option<Arc<RenderImage>>,
+    update_icon: Option<Arc<RenderImage>>,
+    notification_selected: bool,
+    update_failed: bool,
+    restarting_update: bool,
     starting_scry: bool,
     last_query: String,
     scry_icon: Option<Arc<RenderImage>>,
@@ -1666,6 +2281,224 @@ struct ResultListDelegate {
 }
 
 impl ResultListDelegate {
+    fn needs_pinned_scry(&self) -> bool {
+        self.file_search
+            && self.results.iter().any(|item| {
+                matches!(
+                    item.id.as_str(),
+                    "files:compatibility:update" | "files:compatibility:unavailable"
+                )
+            })
+    }
+    fn scry_target(&self) -> Option<&str> {
+        if self.needs_pinned_scry() {
+            Some(crate::scry_updates::REQUIRED_VERSION)
+        } else if self.scry_install_attempted && !self.scry_ready {
+            self.scry_install_target.as_deref()
+        } else {
+            self.scry_discovery
+                .as_ref()
+                .filter(|result| result.state == crate::scry_updates::State::Available)
+                .and_then(|result| result.target.as_deref())
+        }
+    }
+    fn calculator_view(&self) -> bool {
+        !self.apps_view && !self.file_search
+    }
+    fn notification_visible(&self) -> bool {
+        self.notification_count() != 0
+    }
+    fn hayai_notification_visible(&self) -> bool {
+        self.apps_view
+            && !self.show_about
+            && !self.update_dismissed
+            && (self.checking_update
+                || crate::updates::ready_version().is_some()
+                || (self.update_notice
+                    && self.update_result == Some(crate::updates::CheckResult::Current)))
+    }
+    fn scry_notification_visible(&self) -> bool {
+        self.apps_view
+            && !self.show_about
+            && !self.scry_update_dismissed
+            && (self.scry_installing
+                || self.scry_install_attempted
+                || scry_check_notice(
+                    self.scry_discovery.as_ref().map(|result| &result.state),
+                    self.scry_checking,
+                    self.scry_notice,
+                ))
+    }
+    fn notification_count(&self) -> usize {
+        usize::from(self.hayai_notification_visible())
+            + usize::from(self.scry_notification_visible())
+    }
+    fn notification_kind(&self, row: usize) -> Option<UpdateNotification> {
+        notification_kind(
+            row,
+            self.hayai_notification_visible(),
+            self.scry_notification_visible(),
+        )
+    }
+    fn selected_notification(&self) -> Option<UpdateNotification> {
+        self.notification_selected
+            .then(|| self.notification_kind(self.selected_index.map_or(0, |ix| ix.row)))
+            .flatten()
+    }
+
+    fn check_scry_updates(
+        &mut self,
+        force: bool,
+        window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) {
+        let interval = if self
+            .scry_discovery
+            .as_ref()
+            .is_some_and(|result| result.state == crate::scry_updates::State::Failed)
+        {
+            Duration::from_secs(15 * 60)
+        } else {
+            Duration::from_secs(24 * 60 * 60)
+        };
+        if self.scry_checking
+            || self.scry_installing
+            || (!force
+                && self
+                    .scry_checked
+                    .is_some_and(|time| time.elapsed() < interval))
+        {
+            return;
+        }
+        self.scry_checking = true;
+        self.scry_install_attempted = false;
+        if force {
+            self.scry_notice = true;
+            self.scry_update_dismissed = false;
+        }
+        self.scry_checked = Some(std::time::Instant::now());
+        self.scry_ready = false;
+        self.scry_message = "Checking for Scry Search updates…".into();
+        let scale = window.scale_factor();
+        let renderer = cx.svg_renderer();
+        let cached_icon = self.scry_icon.clone();
+        cx.spawn_in(window, async move |list, cx| {
+            let (result, icon, ready) = cx
+                .background_spawn(async move {
+                    let result = crate::scry_updates::check(force);
+                    let ready = result.state == crate::scry_updates::State::Current
+                        && native::scry_compatibility() == crate::scry::Compatibility::Ready;
+                    (
+                        result,
+                        cached_icon.or_else(|| render_scry_setup_icon(&renderer, scale)),
+                        ready,
+                    )
+                })
+                .await;
+            let _ = cx.update(|window, cx| {
+                list.update(cx, |list, cx| {
+                    let previous = list.delegate().selected_notification();
+                    let delegate = list.delegate_mut();
+                    delegate.scry_checking = false;
+                    if !delegate.scry_install_attempted {
+                        delegate.scry_ready = ready;
+                        delegate.scry_message = result.message.clone();
+                        delegate.scry_discovery = Some(result);
+                    } else {
+                        // Discovery started before installation describes the
+                        // previous daemon. It cannot override activation results.
+                        delegate.scry_discovery = None;
+                        delegate.scry_checked = None;
+                    }
+                    delegate.scry_icon = icon;
+                    delegate.scry_icon_scale = scale;
+                    reconcile_notification_selection(list, previous, window, cx);
+                    cx.notify();
+                })
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn update_scry(&mut self, cx: &mut Context<ListState<Self>>) {
+        if self.scry_installing || (self.scry_checking && !self.needs_pinned_scry()) {
+            return;
+        }
+        let Some(target) = self.scry_target().map(str::to_owned) else {
+            return;
+        };
+        self.scry_installing = true;
+        self.scry_install_target = Some(target.clone());
+        self.scry_install_attempted = true;
+        self.scry_update_dismissed = false;
+        self.scry_ready = false;
+        self.scry_message = "Preparing the Scry Search update…".into();
+        cx.spawn(async move |list, cx| {
+            let (mut send, mut receive) = futures::channel::mpsc::channel(8);
+            let job = cx.background_spawn(async move {
+                crate::scry_updates::install(&target, |message| {
+                    let _ = send.try_send(message);
+                })
+            });
+            let mut restored_after_approval = false;
+            while let Some(progress) = receive.next().await {
+                let restore = progress.active && !restored_after_approval;
+                let _ = list.update(cx, |list, cx| {
+                    list.delegate_mut().scry_message = progress.message;
+                    cx.notify();
+                });
+                if restore {
+                    restored_after_approval = true;
+                    // This runs after the entity update has unwound, so show
+                    // can safely enter the window update and restore focus.
+                    cx.update(|cx| {
+                        let state = cx.global::<LauncherGlobal>().clone_handle();
+                        state.borrow_mut().show_with_focus(true, cx);
+                    });
+                }
+            }
+            let result = job.await;
+            let _ = list.update(cx, |list, cx| {
+                let delegate = list.delegate_mut();
+                delegate.scry_installing = false;
+                delegate.scry_ready = result.is_ok();
+                delegate.scry_message = result.unwrap_or_else(|message| message);
+                // A failure/recovery may have changed the installed version.
+                // Discover again before another installation attempt.
+                delegate.scry_discovery = None;
+                delegate.scry_checked = None;
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+    fn main_count(&self) -> usize {
+        self.main_results
+    }
+    fn section_offset(&self) -> usize {
+        // Reserve section zero even when empty. An update arriving or being
+        // dismissed must not change the indexes of already-selected results.
+        1
+    }
+    fn flat_index(&self, ix: IndexPath) -> usize {
+        // Notifications are a separate first section, not part of results.
+        if ix.section == self.section_offset() {
+            ix.row
+        } else {
+            self.main_count() + ix.row
+        }
+    }
+    fn index_path(&self, flat: usize) -> IndexPath {
+        result_index_path(flat, self.main_count(), self.results.len())
+    }
+    fn item(&self, ix: IndexPath) -> Option<&CommandItem> {
+        if ix.section == 0 {
+            return None;
+        }
+        self.results.get(self.flat_index(ix))
+    }
     fn start_scry(&mut self, window: &mut Window, cx: &mut Context<ListState<Self>>) {
         if self.starting_scry {
             return;
@@ -1701,10 +2534,13 @@ impl ResultListDelegate {
                     // An empty result set is a successful search, too. Setup
                     // rows mean the daemon is still unavailable, not ready.
                     if scry_search_is_ready(&items) {
-                        let _ = list.update(cx, |list, cx| {
-                            let delegate = list.delegate_mut();
-                            delegate.starting_scry = false;
-                            delegate.apply_results(generation, items, cx);
+                        let _ = cx.update(|window, cx| {
+                            list.update(cx, |list, cx| {
+                                let delegate = list.delegate_mut();
+                                delegate.starting_scry = false;
+                                delegate.apply_results(generation, items, cx);
+                                refresh_result_layout(list, window, cx);
+                            })
                         });
                         return;
                     }
@@ -1733,7 +2569,37 @@ impl ResultListDelegate {
     fn new(registry: Rc<RefCell<PluginRegistry>>, catalog: Rc<RefCell<Catalog>>) -> Self {
         let dispatch = registry.borrow_mut().dispatch("");
         let results = registry.borrow().search(&dispatch);
+        let main_results = results
+            .iter()
+            .position(|item| is_hayai_action(&item.action))
+            .unwrap_or(results.len());
         Self {
+            search_pending: false,
+            update_notice: false,
+            scry_notice: false,
+            show_scry_updates: false,
+            scry_checked: None,
+            scry_checking: false,
+            scry_installing: false,
+            scry_install_attempted: false,
+            scry_install_target: None,
+            scry_ready: false,
+            scry_update_dismissed: false,
+            scry_discovery: None,
+            scry_message: String::new(),
+            main_results,
+            notification_selected: crate::updates::ready_version().is_some(),
+            update_dismissed: false,
+            checking_update: false,
+            update_message: None,
+            show_about: false,
+            show_updates: false,
+            update_result: None,
+            apps_view: true,
+            brand_icon: None,
+            update_icon: None,
+            update_failed: false,
+            restarting_update: false,
             starting_scry: false,
             last_query: String::new(),
             scry_icon: None,
@@ -1757,19 +2623,55 @@ impl ResultListDelegate {
             return;
         }
         self.results_generation = generation;
+        self.search_pending = false;
+        self.main_results = items
+            .iter()
+            .position(|item| is_hayai_action(&item.action))
+            .unwrap_or(items.len());
         self.results = items;
-        self.selected_index = (!self.results.is_empty()).then(IndexPath::default);
+        if self.file_search
+            && self.results.iter().any(|item| {
+                matches!(
+                    item.id.as_str(),
+                    "files:compatibility:update"
+                        | "files:compatibility:unavailable"
+                        | "files:compatibility:updating"
+                )
+            })
+        {
+            self.show_scry_updates = true;
+            self.show_updates = false;
+        }
+        self.selected_index = (!self.results.is_empty()).then(|| self.index_path(0));
         cx.notify();
     }
 }
 
 fn scry_search_is_ready(items: &[CommandItem]) -> bool {
     !items.iter().any(|item| {
-        matches!(
-            item.action,
-            CommandAction::InstallFileSearch | CommandAction::StartFileSearch
-        )
+        item.id.starts_with("files:compatibility:")
+            || matches!(
+                item.action,
+                CommandAction::InstallFileSearch | CommandAction::StartFileSearch
+            )
     })
+}
+
+fn section_heading(label: &'static str, cx: &App) -> impl IntoElement {
+    div()
+        .px_1()
+        .pb_1()
+        .text_xs()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(cx.theme().muted_foreground)
+        .child(label)
+}
+
+fn is_hayai_action(action: &CommandAction) -> bool {
+    matches!(
+        action,
+        CommandAction::CheckForUpdates | CommandAction::AboutHayai
+    )
 }
 
 impl ListDelegate for ResultListDelegate {
@@ -1781,13 +2683,43 @@ impl ListDelegate for ResultListDelegate {
         window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Task<()> {
+        let was_file_search = self.file_search;
+        self.search_pending = false;
         self.starting_scry = false;
         self.last_query = query.to_string();
+        self.show_about = false;
+        self.show_updates = false;
         self.file_search = query == " f" || query.starts_with(" f ");
+        self.show_scry_updates = self.file_search
+            && was_file_search
+            && (self.show_scry_updates || self.needs_pinned_scry());
+        // File mode only probes local compatibility. Required setup already
+        // has an exact release target; optional discovery is user initiated.
         let dispatch = self.registry.borrow_mut().dispatch(query);
-        if dispatch.debounce
-            && let Some(job) = self.registry.borrow().background_search(&dispatch)
-        {
+        self.apps_view = self.registry.borrow().namespace(&dispatch) == "apps";
+        if !self.apps_view {
+            self.notification_selected = false;
+        }
+        let background_job = if dispatch.debounce {
+            self.registry.borrow().background_search(&dispatch)
+        } else {
+            None
+        };
+        if let Some(job) = background_job {
+            self.search_pending = true;
+            if self.file_search
+                && (!was_file_search || dispatch.query.is_empty())
+                && !self.show_scry_updates
+            {
+                // Render in-memory recents in the same frame as the mode
+                // switch. Disk validation and compatibility remain background
+                // work; confirmation stays disabled until that work finishes.
+                let preview = self.registry.borrow().search(&dispatch);
+                self.apply_results(dispatch.generation, preview, cx);
+                self.search_pending = true;
+                self.notification_selected = false;
+            }
+            cx.notify();
             let generation = dispatch.generation;
             let registry = self.registry.clone();
             let scale = window.scale_factor();
@@ -1795,10 +2727,13 @@ impl ListDelegate for ResultListDelegate {
                 .then(|| self.scry_icon.clone())
                 .flatten();
             let renderer = cx.svg_renderer();
+            let debounce = !dispatch.query.is_empty();
             cx.spawn_in(window, async move |list, cx| {
-                cx.background_executor()
-                    .timer(Duration::from_millis(8))
-                    .await;
+                if debounce {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(8))
+                        .await;
+                }
                 // Foreground again after the await: the query may have moved
                 // on while we slept, so drop this result set if so.
                 if registry.borrow().current_generation() != generation {
@@ -1808,10 +2743,12 @@ impl ListDelegate for ResultListDelegate {
                     .background_spawn(async move {
                         let items = job();
                         let setup = items.iter().any(|item| {
-                            matches!(
-                                item.action,
-                                CommandAction::InstallFileSearch | CommandAction::StartFileSearch
-                            )
+                            item.id.starts_with("files:compatibility:")
+                                || matches!(
+                                    item.action,
+                                    CommandAction::InstallFileSearch
+                                        | CommandAction::StartFileSearch
+                                )
                         });
                         let icon = if setup {
                             cached_icon.or_else(|| render_scry_setup_icon(&renderer, scale))
@@ -1824,12 +2761,18 @@ impl ListDelegate for ResultListDelegate {
                 if registry.borrow().current_generation() != generation {
                     return;
                 }
-                let _ = list.update(cx, |list, cx| {
-                    if let Some(icon) = scry_icon {
-                        list.delegate_mut().scry_icon = Some(icon);
-                        list.delegate_mut().scry_icon_scale = scale;
-                    }
-                    list.delegate_mut().apply_results(generation, items, cx);
+                let _ = cx.update(|window, cx| {
+                    list.update(cx, |list, cx| {
+                        if let Some(icon) = scry_icon {
+                            list.delegate_mut().scry_icon = Some(icon);
+                            list.delegate_mut().scry_icon_scale = scale;
+                        }
+                        list.delegate_mut().apply_results(generation, items, cx);
+                        // An empty query can switch the first populated section.
+                        // Remeasure after the async results arrive; measuring an
+                        // empty section collapses every virtual row to zero height.
+                        refresh_result_layout(list, window, cx);
+                    })
                 });
             })
             .detach();
@@ -1842,8 +2785,63 @@ impl ListDelegate for ResultListDelegate {
         Task::ready(())
     }
 
-    fn items_count(&self, _section: usize, _cx: &App) -> usize {
-        self.results.len()
+    fn sections_count(&self, _cx: &App) -> usize {
+        self.section_offset()
+            + if self.main_count() < self.results.len() {
+                2
+            } else {
+                1
+            }
+    }
+    fn items_count(&self, section: usize, _cx: &App) -> usize {
+        if section == 0 {
+            return self.notification_count();
+        }
+        if section == self.section_offset() {
+            self.main_count()
+        } else {
+            self.results.len() - self.main_count()
+        }
+    }
+    fn render_section_header(
+        &mut self,
+        section: usize,
+        _window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) -> Option<impl IntoElement> {
+        let label = if self.notification_visible() && section == 0 {
+            "Notifications"
+        } else if section == self.section_offset() + 1 {
+            "Hayai"
+        } else if self.apps_view {
+            "Applications"
+        } else if self.file_search {
+            "Files"
+        } else {
+            "Calculator"
+        };
+        // The list shares this measurement across headers. Keep it compact
+        // so the first section does not add a blank band below the search box.
+        Some(
+            div()
+                .h(px(if self.apps_view { 24.0 } else { 20.0 }))
+                .flex_none()
+                .flex()
+                .items_center()
+                .px_1()
+                .child(section_heading(label, cx)),
+        )
+    }
+
+    fn render_section_footer(
+        &mut self,
+        _section: usize,
+        _window: &mut Window,
+        _cx: &mut Context<ListState<Self>>,
+    ) -> Option<impl IntoElement> {
+        // The virtual list measures footer zero and reuses that height for
+        // each section, including the final group.
+        self.apps_view.then(|| div().h(px(8.0)).flex_none())
     }
 
     fn render_empty(
@@ -1860,17 +2858,19 @@ impl ListDelegate for ResultListDelegate {
             .gap_3()
             .text_xs()
             .text_color(cx.theme().muted_foreground)
-            .child(
-                gpui::svg()
-                    .path("icons/search-empty.svg")
-                    .size(px(40.0))
-                    .flex_none()
-                    .text_color(cx.theme().muted_foreground.opacity(0.65)),
-            )
-            .child(if self.file_search {
-                "No files found. Try another search."
-            } else {
-                "No apps found. Try another search."
+            .when(!self.search_pending, |view| {
+                view.child(
+                    gpui::svg()
+                        .path("icons/search-empty.svg")
+                        .size(px(40.0))
+                        .flex_none()
+                        .text_color(cx.theme().muted_foreground.opacity(0.65)),
+                )
+                .child(if self.file_search {
+                    "No files found. Try another search."
+                } else {
+                    "No apps found. Try another search."
+                })
             })
     }
 
@@ -1880,21 +2880,108 @@ impl ListDelegate for ResultListDelegate {
         _window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Option<Self::Item> {
-        let item = self.results.get(ix.row)?.clone();
-        let icon = match &item.icon {
-            IconSource::Path(path) => {
-                let mut catalog = self.catalog.borrow_mut();
-                match catalog.request_icon(path) {
-                    IconRequest::Ready(icon) => icon,
-                    IconRequest::Loading => None,
-                    IconRequest::Load(path) => {
-                        drop(catalog);
-                        spawn_icon_load(path, self.catalog.clone(), cx);
-                        None
+        if self.notification_visible() && ix.section == 0 {
+            let scry = self.notification_kind(ix.row)? == UpdateNotification::Scry;
+            let title = if scry {
+                if self.scry_installing {
+                    "Updating Scry Search"
+                } else if self.scry_install_attempted && self.scry_ready {
+                    "Scry Search updated"
+                } else if self.scry_install_attempted {
+                    "Couldn't update Scry Search"
+                } else if self.scry_checking {
+                    "Checking for Scry Search updates…"
+                } else {
+                    match self.scry_discovery.as_ref().map(|result| &result.state) {
+                        Some(crate::scry_updates::State::Available) => {
+                            "Scry Search update available"
+                        }
+                        Some(crate::scry_updates::State::Current) => "Scry Search is up to date",
+                        Some(crate::scry_updates::State::NoCompatibleRelease) => {
+                            "No compatible Scry Search update"
+                        }
+                        _ => "Couldn't check Scry Search for updates",
                     }
                 }
+            } else if self.checking_update {
+                "Checking for Hayai updates…"
+            } else if self.restarting_update {
+                "Restarting to update…"
+            } else if crate::updates::ready_version().is_some() {
+                "Hayai update available"
+            } else if self.update_result == Some(crate::updates::CheckResult::Current) {
+                "Hayai is up to date"
+            } else {
+                "Couldn't check Hayai for updates"
+            };
+            let subtitle = if scry {
+                if self.scry_installing {
+                    "Installation in progress.".into()
+                } else if self.scry_install_attempted && self.scry_ready {
+                    "Enter to dismiss.".into()
+                } else if self.scry_install_attempted && self.scry_message.chars().count() > 55 {
+                    "Open details to retry.".into()
+                } else if self.scry_checking && !self.scry_install_attempted {
+                    "You can keep searching.".into()
+                } else {
+                    self.scry_message.clone()
+                }
+            } else if self.checking_update {
+                "You can keep searching.".into()
+            } else if self.update_failed {
+                "Couldn't start the update. Select to retry.".into()
+            } else {
+                crate::updates::ready_version()
+                    .map(|version| format!("Hayai {version}"))
+                    .unwrap_or_else(|| self.update_message.unwrap_or("Try again later.").into())
+            };
+            return Some(ResultRow {
+                compact: self.apps_view,
+                icon_size: HAYAI_ROW_ICON_SIZE,
+                loading: scry && self.scry_installing,
+                ..ResultRow::new(
+                    ix,
+                    title.into(),
+                    Some(subtitle),
+                    None,
+                    if scry {
+                        self.scry_icon.clone()
+                    } else {
+                        self.update_icon.clone()
+                    },
+                    self.notification_selected && self.selected_index == Some(ix),
+                    false,
+                )
+            });
+        }
+        let mut item = self.item(ix)?.clone();
+        if matches!(item.action, CommandAction::CheckForUpdates) {
+            item.subtitle = Some(
+                self.update_message
+                    .unwrap_or("Manually check for a new Hayai release")
+                    .into(),
+            );
+        }
+        let icon = if matches!(item.action, CommandAction::CheckForUpdates) {
+            self.update_icon.clone()
+        } else if is_hayai_action(&item.action) {
+            self.brand_icon.clone()
+        } else {
+            match &item.icon {
+                IconSource::Path(path) => {
+                    let mut catalog = self.catalog.borrow_mut();
+                    match catalog.request_icon(path) {
+                        IconRequest::Ready(icon) => icon,
+                        IconRequest::Loading => None,
+                        IconRequest::Load(path) => {
+                            drop(catalog);
+                            spawn_icon_load(path, self.catalog.clone(), cx);
+                            None
+                        }
+                    }
+                }
+                IconSource::None => None,
             }
-            IconSource::None => None,
         };
         let selected = self.selected_index == Some(ix);
         // Only `CalcProvider` produces `CopyToClipboard` today, so this
@@ -1902,6 +2989,12 @@ impl ListDelegate for ResultListDelegate {
         // to `CommandItem` that every other provider would have to fill in.
         let calculator = matches!(item.action, CommandAction::CopyToClipboard(_));
         Some(ResultRow {
+            compact: self.apps_view,
+            icon_size: if is_hayai_action(&item.action) {
+                HAYAI_ROW_ICON_SIZE
+            } else {
+                22.0
+            },
             file_size: item.file_size,
             ..ResultRow::new(
                 ix,
@@ -1922,6 +3015,8 @@ impl ListDelegate for ResultListDelegate {
         cx: &mut Context<ListState<Self>>,
     ) {
         self.selected_index = ix;
+        self.notification_selected =
+            self.notification_visible() && ix.is_some_and(|ix| ix.section == 0);
         cx.notify();
     }
 
@@ -1934,11 +3029,184 @@ impl ListDelegate for ResultListDelegate {
         // Bookkeeping first (cheap, in-memory), then hide the window
         // *immediately* — a shell call can take hundreds of ms and must not
         // hold the launcher on screen after Enter.
-        let action = self
-            .selected_index
-            .and_then(|ix| self.results.get(ix.row))
-            .map(|item| item.action.clone());
+        if self.search_pending && !self.show_scry_updates && !self.show_updates {
+            return;
+        }
+        if self.show_scry_updates && self.scry_ready {
+            let query = self.last_query.clone();
+            self.show_scry_updates = false;
+            // These compatibility rows describe the pre-install daemon.
+            // Drop them before refreshing so they cannot reopen setup.
+            self.results.clear();
+            self.perform_search(&query, window, cx).detach();
+            return;
+        }
+        if let Some(notification) = self.selected_notification()
+            && !self.show_updates
+            && !self.show_scry_updates
+        {
+            match notification {
+                UpdateNotification::Scry => {
+                    if self.scry_installing {
+                        return;
+                    }
+                    if self.scry_install_attempted {
+                        if self.scry_ready {
+                            self.scry_update_dismissed = true;
+                            self.notification_selected = false;
+                            self.selected_index =
+                                (!self.results.is_empty()).then(|| self.index_path(0));
+                            cx.notify();
+                        } else {
+                            self.show_scry_updates = true;
+                            cx.notify();
+                        }
+                        return;
+                    }
+                    if self.scry_checking {
+                        return;
+                    }
+                    if self
+                        .scry_discovery
+                        .as_ref()
+                        .is_some_and(|result| result.state == crate::scry_updates::State::Available)
+                    {
+                        self.show_scry_updates = true;
+                    } else {
+                        self.check_scry_updates(true, window, cx);
+                    }
+                    cx.notify();
+                    return;
+                }
+                UpdateNotification::Hayai
+                    if !self.checking_update && crate::updates::ready_version().is_some() =>
+                {
+                    self.show_updates = true;
+                    self.update_result = Some(crate::updates::CheckResult::Ready);
+                    cx.notify();
+                    return;
+                }
+                _ => {}
+            }
+        }
+        let action = if self.show_scry_updates {
+            if self.scry_installing || (self.scry_checking && !self.needs_pinned_scry()) {
+                return;
+            }
+            Some(if self.scry_target().is_some() {
+                CommandAction::UpdateFileSearch
+            } else {
+                CommandAction::CheckFileSearchUpdates
+            })
+        } else if self.show_updates {
+            if self.checking_update || self.restarting_update {
+                return;
+            }
+            Some(
+                if self.update_result == Some(crate::updates::CheckResult::Ready) {
+                    CommandAction::RestartToUpdate
+                } else {
+                    CommandAction::CheckForUpdates
+                },
+            )
+        } else if self.notification_selected {
+            Some(
+                if self.selected_notification() == Some(UpdateNotification::Scry) {
+                    CommandAction::CheckFileSearchUpdates
+                } else {
+                    CommandAction::CheckForUpdates
+                },
+            )
+        } else {
+            self.selected_index
+                .and_then(|ix| self.item(ix))
+                .map(|item| item.action.clone())
+        };
         match action {
+            Some(CommandAction::CheckFileSearchUpdates) => {
+                // Only unavailable/incompatible file search needs a blocking
+                // setup page. Optional discovery never replaces search results.
+                self.show_scry_updates = self.file_search && !scry_search_is_ready(&self.results);
+                self.show_updates = false;
+                self.show_about = false;
+                self.check_scry_updates(true, window, cx);
+            }
+            Some(CommandAction::UpdateFileSearch) => {
+                self.update_scry(cx);
+            }
+            Some(CommandAction::CheckForUpdates) => {
+                if self.file_search
+                    && self
+                        .results
+                        .iter()
+                        .any(|item| item.id == "files:compatibility:newer")
+                    && crate::updates::ready_version().is_some()
+                {
+                    self.show_updates = true;
+                    self.update_result = Some(crate::updates::CheckResult::Ready);
+                    cx.notify();
+                    return;
+                }
+                self.check_scry_updates(true, window, cx);
+                self.show_updates = false;
+                self.update_notice = true;
+                self.update_dismissed = false;
+                self.show_about = false;
+                cx.notify();
+                if self.checking_update {
+                    return;
+                }
+                self.checking_update = true;
+                self.update_failed = false;
+                self.update_result = None;
+                self.update_message = Some("Checking for updates…");
+                cx.notify();
+                cx.spawn_in(window, async move |list, cx| {
+                    let result = cx.background_spawn(async { crate::updates::check() }).await;
+                    let _ = cx.update(|window, cx| {
+                        list.update(cx, |list, cx| {
+                            let previous = list.delegate().selected_notification();
+                            let delegate = list.delegate_mut();
+                            delegate.checking_update = false;
+                            delegate.update_result = Some(result);
+                            delegate.update_message = Some(result.message());
+                            reconcile_notification_selection(list, previous, window, cx);
+                            cx.notify();
+                        })
+                    });
+                })
+                .detach();
+            }
+            Some(CommandAction::AboutHayai) => {
+                self.show_about = true;
+                cx.notify();
+            }
+            Some(CommandAction::RestartToUpdate) => {
+                if cfg!(debug_assertions) {
+                    return;
+                }
+                if self.restarting_update {
+                    return;
+                }
+                self.restarting_update = true;
+                cx.notify();
+                cx.spawn(async move |list, cx| {
+                    let ready = cx
+                        .background_spawn(async { crate::updates::prepare_restart() })
+                        .await;
+                    if ready {
+                        cx.update(|cx| cx.quit());
+                    } else {
+                        let _ = list.update(cx, |list, cx| {
+                            let delegate = list.delegate_mut();
+                            delegate.restarting_update = false;
+                            delegate.update_failed = true;
+                            cx.notify();
+                        });
+                    }
+                })
+                .detach();
+            }
             Some(CommandAction::LaunchApplication(path)) => {
                 let recents = self.catalog.borrow_mut().mark_launched_path(path.clone());
                 LauncherState::dismiss(window, cx);
@@ -2014,6 +3282,9 @@ fn spawn_icon_load(
 
 #[derive(gpui::IntoElement)]
 struct ResultRow {
+    loading: bool,
+    compact: bool,
+    icon_size: f32,
     base: ListItem,
     title: SharedString,
     subtitle: Option<SharedString>,
@@ -2038,6 +3309,9 @@ impl ResultRow {
         calculator: bool,
     ) -> Self {
         Self {
+            loading: false,
+            compact: false,
+            icon_size: 22.0,
             base: ListItem::new(id).selected(selected),
             title: title.into(),
             subtitle: subtitle.map(Into::into),
@@ -2074,6 +3348,9 @@ impl gpui::RenderOnce for ResultRow {
         // applies to that fill too. The list's own `.p_2()` provides the
         // inset on all four sides uniformly.
         let ResultRow {
+            loading,
+            compact,
+            icon_size,
             base,
             title,
             subtitle,
@@ -2086,7 +3363,15 @@ impl gpui::RenderOnce for ResultRow {
         let content: AnyElement = if calculator {
             ResultRow::render_calculator(title, subtitle, calculation_detail, cx)
         } else {
-            ResultRow::render_plain(title, subtitle, file_size, icon, cx)
+            ResultRow::render_plain(
+                title,
+                subtitle,
+                file_size,
+                icon,
+                compact,
+                (icon_size, loading),
+                cx,
+            )
         };
         if calculator {
             // Calculator results are presentation cards rather than hoverable list rows.
@@ -2111,12 +3396,17 @@ impl ResultRow {
         subtitle: Option<SharedString>,
         file_size: Option<u64>,
         icon: Option<Arc<RenderImage>>,
+        compact: bool,
+        icon_state: (f32, bool),
         cx: &mut App,
     ) -> AnyElement {
+        let (icon_size, loading) = icon_state;
         h_flex()
+            .when(compact, |row| row.h(px(24.0)))
             .items_center()
             .gap_3()
             .w_full()
+            .min_w_0()
             .child(
                 div()
                     .w(px(22.0))
@@ -2125,7 +3415,17 @@ impl ResultRow {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .when_some(icon, |slot, image| slot.child(img(image).size(px(22.0)))),
+                    .when(loading, |slot| {
+                        slot.child(
+                            gpui_component::spinner::Spinner::new()
+                                .icon(gpui_component::Icon::default().path("icons/spinner.svg"))
+                                .with_size(px(icon_size))
+                                .color(cx.theme().muted_foreground),
+                        )
+                    })
+                    .when_some(icon.filter(|_| !loading), |slot, image| {
+                        slot.child(img(image).size(px(icon_size)).flex_none())
+                    }),
             )
             .child(
                 div()
@@ -2134,7 +3434,9 @@ impl ResultRow {
                     .flex()
                     .flex_col()
                     .overflow_hidden()
-                    // Uniform list rows cannot grow when filenames wrap.
+                    // Every item in this virtual list shares one measured
+                    // height. Neither a filename nor a path may wrap and
+                    // extend into the following row.
                     .child(
                         div()
                             .w_full()
@@ -2146,22 +3448,36 @@ impl ResultRow {
                             .text_ellipsis_middle()
                             .child(title),
                     )
-                    .when_some(subtitle, |col, subtitle| {
-                        col.child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .w_full()
-                                .min_w_0()
-                                .h(px(18.0))
-                                .line_height(px(18.0))
-                                .overflow_hidden()
-                                .whitespace_nowrap()
-                                .text_ellipsis_middle()
-                                .child(subtitle),
-                        )
-                    }),
+                    .when_some(
+                        if compact { None } else { subtitle.clone() },
+                        |col, subtitle| {
+                            col.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .w_full()
+                                    .min_w_0()
+                                    .h(px(18.0))
+                                    .line_height(px(18.0))
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis_middle()
+                                    .child(subtitle),
+                            )
+                        },
+                    ),
             )
+            .when_some(if compact { subtitle } else { None }, |row, subtitle| {
+                row.child(
+                    div()
+                        .min_w_0()
+                        .max_w(px(360.0))
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .truncate()
+                        .child(subtitle),
+                )
+            })
             .when_some(file_size, |row, bytes| {
                 row.child(
                     div()
@@ -2233,14 +3549,6 @@ impl ResultRow {
             .flex_col()
             .gap_1()
             .w_full()
-            .child(
-                div()
-                    .px_1()
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(cx.theme().muted_foreground)
-                    .child("Calculator"),
-            )
             .child(
                 div()
                     .flex()
@@ -2376,6 +3684,106 @@ mod tests {
     use super::{format_expression_for_display, format_result_for_display};
 
     #[test]
+    fn empty_results_keep_a_valid_measurement_section_when_search_is_cleared() {
+        for (main, total, section) in [(0, 0, 1), (5, 5, 1), (0, 2, 2), (5, 7, 1)] {
+            assert_eq!(super::result_index_path(0, main, total).section, section);
+        }
+        assert_eq!(super::result_index_path(5, 5, 7).section, 2);
+        assert_eq!(super::result_index_path(5, 5, 7).row, 0);
+    }
+
+    #[test]
+    fn failed_checks_are_not_notifications_even_after_a_manual_check() {
+        use crate::scry_updates::State;
+        assert!(!super::scry_check_notice(Some(&State::Failed), false, true));
+        assert!(!super::scry_check_notice(
+            Some(&State::Failed),
+            false,
+            false
+        ));
+        assert!(super::scry_check_notice(
+            Some(&State::Available),
+            false,
+            false
+        ));
+        assert!(super::scry_check_notice(Some(&State::Current), false, true));
+        assert!(!super::scry_check_notice(
+            Some(&State::Current),
+            false,
+            false
+        ));
+    }
+
+    #[test]
+    fn update_notifications_keep_distinct_actions_in_a_shared_section() {
+        use super::{
+            UpdateNotification::{Hayai, Scry},
+            notification_kind,
+        };
+        assert_eq!(notification_kind(0, true, true), Some(Hayai));
+        assert_eq!(notification_kind(1, true, true), Some(Scry));
+        assert_eq!(notification_kind(2, true, true), None);
+        assert_eq!(notification_kind(0, false, true), Some(Scry));
+        assert_eq!(notification_kind(1, false, true), None);
+        assert_eq!(notification_kind(0, true, false), Some(Hayai));
+        assert_eq!(notification_kind(0, false, false), None);
+    }
+
+    #[test]
+    fn notification_actions_include_dismiss_without_file_operations() {
+        let menu = super::ActionMenu {
+            diagnostics_only: false,
+            notification: true,
+            notification_action: "Restart to update",
+            submenu: None,
+            path: Default::default(),
+            is_dir: false,
+            is_app: false,
+            can_run_as_admin: false,
+            selected: 0,
+        };
+        assert_eq!(
+            menu.actions().map(|(_, label)| label).collect::<Vec<_>>(),
+            ["Restart to update", "Dismiss", "Copy diagnostic log"]
+        );
+    }
+
+    #[test]
+    fn update_page_actions_only_copy_diagnostics() {
+        let menu = super::ActionMenu {
+            diagnostics_only: true,
+            notification: false,
+            notification_action: "",
+            submenu: None,
+            path: Default::default(),
+            is_dir: false,
+            is_app: false,
+            can_run_as_admin: false,
+            selected: 0,
+        };
+        assert_eq!(
+            menu.actions().map(|(_, label)| label).collect::<Vec<_>>(),
+            ["Copy diagnostic log"]
+        );
+    }
+
+    #[test]
+    fn notification_svg_renders_without_a_bitmap_asset() {
+        let renderer = gpui::SvgRenderer::new(std::sync::Arc::new(crate::LauncherAssets));
+        let icon = super::render_update_icon(&renderer, 1.25).expect("render update SVG");
+        assert_eq!(icon.size(0).width.0, 140);
+        assert_eq!(icon.size(0).height.0, 140);
+        assert!(
+            icon.as_bytes(0)
+                .unwrap()
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[3] != 0)
+        );
+    }
+
+    #[test]
     fn scry_readiness_accepts_empty_searches_but_not_setup_prompts() {
         use crate::commands::{CommandAction, CommandItem, IconSource};
         let item = |action| CommandItem {
@@ -2420,6 +3828,9 @@ mod tests {
     #[test]
     fn open_with_submenu_has_its_own_numbering_and_returns_to_parent() {
         let mut menu = super::ActionMenu {
+            diagnostics_only: false,
+            notification: false,
+            notification_action: "",
             submenu: Some(super::OpenWithMenu {
                 request: 1,
                 loading: true,
@@ -2500,6 +3911,9 @@ mod tests {
             ),
         ] {
             let menu = super::ActionMenu {
+                diagnostics_only: false,
+                notification: false,
+                notification_action: "",
                 submenu: None,
                 path: root.join(name),
                 is_dir,
@@ -2513,6 +3927,9 @@ mod tests {
             );
         }
         let packaged = super::ActionMenu {
+            diagnostics_only: false,
+            notification: false,
+            notification_action: "",
             submenu: None,
             path: "shell:AppsFolder/Publisher.App!App".into(),
             is_dir: false,

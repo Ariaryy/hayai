@@ -391,7 +391,7 @@ impl CommandProvider for AppsProvider {
 
     fn search(&self, query: &str) -> Vec<CommandItem> {
         let catalog = self.catalog.borrow();
-        catalog
+        let mut items: Vec<CommandItem> = catalog
             .search(query)
             .into_iter()
             .filter_map(|index| {
@@ -406,13 +406,75 @@ impl CommandProvider for AppsProvider {
                     action: CommandAction::LaunchApplication(app.path().to_path_buf()),
                 })
             })
-            .collect()
+            .collect();
+        items.extend(hayai_commands(query));
+        items
     }
+}
+
+pub(crate) fn hayai_commands(query: &str) -> Vec<CommandItem> {
+    let query = query.to_ascii_lowercase();
+    [
+        (
+            "Check for updates",
+            "hayai check for updates update upgrade",
+            CommandAction::CheckForUpdates,
+        ),
+        (
+            "About Hayai",
+            "about hayai version information",
+            CommandAction::AboutHayai,
+        ),
+    ]
+    .into_iter()
+    .filter(|(_, terms, _)| query.split_whitespace().all(|token| terms.contains(token)))
+    .map(|(title, _, action)| CommandItem {
+        id: format!("hayai:{title}"),
+        title: title.into(),
+        subtitle: Some("Hayai".into()),
+        file_size: None,
+        calculation_detail: None,
+        icon: IconSource::None,
+        action,
+    })
+    .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::fuzzy_score;
+
+    #[test]
+    fn hayai_commands_are_searchable_and_follow_app_results() {
+        use crate::commands::CommandAction;
+        let all = super::hayai_commands("");
+        assert_eq!(all.len(), 2);
+        assert_eq!(super::hayai_commands("HAYAI").len(), 2);
+        let updates = super::hayai_commands("check updates");
+        assert_eq!(updates.len(), 1);
+        assert!(matches!(updates[0].action, CommandAction::CheckForUpdates));
+        let about = super::hayai_commands("about");
+        assert_eq!(about.len(), 1);
+        assert!(matches!(about[0].action, CommandAction::AboutHayai));
+        assert!(super::hayai_commands("code.exe").is_empty());
+        let catalog = std::rc::Rc::new(std::cell::RefCell::new(super::Catalog {
+            apps: vec![super::AppEntry {
+                name: "Example".into(),
+                name_lower: "example".into(),
+                path: "example.exe".into(),
+            }],
+            icons: Default::default(),
+            recents: Vec::new(),
+        }));
+        use crate::commands::CommandProvider;
+        let items = super::AppsProvider::new(catalog).search("");
+        assert!(matches!(
+            items[0].action,
+            CommandAction::LaunchApplication(_)
+        ));
+        assert!(matches!(items[1].action, CommandAction::CheckForUpdates));
+        assert!(matches!(items[2].action, CommandAction::AboutHayai));
+    }
 
     #[test]
     fn empty_needle_matches_anything_with_zero() {

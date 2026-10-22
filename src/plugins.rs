@@ -114,6 +114,10 @@ impl PluginRegistry {
         self.providers.iter().position(|p| p.auto_claim(query))
     }
 
+    pub fn namespace(&self, dispatch: &Dispatch) -> &'static str {
+        self.providers[dispatch.provider].namespace()
+    }
+
     pub fn search(&self, dispatch: &Dispatch) -> Vec<CommandItem> {
         self.providers[dispatch.provider].search(&dispatch.query)
     }

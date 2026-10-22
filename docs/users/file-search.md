@@ -17,12 +17,10 @@ Press `Tab` on a folder to search inside it. A breadcrumb beside the input shows
 the current location; click an earlier folder or **All files** to go back.
 With an empty query, `Backspace` goes back one folder level.
 If the daemon cannot be reached, Hayai shows a setup screen with the Scry icon.
-Press `Enter` to install Scry Search, or to start it if it is already installed.
-Installation requests elevation, registers a per-user scheduled task, and starts
-the daemon. Starting an existing installation runs that task while Hayai stays
-open and shows a spinner. Once Scry can answer a search, Hayai displays results
-for the current query automatically. If startup fails, press `Enter` to retry.
-If the scheduled task is missing, reinstall Scry using the bundled setup script.
+The update page checks for a compatible release and displays installation progress.
+Scry handles package verification, elevation, and daemon activation. Hayai verifies
+the requested daemon version before returning to file search. A running legacy
+daemon must be stopped before migration because it has no graceful-stop endpoint.
 
 The underlined **Learn more** link opens this guide. Scry's source code and
 releases are available in the [Scry Search repository](https://github.com/Ariaryy/scry-search).
@@ -50,16 +48,26 @@ for filters, wildcards, ranking, and path-term behavior.
 
 ## Version matching
 
-Scry's client, daemon, snapshot, and IPC formats are currently release-coupled.
-Hayai releases therefore bundle `scryd.exe`, `scry.exe`, and the setup scripts
-from the published Scry release tag recorded by Hayai's locked Rust dependency.
-Scry builds those artifacts in its own repository; Hayai consumes them as an
-independent application and practical example of the supported Rust client.
-Do not replace only one component with an arbitrary build.
+Hayai checks IPC and shared-index compatibility independently of Scry's application
+version. Compatible updates remain optional and do not interrupt searching.
+Successful release checks are cached for 24 hours; **Check for updates** refreshes
+both Hayai and Scry. Discovery and installation use Scry's explicit CLI commands;
+the daemon performs no update-related network requests.
+Required installations target Scry `v0.1.0`, matching Hayai's pinned SDK.
+They use the exact release directly; compatible improvement checks remain separate.
+Checks run without interrupting search. Optional Scry updates appear in the main
+Notifications group alongside Hayai updates, with no optional notifications in
+file mode. Dismissal lasts until Hayai restarts or another manual check begins.
+Failed optional checks do not create notifications. Update actions include
+**Copy diagnostic log**, preserving the original response and exit code for debugging.
+
+The bundled CLI must support Scry's schema 1 updater contract. Releases predating
+that contract require a newer Hayai package. Release archives without the updater
+manifest cannot be installed through this path.
 
 ## Troubleshooting
 
-- If Hayai still offers installation, confirm the scheduled Scry task exists
+- If Scry is unavailable, confirm the scheduled Scry task exists
   and is running, then reopen file mode.
 - If results are incomplete immediately after setup, allow initial indexing to
   finish and use `scry report` from a new terminal to inspect its status.

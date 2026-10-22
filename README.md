@@ -115,6 +115,10 @@ action panel is open, `Up`, `Down`, and `Enter` apply to its actions, and
 
 ## Development
 
+Installed Windows releases download stable updates in the background and apply
+them on request through a silent restart. Portable and development builds do not
+automatically update.
+
 Hayai keeps rendering and input on the UI thread. Native Windows work, Scry
 queries, currency refreshes, and icon decoding run outside the render path.
 A small `CommandProvider` registry connects app search, files, and the

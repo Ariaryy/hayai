@@ -56,7 +56,25 @@ const WM_TRAY_ICON: u32 = WM_APP + 1;
 // `&self` and never blocks, so no `Mutex` is needed — the send must not block
 // the Win32 message loop.
 static COMMAND_SENDER: OnceLock<UnboundedSender<NativeCommand>> = OnceLock::new();
-static SCRY_SEARCH_SENDER: OnceLock<mpsc::Sender<ScrySearchRequest>> = OnceLock::new();
+static SCRY_SEARCH_SENDER: OnceLock<mpsc::Sender<ScrySearchMessage>> = OnceLock::new();
+static SCRY_SESSION_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn reset_scry_search() {
+    SCRY_SESSION_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Release);
+}
+
+/// Background-only barrier: release idle SDK pipe/mapping handles before the
+/// elevated updater reconciles daemon ownership. Never start a worker for this.
+pub fn suspend_scry_search() -> bool {
+    let Some(sender) = SCRY_SEARCH_SENDER.get() else {
+        return true;
+    };
+    let (reply, response) = mpsc::sync_channel(1);
+    sender.send(ScrySearchMessage::Suspend(reply)).is_ok()
+        && response
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .is_ok()
+}
 
 /// One search result hit.
 pub struct FileHit {
@@ -188,6 +206,27 @@ pub fn focus_launcher_window(window: &gpui::Window) {
     }
 }
 
+pub fn focus_launcher_after_approval(window: &gpui::Window) {
+    use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowThreadProcessId,
+    };
+    unsafe {
+        let current = GetCurrentThreadId();
+        let foreground = GetWindowThreadProcessId(GetForegroundWindow(), null_mut());
+        // UAC can return foreground ownership to another thread. Share its
+        // input queue only for this one activation, then immediately detach.
+        // No timer or retained attachment may reclaim focus afterward.
+        let attached = foreground != 0
+            && foreground != current
+            && AttachThreadInput(current, foreground, 1) != 0;
+        focus_launcher_window(window);
+        if attached {
+            AttachThreadInput(current, foreground, 0);
+        }
+    }
+}
+
 pub fn render_hidden_launcher_frame(window: &gpui::Window) {
     if let Some(hwnd) = hwnd_of(window) {
         // Pinned gpui_windows/events.rs: WM_GPUI_FORCE_UPDATE_WINDOW is
@@ -265,6 +304,11 @@ struct ScrySearchRequest {
     query: String,
     max_results: u32,
     reply: mpsc::SyncSender<Option<Vec<FileHit>>>,
+}
+
+enum ScrySearchMessage {
+    Query(ScrySearchRequest),
+    Suspend(mpsc::SyncSender<()>),
 }
 
 /// Open an executable through Shell's `runas` verb, which lets Windows own
@@ -357,6 +401,9 @@ pub fn scry_is_installed() -> bool {
 }
 
 pub fn start_scry_daemon() -> bool {
+    if crate::scry_updates::is_updating() {
+        return false;
+    }
     use std::os::windows::process::CommandExt;
     // Starting an installed daemon must not escalate or open the installer:
     // Hayai stays focused and shows readiness progress in its existing window.
@@ -375,13 +422,16 @@ pub fn start_scry_daemon() -> bool {
 ///
 /// Returns `None` if `scryd` is not running or the query fails.
 pub fn scry_query(query: &str, max_results: u32) -> Option<Vec<FileHit>> {
+    if crate::scry_updates::is_updating() {
+        return None;
+    }
     let (reply, response) = mpsc::sync_channel(1);
     scry_search_sender()
-        .send(ScrySearchRequest {
+        .send(ScrySearchMessage::Query(ScrySearchRequest {
             query: query.to_owned(),
             max_results,
             reply,
-        })
+        }))
         .ok()?;
     response
         .recv_timeout(std::time::Duration::from_secs(5))
@@ -389,7 +439,7 @@ pub fn scry_query(query: &str, max_results: u32) -> Option<Vec<FileHit>> {
         .flatten()
 }
 
-fn scry_search_sender() -> &'static mpsc::Sender<ScrySearchRequest> {
+fn scry_search_sender() -> &'static mpsc::Sender<ScrySearchMessage> {
     SCRY_SEARCH_SENDER.get_or_init(|| {
         let (sender, receiver) = mpsc::channel();
         thread::Builder::new()
@@ -400,8 +450,9 @@ fn scry_search_sender() -> &'static mpsc::Sender<ScrySearchRequest> {
     })
 }
 
-fn run_scry_search(receiver: mpsc::Receiver<ScrySearchRequest>) {
+fn run_scry_search(receiver: mpsc::Receiver<ScrySearchMessage>) {
     let mut session: Option<scry_client::SearchSession> = None;
+    let mut epoch = SCRY_SESSION_EPOCH.load(std::sync::atomic::Ordering::Acquire);
     let mut active: Option<mpsc::SyncSender<Option<Vec<FileHit>>>> = None;
     loop {
         let request = if active.is_some() {
@@ -417,7 +468,32 @@ fn run_scry_search(receiver: mpsc::Receiver<ScrySearchRequest>) {
             }
         };
 
+        let request = match request {
+            Some(ScrySearchMessage::Suspend(reply)) => {
+                session = None;
+                if let Some(active) = active.take() {
+                    let _ = active.try_send(None);
+                }
+                let _ = reply.try_send(());
+                continue;
+            }
+            Some(ScrySearchMessage::Query(request)) => Some(request),
+            None => None,
+        };
         if let Some(request) = request {
+            // Requests already queued before UPDATING was set must not reopen
+            // a connection after the suspension barrier acknowledged closure.
+            if crate::scry_updates::is_updating() {
+                let _ = request.reply.try_send(None);
+                continue;
+            }
+            let current_epoch = SCRY_SESSION_EPOCH.load(std::sync::atomic::Ordering::Acquire);
+            if current_epoch != epoch {
+                // An updater can replace the daemon while a shared-index
+                // mapping still exists. Drop it before accepting a new query.
+                session = None;
+                epoch = current_epoch;
+            }
             if let Some(reply) = active.take() {
                 let _ = reply.try_send(Some(Vec::new()));
             }
@@ -1522,4 +1598,26 @@ pub fn local_now() -> (i32, u32, u32, u32, u32) {
         time.wHour as u32,
         time.wMinute as u32,
     )
+}
+
+#[cfg(test)]
+mod search_worker_tests {
+    use super::*;
+
+    #[test]
+    fn suspension_is_acknowledged_without_a_search_or_daemon() {
+        let (send, receive) = mpsc::channel();
+        let worker = thread::spawn(move || run_scry_search(receive));
+        // An idle worker used to wait forever for a query before releasing
+        // its session. Suspension must wake it independently of search.
+        for _ in 0..2 {
+            let (reply, response) = mpsc::sync_channel(1);
+            send.send(ScrySearchMessage::Suspend(reply)).unwrap();
+            response
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap();
+        }
+        drop(send);
+        worker.join().unwrap();
+    }
 }

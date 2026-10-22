@@ -22,8 +22,15 @@ pub enum CommandAction {
     CopyToClipboard(String),
     #[allow(dead_code)]
     ShowText(String),
+    #[allow(dead_code)]
     InstallFileSearch,
+    #[allow(dead_code)]
     StartFileSearch,
+    UpdateFileSearch,
+    CheckFileSearchUpdates,
+    RestartToUpdate,
+    CheckForUpdates,
+    AboutHayai,
 }
 
 #[derive(Clone, Debug)]
