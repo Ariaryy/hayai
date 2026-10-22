@@ -1,5 +1,6 @@
 #[derive(Clone, Copy, Debug)]
 pub enum NativeCommand {
+    UpdateReady,
     ToggleLauncher,
     Quit,
 }
@@ -24,12 +25,33 @@ pub struct AssociatedApp {
 mod windows;
 
 #[cfg(windows)]
+mod scry_status;
+
+#[cfg(windows)]
+pub use scry_status::probe as scry_compatibility;
+#[cfg(windows)]
+pub use scry_status::{invalidate as invalidate_scry_status, version as scry_version};
+
+#[cfg(not(windows))]
+pub fn scry_version() -> Option<String> {
+    None
+}
+#[cfg(not(windows))]
+pub fn invalidate_scry_status() {}
+
+#[cfg(not(windows))]
+pub fn scry_compatibility() -> crate::scry::Compatibility {
+    crate::scry::Compatibility::Unavailable
+}
+
+#[cfg(windows)]
 pub use windows::{
-    NativeRuntime, associated_apps, extract_icon_rgba, focus_launcher_window, hide_launcher_window,
-    https_get, install_scry_daemon, launch_path, launch_path_as_admin, list_apps_folder, local_now,
-    open_with, open_with_app, render_hidden_launcher_frame, scry_is_installed, scry_query,
-    start_scry_daemon, system_currency_code, system_timezone_name, timezone_local_to_utc,
-    timezone_utc_to_local,
+    NativeRuntime, associated_apps, extract_icon_rgba, focus_launcher_after_approval,
+    focus_launcher_window, hide_launcher_window, https_get, install_scry_daemon, launch_path,
+    launch_path_as_admin, list_apps_folder, local_now, open_with, open_with_app,
+    render_hidden_launcher_frame, reset_scry_search, scry_is_installed, scry_query,
+    start_scry_daemon, suspend_scry_search, system_currency_code, system_timezone_name,
+    timezone_local_to_utc, timezone_utc_to_local,
 };
 
 #[cfg(not(windows))]
@@ -47,6 +69,9 @@ impl NativeRuntime {
 
 #[cfg(not(windows))]
 pub fn focus_launcher_window(_window: &gpui::Window) {}
+
+#[cfg(not(windows))]
+pub fn focus_launcher_after_approval(_window: &gpui::Window) {}
 
 #[cfg(not(windows))]
 pub fn hide_launcher_window(_window: &gpui::Window) {}
@@ -95,6 +120,14 @@ pub struct FileHit {
 #[cfg(not(windows))]
 pub fn scry_query(_query: &str, _max_results: u32) -> Option<Vec<FileHit>> {
     None
+}
+
+#[cfg(not(windows))]
+pub fn reset_scry_search() {}
+
+#[cfg(not(windows))]
+pub fn suspend_scry_search() -> bool {
+    true
 }
 
 #[cfg(not(windows))]

@@ -7,7 +7,10 @@ mod files;
 mod launcher;
 mod native;
 mod plugins;
+mod scry;
+mod scry_updates;
 mod startup;
+mod updates;
 
 use apps::{AppsProvider, Catalog, CatalogGlobal};
 use calc::CalcProvider;
@@ -25,6 +28,7 @@ impl gpui::AssetSource for LauncherAssets {
     fn load(&self, path: &str) -> anyhow::Result<Option<std::borrow::Cow<'static, [u8]>>> {
         let bytes: Option<&'static [u8]> = match path {
             "icons/enter.svg" => Some(include_bytes!("../assets/icons/enter.svg")),
+            "icons/update.svg" => Some(include_bytes!("../assets/icons/update.svg")),
             "icons/spinner.svg" => Some(include_bytes!("../assets/icons/spinner.svg")),
             "icons/scry.svg" => Some(include_bytes!("../assets/icons/scry.svg")),
             "icons/application.svg" => Some(include_bytes!("../assets/icons/application.svg")),
@@ -37,6 +41,7 @@ impl gpui::AssetSource for LauncherAssets {
     fn list(&self, path: &str) -> anyhow::Result<Vec<gpui::SharedString>> {
         Ok([
             "icons/enter.svg",
+            "icons/update.svg",
             "icons/spinner.svg",
             "icons/scry.svg",
             "icons/search-empty.svg",
@@ -56,6 +61,9 @@ fn main() {
     // executes on a first install/uninstall pass.
     #[cfg(windows)]
     velopack::VelopackApp::build()
+        // Updates are applied only through our explicit silent restart path.
+        // Velopack's automatic startup path uses its non-silent apply API.
+        .set_auto_apply_on_startup(false)
         .on_after_install_fast_callback(|_| {
             let _ = startup::register();
         })
@@ -65,6 +73,7 @@ fn main() {
         .run();
 
     let (native_tx, native_rx) = futures::channel::mpsc::unbounded();
+    updates::start(native_tx.clone());
     let native_runtime = NativeRuntime::start(native_tx);
 
     gpui_platform::application()
@@ -129,6 +138,12 @@ fn drive_native_commands(
         // periodic polling. Ends when the native thread (sender) goes away.
         while let Some(command) = native_rx.next().await {
             match command {
+                NativeCommand::UpdateReady => {
+                    cx.update(|cx| {
+                        let launcher = cx.global::<LauncherGlobal>().clone_handle();
+                        launcher.borrow().refresh_update(cx);
+                    });
+                }
                 NativeCommand::ToggleLauncher => {
                     cx.update(|cx| {
                         let launcher = cx.global::<LauncherGlobal>().clone_handle();

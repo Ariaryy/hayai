@@ -99,17 +99,30 @@ function Resolve-ScryPackage {
         }
     }
 
-    $root = Join-Path $cacheDir $tag
+    # An explicit compatible package can be newer than the locked SDK. Keep
+    # its extraction separate from the cached SDK release.
+    $cacheKey = if ($ExplicitPackage) {
+        "$tag-$((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.Substring(0, 12))"
+    } else { $tag }
+    $root = Join-Path $cacheDir $cacheKey
     if (-not (Test-Path -LiteralPath (Join-Path $root "scryd.exe"))) {
         if (Test-Path -LiteralPath $root) {
             Remove-Item -LiteralPath $root -Recurse -Force
         }
         Expand-Archive -LiteralPath $archive -DestinationPath $root
     }
-    foreach ($required in @("scryd.exe", "scry.exe", "install-daemon.ps1", "uninstall-daemon.ps1")) {
+    foreach ($required in @("scryd.exe", "scry.exe", "install-daemon.ps1", "uninstall-daemon.ps1", "scry-release.json")) {
         if (-not (Test-Path -LiteralPath (Join-Path $root $required) -PathType Leaf)) {
             throw "Scry Search release $tag is missing $required"
         }
+    }
+    $manifest = Get-Content -LiteralPath (Join-Path $root "scry-release.json") -Raw | ConvertFrom-Json
+    if ($manifest.schema -ne 1 -or $manifest.ipc_version -ne 1 -or $manifest.index_format -ne 10) {
+        throw "ScryPackage must include a schema 1 updater manifest compatible with IPC 1 and index format 10."
+    }
+    $helpText = & (Join-Path $root "scry.exe") --help | Out-String
+    if ($LASTEXITCODE -ne 0 -or $helpText -notmatch 'scry check-update' -or $helpText -notmatch 'scry update') {
+        throw "ScryPackage must include the updater CLI. Supply a compatible published package with -ScryPackage."
     }
     return $root
 }
@@ -146,7 +159,7 @@ try {
 
     Copy-Item -LiteralPath $exePath -Destination (Join-Path $stageDir $exeName) -Force
 
-    foreach ($file in @("scryd.exe", "scry.exe", "install-daemon.ps1", "uninstall-daemon.ps1")) {
+    foreach ($file in @("scryd.exe", "scry.exe", "install-daemon.ps1", "uninstall-daemon.ps1", "scry-release.json")) {
         Copy-Item -LiteralPath (Join-Path $scryPackageRoot $file) -Destination $stageDir -Force
     }
 

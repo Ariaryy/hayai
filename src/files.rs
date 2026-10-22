@@ -233,32 +233,25 @@ impl CommandProvider for FileSearchProvider {
         true
     }
 
-    /// Empty query (keyword typed, nothing after it yet): show recently-
-    /// opened files/folders, same as the apps provider's pre-typing recents
-    /// view. Falls back to listing the user's home folder when there's no
-    /// history yet (fresh install), so file mode is never just blank.
+    /// Immediate file-mode preview from paths already in memory. Do not stat
+    /// paths or enumerate directories here: the background job validates these
+    /// entries and supplies the home-folder fallback after compatibility checks.
     fn search(&self, query: &str) -> Vec<CommandItem> {
         if !query.is_empty() {
             return Vec::new();
         }
-        let recents: Vec<CommandItem> = self
-            .recents
+        self.recents
             .borrow()
             .recents()
             .iter()
-            .filter(|path| path.exists())
             .map(|path| path_to_item(path))
-            .collect();
-        if !recents.is_empty() {
-            return recents;
-        }
-        home_dir_listing()
+            .collect()
     }
 
     fn background_search(&self, query: &str) -> Option<BackgroundSearch> {
-        if query.is_empty() {
-            return None;
-        }
+        let empty_recents = query
+            .is_empty()
+            .then(|| self.recents.borrow().recents().to_vec());
         let query = query.to_string();
         let scope = parse_scoped_query(&query);
         let browse_dir = scope
@@ -275,38 +268,43 @@ impl CommandProvider for FileSearchProvider {
         };
 
         Some(Box::new(move || {
+            if crate::scry_updates::is_updating() {
+                return vec![CommandItem {
+                    id: "files:compatibility:updating".into(),
+                    title: "Updating Scry Search".into(),
+                    subtitle: Some(
+                        "File search will be available after the daemon has been verified.".into(),
+                    ),
+                    file_size: None,
+                    calculation_detail: None,
+                    icon: IconSource::None,
+                    action: CommandAction::CheckFileSearchUpdates,
+                }];
+            }
+            let compatibility = native::scry_compatibility();
+            if let Some(item) = compatibility_item(compatibility) {
+                return vec![item];
+            }
+            if compatibility == crate::scry::Compatibility::Unavailable {
+                return vec![unavailable_item()];
+            }
+            if let Some(recents) = empty_recents {
+                let items: Vec<_> = recents
+                    .iter()
+                    .filter(|path| path.exists())
+                    .map(|path| path_to_item(path))
+                    .collect();
+                return if items.is_empty() {
+                    home_dir_listing()
+                } else {
+                    items
+                };
+            }
             if let Some(dir) = browse_dir {
                 return directory_listing(&dir, &query);
             }
             match native::scry_query(&scry_query, max_results) {
-                None => {
-                    let installed = native::scry_is_installed();
-                    vec![CommandItem {
-                        id: "files:not-running".into(),
-                        title: if installed {
-                            "Start file search"
-                        } else {
-                            "Set up file search"
-                        }
-                        .into(),
-                        subtitle: Some(
-                            if installed {
-                                "Press Enter to start Scry Search in the background."
-                            } else {
-                                "Press Enter to install Scry Search and enable file search."
-                            }
-                            .into(),
-                        ),
-                        file_size: None,
-                        calculation_detail: None,
-                        icon: IconSource::None,
-                        action: if installed {
-                            CommandAction::StartFileSearch
-                        } else {
-                            CommandAction::InstallFileSearch
-                        },
-                    }]
-                }
+                None => vec![unavailable_item()],
                 Some(mut hits) => {
                     hits.retain(|hit| {
                         let full_path = hit.parent.join(&hit.name);
@@ -348,5 +346,96 @@ impl CommandProvider for FileSearchProvider {
                 }
             }
         }))
+    }
+}
+
+fn unavailable_item() -> CommandItem {
+    let installed = native::scry_is_installed();
+    CommandItem {
+        id: "files:compatibility:unavailable".into(),
+        title: if installed {
+            "Scry Search is unavailable"
+        } else {
+            "Set up Scry Search"
+        }
+        .into(),
+        subtitle: Some(
+            if installed {
+                "Check for a compatible Scry Search release to restore file search."
+            } else {
+                "Check for a compatible Scry Search release to enable file search."
+            }
+            .into(),
+        ),
+        file_size: None,
+        calculation_detail: None,
+        icon: IconSource::None,
+        action: CommandAction::CheckFileSearchUpdates,
+    }
+}
+
+fn compatibility_item(status: crate::scry::Compatibility) -> Option<CommandItem> {
+    use crate::scry::Compatibility;
+    let (id, title, description) = match status {
+        Compatibility::Ready | Compatibility::Unavailable => return None,
+        Compatibility::UpdateRequired => (
+            "files:compatibility:update",
+            "Scry Search update required",
+            "This version of Scry Search is too old for Hayai. Update Scry Search to continue.",
+        ),
+        Compatibility::NewerDaemon => (
+            "files:compatibility:newer",
+            "Hayai update required",
+            "Scry Search uses a newer protocol or shared-index format. Update Hayai to continue.",
+        ),
+        Compatibility::InvalidResponse => (
+            "files:compatibility:error",
+            "Couldn't verify Scry Search",
+            "The daemon returned an invalid status response. Reopen file search to retry.",
+        ),
+    };
+    Some(CommandItem {
+        id: id.into(),
+        title: title.into(),
+        subtitle: Some(description.into()),
+        file_size: None,
+        calculation_detail: None,
+        icon: IconSource::None,
+        action: match status {
+            Compatibility::UpdateRequired => CommandAction::CheckFileSearchUpdates,
+            Compatibility::NewerDaemon => CommandAction::CheckForUpdates,
+            _ => CommandAction::ShowText(String::new()),
+        },
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn immediate_preview_preserves_in_memory_recents_without_disk_validation() {
+        let paths = vec![
+            PathBuf::from("hayai-preview-missing/newest.txt"),
+            PathBuf::from("hayai-preview-missing/older.txt"),
+        ];
+        let provider = FileSearchProvider::new(Rc::new(RefCell::new(FileRecents {
+            recents: paths.clone(),
+        })));
+        let preview = provider.search("");
+        assert_eq!(preview.len(), paths.len());
+        for (item, path) in preview.iter().zip(&paths) {
+            assert!(matches!(&item.action, CommandAction::OpenFile(actual) if actual == path));
+        }
+        assert!(provider.search("typed query").is_empty());
+    }
+
+    #[test]
+    fn empty_recents_leave_home_folder_work_to_the_background_job() {
+        let provider = FileSearchProvider::new(Rc::new(RefCell::new(FileRecents {
+            recents: Vec::new(),
+        })));
+        assert!(provider.search("").is_empty());
+        assert!(provider.background_search("").is_some());
     }
 }

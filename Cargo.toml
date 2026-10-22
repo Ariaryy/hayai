@@ -16,6 +16,7 @@ gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "1d217ee3
 ] }
 gpui-component = { git = "https://github.com/longbridge/gpui-component" }
 anyhow = "1"
+serde_json = "1"
 # The calculator's expression and unit engine. It has no third-party
 # dependencies and replaces several partial parsers that each understood a
 # different slice of calculator syntax.
@@ -35,7 +36,7 @@ rusqlite = { version = "0.31", features = ["bundled"] }
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6.2"
-scry-client = { git = "https://github.com/Ariaryy/scry-search", tag = "v0.1.0-alpha.4" }
+scry-client = { git = "https://github.com/Ariaryy/scry-search", tag = "v0.1.1" }
 # Installer/updater framework and its startup-registration hooks
 # (`VelopackApp::build()...run()` in `main.rs`); `winreg` backs
 # `native::startup` for the `HKCU\...\Run` entry it writes/removes.
@@ -52,6 +53,7 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_Memory",
     "Win32_System_SystemInformation",
     "Win32_System_Time",
+    "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",

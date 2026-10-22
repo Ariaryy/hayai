@@ -2794,6 +2794,7 @@ dependencies = [
  "raw-window-handle",
  "rusqlite",
  "scry-client",
+ "serde_json",
  "velopack",
  "windows-sys 0.61.2",
  "winreg",
@@ -5774,8 +5775,8 @@ dependencies = [
 
 [[package]]
 name = "scry-client"
-version = "0.1.0-alpha.4"
-source = "git+https://github.com/Ariaryy/scry-search?tag=v0.1.0-alpha.4#0fdfa87d04d318b00d8515ce362b65018e606a31"
+version = "0.1.1"
+source = "git+https://github.com/Ariaryy/scry-search?tag=v0.1.1#476ab62358d63c3d8bf6355be138ba4ee73b038a"
 dependencies = [
  "anyhow",
  "scry-core",
@@ -5784,8 +5785,8 @@ dependencies = [
 
 [[package]]
 name = "scry-core"
-version = "0.1.0-alpha.4"
-source = "git+https://github.com/Ariaryy/scry-search?tag=v0.1.0-alpha.4#0fdfa87d04d318b00d8515ce362b65018e606a31"
+version = "0.1.1"
+source = "git+https://github.com/Ariaryy/scry-search?tag=v0.1.1#476ab62358d63c3d8bf6355be138ba4ee73b038a"
 dependencies = [
  "aho-corasick",
  "memchr",
@@ -5798,8 +5799,8 @@ dependencies = [
 
 [[package]]
 name = "scry-ipc"
-version = "0.1.0-alpha.4"
-source = "git+https://github.com/Ariaryy/scry-search?tag=v0.1.0-alpha.4#0fdfa87d04d318b00d8515ce362b65018e606a31"
+version = "0.1.1"
+source = "git+https://github.com/Ariaryy/scry-search?tag=v0.1.1#476ab62358d63c3d8bf6355be138ba4ee73b038a"
 
 [[package]]
 name = "seahash"
