@@ -92,7 +92,13 @@ fn install_error_message(exit: i32, detail: &str) -> &'static str {
         }
         21 => "Download failed. Check your connection.",
         22 => "Download verification failed. Installation stopped.",
-        23 => "Stop the existing daemon and retry.",
+        23 if detail.contains("legacy daemon must be stopped") => {
+            "Stop the existing daemon and retry."
+        }
+        23 if detail.contains("reconcile the query pipe owner") => {
+            "File search ownership couldn't be verified."
+        }
+        23 => "Couldn't safely restart file search. Open details.",
         24 => "Recovery needed. Retry the update.",
         25 => "Daemon didn't become ready. Try again.",
         26 => "This release isn't compatible with your installation.",
@@ -543,7 +549,21 @@ mod tests {
         assert!(message.contains("GitHub refused"));
         assert!(!message.contains("GetResponse"));
         assert!(install_error_message(20, "").contains("cancelled"));
-        assert!(install_error_message(23, "").contains("Stop the existing daemon"));
+        assert!(
+            install_error_message(
+                23,
+                "This legacy daemon must be stopped before updating; graceful stop is unsupported"
+            )
+            .contains("Stop the existing daemon")
+        );
+        assert_eq!(
+            install_error_message(
+                23,
+                "Could not reconcile the query pipe owner within the retry budget"
+            ),
+            "File search ownership couldn't be verified."
+        );
+        assert!(!install_error_message(23, "Another daemon owns the query pipe").contains("Stop"));
         for exit in [1, 20, 21, 22, 23, 24, 25, 26] {
             assert!(install_error_message(exit, "").chars().count() <= 55);
         }
