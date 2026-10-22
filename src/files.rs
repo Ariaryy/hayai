@@ -14,9 +14,8 @@ use crate::commands::{BackgroundSearch, CommandAction, CommandItem, CommandProvi
 use crate::native;
 
 const MAX_RESULTS: u32 = 64;
-/// Query extra candidates before applying Hayai's folder-first presentation.
-/// Scry ranks relevance without a folder preference, so fetching only the
-/// visible count can leave a navigable directory out of the list.
+/// Fetch extra ranked candidates so filtering noisy directories can still
+/// fill the visible results without changing Scry's relevance order.
 const SEARCH_CANDIDATES: u32 = 256;
 /// Scoped matches are filtered client-side against the exact directory the
 /// user entered. Keep a wider candidate set so common path components do not
@@ -321,18 +320,10 @@ impl CommandProvider for FileSearchProvider {
                         }
                         true
                     });
-                    // Folders first, then shallower paths, then alphabetical by name.
-                    hits.sort_by(|a, b| {
-                        b.is_folder
-                            .cmp(&a.is_folder)
-                            .then_with(|| {
-                                a.parent
-                                    .components()
-                                    .count()
-                                    .cmp(&b.parent.components().count())
-                            })
-                            .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
-                    });
+                    // Scry already ranks these by relevance. Sorting by path
+                    // depth puts Prefetch artifacts ahead of an exact Code.exe
+                    // match under AppData. `retain` above preserves that order;
+                    // only directory browsing uses folders-first sorting.
                     hits.truncate(MAX_RESULTS as usize);
                     hits.into_iter()
                         .map(|hit| {
