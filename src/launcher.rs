@@ -1485,11 +1485,14 @@ impl gpui::Render for LauncherRoot {
                         .child("Learn more"))
                     .into_any_element()
             } else {
-                List::new(&self.list)
-                    .scrollbar_visible(false)
-                    .with_size(Size::Large)
-                    .p_2()
-                    .flex_1().into_any_element()
+                // Keep virtualized rows inside the results viewport.
+                div().flex_1().min_h_0().w_full().overflow_hidden()
+                    .child(List::new(&self.list)
+                        .scrollbar_visible(false)
+                        .with_size(Size::Large)
+                        .p_2()
+                        .size_full())
+                    .into_any_element()
             })
             .child(
                 h_flex()
@@ -2130,13 +2133,28 @@ impl ResultRow {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .child(title)
+                    .overflow_hidden()
+                    // Uniform list rows cannot grow when filenames wrap.
+                    .child(
+                        div()
+                            .w_full()
+                            .min_w_0()
+                            .h(px(24.0))
+                            .line_height(px(24.0))
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis_middle()
+                            .child(title),
+                    )
                     .when_some(subtitle, |col, subtitle| {
                         col.child(
                             div()
                                 .text_xs()
                                 .text_color(cx.theme().muted_foreground)
                                 .w_full()
+                                .min_w_0()
+                                .h(px(18.0))
+                                .line_height(px(18.0))
                                 .overflow_hidden()
                                 .whitespace_nowrap()
                                 .text_ellipsis_middle()
