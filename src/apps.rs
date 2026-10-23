@@ -5,7 +5,7 @@
 //! decoded on demand and cached) to honour the low-RAM / high-perf goal.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -16,6 +16,9 @@ use crate::native;
 
 /// How many recents we persist across runs.
 const MAX_RECENTS: usize = 30;
+/// 128 48x48 icons retain at most 1.125 MiB of pixel data. Include failed
+/// decodes and pending requests in the bound so arbitrary file browsing is safe.
+const MAX_ICONS: usize = 128;
 
 pub struct AppEntry {
     pub name: String,
@@ -40,6 +43,8 @@ pub struct Catalog {
     /// decode is in flight. `Ready(None)` means "tried and failed" so we
     /// don't repeatedly hit the shell for an icon that won't load.
     icons: HashMap<PathBuf, IconCache>,
+    /// Completed entries, least recently used first. Pending loads are never evicted.
+    icon_recency: VecDeque<PathBuf>,
     /// Most-recently-launched paths, newest first.
     recents: Vec<PathBuf>,
 }
@@ -81,6 +86,7 @@ impl Catalog {
         let mut catalog = Catalog {
             apps: Vec::new(),
             icons: HashMap::new(),
+            icon_recency: VecDeque::new(),
             recents: Vec::new(),
         };
         catalog.load_recents();
@@ -171,22 +177,49 @@ impl Catalog {
     /// `IconRequest::Load(path)` — decoding touches GDI/COM and is too slow
     /// to do synchronously in the render path (it was blocking keystrokes),
     /// so callers must decode `path` off the main thread and hand the result
-    /// back via `set_icon_ready`.
-    pub fn request_icon(&mut self, path: &Path) -> IconRequest {
+    /// back via `set_icon_ready`. `on_evict` must remove the evicted image
+    /// from the current window's sprite atlas, using the existing window update.
+    pub fn request_icon(
+        &mut self,
+        path: &Path,
+        on_evict: impl FnOnce(Arc<RenderImage>),
+    ) -> IconRequest {
         match self.icons.get(path) {
-            Some(IconCache::Ready(icon)) => IconRequest::Ready(icon.clone()),
-            Some(IconCache::Loading) => IconRequest::Loading,
-            None => {
-                self.icons.insert(path.to_path_buf(), IconCache::Loading);
-                IconRequest::Load(path.to_path_buf())
+            Some(IconCache::Ready(icon)) => {
+                let icon = icon.clone();
+                if let Some(index) = self.icon_recency.iter().position(|entry| entry == path) {
+                    let entry = self.icon_recency.remove(index).unwrap();
+                    self.icon_recency.push_back(entry);
+                }
+                return IconRequest::Ready(icon);
+            }
+            Some(IconCache::Loading) => return IconRequest::Loading,
+            None => {}
+        }
+        if self.icons.len() >= MAX_ICONS {
+            let Some(oldest) = self.icon_recency.pop_front() else {
+                // All slots are in flight. A completion notifies the view, which
+                // retries this row; never duplicate an outstanding shell decode.
+                return IconRequest::Loading;
+            };
+            if let Some(IconCache::Ready(Some(image))) = self.icons.remove(&oldest) {
+                // RenderImage's drop does not release GPUI's sprite-atlas entry.
+                // The caller owns the current Window and removes it there.
+                on_evict(image);
             }
         }
+        self.icons.insert(path.to_path_buf(), IconCache::Loading);
+        IconRequest::Load(path.to_path_buf())
     }
 
     /// Record the result of a background icon decode started via
     /// `request_icon`.
     pub fn set_icon_ready(&mut self, path: PathBuf, icon: Option<Arc<RenderImage>>) {
-        self.icons.insert(path, IconCache::Ready(icon));
+        // Ignore unsolicited/duplicate completions; they must not grow the cache.
+        if matches!(self.icons.get(&path), Some(IconCache::Loading)) {
+            self.icon_recency.push_back(path.clone());
+            self.icons.insert(path, IconCache::Ready(icon));
+        }
     }
 
     /// Record `index`'s app as most-recently-launched and hand back what the
@@ -445,6 +478,116 @@ mod tests {
     use super::fuzzy_score;
 
     #[test]
+    fn icon_cache_bounds_failures_and_preserves_pending_and_recent_entries() {
+        use super::*;
+        let mut catalog = Catalog {
+            apps: vec![],
+            icons: Default::default(),
+            icon_recency: Default::default(),
+            recents: vec![],
+        };
+        for i in 0..MAX_ICONS {
+            assert!(matches!(
+                catalog.request_icon(Path::new(&i.to_string()), |_| {}),
+                IconRequest::Load(_)
+            ));
+        }
+        assert!(matches!(
+            catalog.request_icon(Path::new("overflow"), |_| {}),
+            IconRequest::Loading
+        ));
+        catalog.set_icon_ready("0".into(), None);
+        catalog.set_icon_ready("1".into(), None);
+        assert!(matches!(
+            catalog.request_icon(Path::new("0"), |_| {}),
+            IconRequest::Ready(None)
+        ));
+        assert!(matches!(
+            catalog.request_icon(Path::new("overflow"), |_| {}),
+            IconRequest::Load(_)
+        ));
+        assert!(catalog.icons.contains_key(Path::new("0")));
+        assert!(!catalog.icons.contains_key(Path::new("1")));
+        assert_eq!(catalog.icons.len(), MAX_ICONS);
+        catalog.set_icon_ready("unsolicited".into(), None);
+        assert_eq!(catalog.icons.len(), MAX_ICONS);
+        assert!(matches!(
+            catalog.request_icon(Path::new("2"), |_| {}),
+            IconRequest::Loading
+        ));
+    }
+
+    #[test]
+    fn icon_eviction_releases_pixels_and_notifies_renderer() {
+        use super::*;
+        let mut catalog = Catalog {
+            apps: vec![],
+            icons: Default::default(),
+            icon_recency: Default::default(),
+            recents: vec![],
+        };
+        let image = Arc::new(RenderImage::new(vec![image::Frame::new(
+            image::RgbaImage::new(48, 48),
+        )]));
+        let weak = Arc::downgrade(&image);
+        catalog.request_icon(Path::new("image"), |_| {});
+        catalog.set_icon_ready("image".into(), Some(image));
+        for i in 1..MAX_ICONS {
+            let path = PathBuf::from(i.to_string());
+            catalog.request_icon(&path, |_| {});
+            catalog.set_icon_ready(path, None);
+        }
+        let mut evicted = false;
+        catalog.request_icon(Path::new("overflow"), |_| {
+            evicted = true;
+        });
+        assert!(evicted);
+        assert!(weak.upgrade().is_none());
+    }
+
+    /// Run in a fresh process, with one test thread, for comparable CPU RSS.
+    #[test]
+    #[ignore = "manual memory measurement: cargo test --release icon_cache_memory -- --ignored --nocapture --test-threads=1"]
+    fn icon_cache_memory() {
+        use super::*;
+        fn memory(stage: &str) {
+            let output = std::process::Command::new("powershell")
+                .args(["-NoProfile", "-Command", &format!(
+                    "Get-Process -Id {} | Select-Object WorkingSet64,PrivateMemorySize64 | ConvertTo-Json -Compress",
+                    std::process::id()
+                )]).output().unwrap();
+            println!(
+                "{stage}: {}",
+                String::from_utf8_lossy(&output.stdout).trim()
+            );
+        }
+        let mut catalog = Catalog {
+            apps: vec![],
+            icons: Default::default(),
+            icon_recency: Default::default(),
+            recents: vec![],
+        };
+        memory("empty");
+        for i in 0..1000 {
+            let path = PathBuf::from(format!("benchmark/{i}.exe"));
+            assert!(matches!(
+                catalog.request_icon(&path, |_| {}),
+                IconRequest::Load(_)
+            ));
+            // Fill every byte so the OS must commit the pixel pages.
+            let pixels =
+                image::RgbaImage::from_pixel(48, 48, image::Rgba([i as u8, 123, 231, 255]));
+            catalog.set_icon_ready(
+                path,
+                Some(Arc::new(RenderImage::new(vec![image::Frame::new(pixels)]))),
+            );
+        }
+        memory("1000 icons");
+        println!("retained entries: {}", catalog.icons.len());
+        std::hint::black_box(&catalog);
+    }
+
+    #[test]
     fn hayai_commands_are_searchable_and_follow_app_results() {
         use crate::commands::CommandAction;
         let all = super::hayai_commands("");
@@ -464,6 +607,7 @@ mod tests {
                 path: "example.exe".into(),
             }],
             icons: Default::default(),
+            icon_recency: Default::default(),
             recents: Vec::new(),
         }));
         use crate::commands::CommandProvider;

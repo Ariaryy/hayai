@@ -3013,7 +3013,9 @@ impl ListDelegate for ResultListDelegate {
             match &item.icon {
                 IconSource::Path(path) => {
                     let mut catalog = self.catalog.borrow_mut();
-                    match catalog.request_icon(path) {
+                    match catalog.request_icon(path, |image| {
+                        let _ = _window.drop_image(image);
+                    }) {
                         IconRequest::Ready(icon) => icon,
                         IconRequest::Loading => None,
                         IconRequest::Load(path) => {
