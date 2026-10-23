@@ -1,31 +1,29 @@
 <div align="center">
 
-<img src="assets/hayai.svg" alt="Hayai app icon" width="112" height="112">
+<img src="assets/hayai.svg" alt="Hayai app icon" width="96" height="96">
 
-# Hayai
+<h1>Hayai</h1>
 
-A keyboard-first Windows launcher built for speed and low memory use.
-
-Apps · File search · Calculator · Contextual actions
+<p>A fast, low-memory Windows launcher to search apps, find files, and calculate from your keyboard.</p>
 
 <p>
-  <a href="#install">Install</a> ·
+  <a href="https://github.com/Ariaryy/hayai/releases/latest"><strong>Download for Windows</strong></a> ·
+  <a href="#install">Installation</a> ·
   <a href="docs/users/usage.md">User guide</a> ·
-  <a href="https://github.com/Ariaryy/hayai/releases">Releases</a> ·
   <a href="#development">Development</a>
 </p>
 
-<sub>速い (hayai) is Japanese for "fast."</sub>
+<p><sub>Native · Rust &amp; GPUI</sub></p>
+
+<img src="docs/images/hayai-showcase.png" alt="Hayai's dark launcher showing application results, a search field, and keyboard shortcuts for commands and contextual actions" width="960">
 
 </div>
 
-Press `Alt+Space`, type what you need, and launch an app, find a file, or
-calculate a result. Hayai is inspired by Raycast and built with Rust, GPUI,
-and native Windows APIs.
+Hayai brings app launching, indexed file search, and a
+calculator to a lightweight native window. Press `Alt+Space` from
+anywhere to get started; dismiss it back to the tray when you're done.
 
-> **Early alpha:** app search, file search, the calculator, search history,
-> and contextual actions are available. Behavior and packaging may change
-> between releases.
+The name comes from 速い (*hayai*), Japanese for "fast."
 
 ## Features
 
@@ -76,8 +74,6 @@ launch an app or copy a calculator value.
 
 Press `Space`, then type `f` to enter file mode. The leading space activates
 Hayai's command router; ordinary queries continue to search apps or calculate.
-The router also leaves room for future modes, such as `Space` then `cp` for
-clipboard history.
 
 ### Examples
 
