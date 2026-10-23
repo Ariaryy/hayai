@@ -39,3 +39,34 @@ idle/active/GPU measurements remain unverified.
 and live Scry integration). Regression tests cover saturation with pending
 requests, failed-result eviction, recency, unsolicited completions, renderer
 cleanup notification, and release of an evicted image's final reference.
+
+## Follow-up: prefilter row icons for display DPI
+
+The row remains 22 logical pixels. The background worker now uses area averaging
+to reduce decoded icons to ceil(22 * window scale) physical pixels: 22 at 100%,
+28 at 125%, 33 at 150%, and 44 at 200%. Small sources are not upscaled on the CPU.
+This avoids relying on the renderer's bilinear sampler to minify 48px images;
+the pinned Windows atlas has one mip level. The cache keeps one size per path,
+replacing it on the next request after a DPI change. An old pending request
+finishes first, then its rendition is replaced; completions notify the list.
+
+Same 1,000-source workload, with the 128-entry bound enabled in both cases:
+
+- 48px retained images: empty RSS 8,359,936 bytes; populated 9,826,304;
+  growth 1,466,368 bytes. Private bytes: 1,601,536 to 2,977,792.
+- 22px retained images: empty RSS 8,355,840 bytes; populated 8,736,768;
+  growth 380,928 bytes. Private bytes: 1,593,344 to 1,863,680.
+
+RSS growth decreased by 1,085,440 bytes (1.04 MiB) in this single-run workload.
+Retained pixel data per 48px source falls from 9,216 to 1,936 bytes at 100% DPI
+(79% less). This is CPU cache memory, not full-app idle/active RSS or GPU usage.
+
+To reproduce the second case in PowerShell, set
+`$env:HAYAI_ICON_BENCH_PIXELS = '22'`, run the same ignored release test above,
+then `Remove-Item Env:HAYAI_ICON_BENCH_PIXELS`. The default is 48 for comparison.
+
+Regression tests cover DPI changes while decoding and averaging a fine
+checkerboard into a uniform icon, rather than aliasing its alternating pixels.
+`cargo test --release`: 126 passed, 2 ignored. Manual visual checks on real app
+icons across monitors remain unverified. Sources still come from the existing
+48px shell extraction, so this change does not add detail for scales above 200%.

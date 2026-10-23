@@ -3013,14 +3013,23 @@ impl ListDelegate for ResultListDelegate {
             match &item.icon {
                 IconSource::Path(path) => {
                     let mut catalog = self.catalog.borrow_mut();
-                    match catalog.request_icon(path, |image| {
-                        let _ = _window.drop_image(image);
-                    }) {
+                    match catalog.request_icon(
+                        path,
+                        row_icon_pixels(_window.scale_factor()),
+                        |image| {
+                            let _ = _window.drop_image(image);
+                        },
+                    ) {
                         IconRequest::Ready(icon) => icon,
                         IconRequest::Loading => None,
                         IconRequest::Load(path) => {
                             drop(catalog);
-                            spawn_icon_load(path, self.catalog.clone(), cx);
+                            spawn_icon_load(
+                                path,
+                                row_icon_pixels(_window.scale_factor()),
+                                self.catalog.clone(),
+                                cx,
+                            );
                             None
                         }
                     }
@@ -3307,25 +3316,44 @@ impl ListDelegate for ResultListDelegate {
     }
 }
 
+fn row_icon_pixels(scale: f32) -> u32 {
+    (22.0 * scale).ceil().clamp(1.0, 256.0) as u32
+}
+
+pub(crate) fn prepare_row_icon(icon: native::IconImage, pixels: u32) -> Option<Arc<RenderImage>> {
+    let buffer = image::RgbaImage::from_raw(icon.width, icon.height, icon.bgra)?;
+    // The GPU uses bilinear sampling without mipmaps. Prefilter on the worker
+    // before upload so minifying a 48px source does not skip fine icon details.
+    // Preserve undersized sources rather than allocating an upscaled bitmap.
+    let buffer = if buffer.width() > pixels || buffer.height() > pixels {
+        image::imageops::thumbnail(&buffer, pixels, pixels)
+    } else {
+        buffer
+    };
+    Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
+}
+
 /// Decode `path`'s icon on the background thread pool, then hand the result
 /// back to the catalog and repaint. GDI/COM icon extraction is too slow to do
 /// synchronously in the render path (it blocks keystrokes).
 fn spawn_icon_load(
     path: PathBuf,
+    pixel_size: u32,
     catalog: Rc<RefCell<Catalog>>,
     cx: &mut Context<ListState<ResultListDelegate>>,
 ) {
     cx.spawn(async move |list, cx| {
         let decode_path = path.clone();
         let rendered = cx
-            .background_spawn(async move { native::extract_icon_rgba(&decode_path) })
-            .await
-            .and_then(|icon| {
-                let buffer = image::RgbaImage::from_raw(icon.width, icon.height, icon.bgra)?;
-                Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
-            });
+            .background_spawn(async move {
+                native::extract_icon_rgba(&decode_path)
+                    .and_then(|icon| prepare_row_icon(icon, pixel_size))
+            })
+            .await;
 
-        catalog.borrow_mut().set_icon_ready(path, rendered);
+        catalog
+            .borrow_mut()
+            .set_icon_ready(path, pixel_size, rendered);
         let _ = list.update(cx, |_, cx| cx.notify());
     })
     .detach();
@@ -3742,6 +3770,36 @@ impl ResultRow {
 #[cfg(test)]
 mod tests {
     use super::{format_expression_for_display, format_result_for_display};
+
+    #[test]
+    fn row_icon_prefilter_averages_fine_details_at_physical_size() {
+        assert_eq!(super::row_icon_pixels(1.0), 22);
+        assert_eq!(super::row_icon_pixels(1.25), 28);
+        assert_eq!(super::row_icon_pixels(1.5), 33);
+        assert_eq!(super::row_icon_pixels(2.0), 44);
+        let mut bgra = Vec::new();
+        for y in 0..44 {
+            for x in 0..44 {
+                let value = if (x + y) % 2 == 0 { 0 } else { 255 };
+                bgra.extend_from_slice(&[value, value, value, 255]);
+            }
+        }
+        let icon = super::prepare_row_icon(
+            crate::native::IconImage {
+                width: 44,
+                height: 44,
+                bgra,
+            },
+            22,
+        )
+        .unwrap();
+        assert_eq!(icon.size(0).width.0, 22);
+        assert_eq!(icon.size(0).height.0, 22);
+        for pixel in icon.as_bytes(0).unwrap().chunks_exact(4) {
+            assert!((127..=128).contains(&pixel[0]));
+            assert_eq!(pixel[3], 255);
+        }
+    }
 
     #[test]
     fn empty_results_keep_a_valid_measurement_section_when_search_is_cleared() {
