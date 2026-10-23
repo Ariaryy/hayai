@@ -104,3 +104,32 @@ fractional-DPI comparison. Full-app visual validation remains outstanding.
 eviction, no LRU promotion on prefetch hits, speculative admission limits with
 visible-request priority, and neighborhood bounds at the start/end of results.
 The fine checkerboard test continues to verify antialiasing in the image interior.
+
+## Final tuning: sampling headroom and fixed notification artwork
+
+For a less soft balance, row rasters now retain 25% more resolution than the
+physical display size, capped at the 48px shell source. Targets are 28/35/42/48px
+at 100/125/150/200% DPI; rows still display at 22 logical pixels. Lanczos3 and the
+scroll-prefetch policy remain in place.
+
+Same 1,000-icon workload, with 128 entries retained:
+
+- 125% / 35px: empty RSS 8,306,688 bytes; populated RSS 9,285,632 bytes;
+  growth 978,944 bytes (0.93 MiB). Private bytes: 1,552,384 to 2,396,160.
+- 150% / 42px: empty RSS 8,310,784 bytes; populated RSS 9,584,640 bytes;
+  growth 1,273,856 bytes (1.21 MiB). Private bytes: 1,548,288 to 2,686,976.
+
+Relative to the previous exact-size Lanczos runs above, observed RSS growth
+increased by 0.16 MiB at 125% and 0.30 MiB at 150%, trading a modest amount of
+cache memory for retained detail. These single-run CPU-cache measurements exclude
+full-window idle/active RSS, GPU storage, and the fixed artwork described below.
+
+Fixed Hayai/update/Scry artwork now comes from embedded 128px PNGs generated
+by scripts/generate-icons.py. The delegate decodes them before the first frame,
+instead of waiting for an asynchronous SVG render or a Scry network/search job.
+Separate cached row rasters follow the display DPI; their images are released
+from the atlas on DPI changes. All notification and built-in command row icons
+now display at 22 logical pixels, matching ordinary app rows; detail cards retain
+their existing 56px layout. No runtime dependencies were added. The existing
+129 passing tests include baked-PNG decoding, row/detail raster separation, DPI
+sizes, prefetch protection and throttling. Visual confirmation remains pending.
