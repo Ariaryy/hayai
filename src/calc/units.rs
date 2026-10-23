@@ -183,6 +183,26 @@ fn canonical(token: &str) -> String {
         .map_or_else(|| token.to_string(), |unit| unit.symbol.to_string())
 }
 
+pub(super) fn target_prefix(target: &str) -> bool {
+    if target.is_empty() {
+        return false;
+    }
+    if target.len() > 1
+        && (UNITS
+            .iter()
+            .any(|unit| unit.aliases.contains(&target) || unit.symbol == target)
+            || temperature(target).is_some())
+    {
+        return false;
+    }
+    UNITS.iter().any(|unit| {
+        unit.aliases
+            .iter()
+            .chain(std::iter::once(&unit.symbol))
+            .any(|name| name.starts_with(target) && *name != target)
+    }) || !fend_core::get_completions_for_prefix(target).1.is_empty()
+}
+
 pub(super) fn canonical_word(token: &str) -> Option<&'static str> {
     if matches!(token, "in" | "b") {
         return None;

@@ -406,6 +406,24 @@ fn target_code(token: &str) -> Option<String> {
     normalize_code(&token.to_ascii_lowercase()).map(str::to_string)
 }
 
+pub(super) fn target_prefix(target: &str) -> bool {
+    let target = target.to_ascii_lowercase();
+    if target.is_empty() || target_code(&target).is_some() {
+        return false;
+    }
+    KNOWN_CODES.iter().any(|code| code.starts_with(&target))
+        || KNOWN_CODES.iter().any(|code| {
+            currency_name(code)
+                .to_ascii_lowercase()
+                .starts_with(&target)
+        })
+        || [
+            "dollars", "euros", "rupees", "pounds", "sterling", "yen", "yuan", "renminbi", "won",
+        ]
+        .iter()
+        .any(|name| name.starts_with(&target))
+}
+
 pub(super) fn contains_currency(input: &str) -> bool {
     parse_tokens(input).is_some()
         || input.chars().any(is_symbol)
@@ -603,6 +621,19 @@ fn currency_name(code: &str) -> &'static str {
 /// the user's regional default. `None` if the input isn't currency-shaped
 /// at all, or no rates are loaded yet.
 pub fn convert(input: &str, cache: &FxCache) -> Option<EvalResult> {
+    // A literal with no distinct regional target needs no rate table. Keep
+    // it usable as a preview even on the very first offline launch.
+    if let Some((_, from)) = parse_bare_amount(input)
+        && cache.default_target().is_none_or(|target| target == from)
+    {
+        let amount = source_amount(input)?;
+        let value = display_amount(&from, &amount)?;
+        return Some(EvalResult {
+            expression: value.clone(),
+            value,
+            copy_value: Some(format!("{amount} {}", from.to_ascii_uppercase())),
+        });
+    }
     let expression = expression(input, cache)?;
     let mut result = super::engine::evaluate(&expression, Some(cache))?;
     result.copy_value = Some(result.value.clone());
@@ -920,5 +951,47 @@ mod tests {
         ])));
         assert_eq!(before.get("inr"), Some(&83.0));
         assert_eq!(cache.snapshot().unwrap().get("inr"), Some(&90.0));
+    }
+    #[test]
+    fn pending_currency_queries_keep_prefix_labels_copy_precision_and_fetch_behavior() {
+        use crate::commands::{CommandAction, CommandProvider};
+        let provider = super::super::CalcProvider {
+            fx: cache_with_rates_and_default(
+                &[("usd", 1.0), ("inr", 83.0), ("eur", 0.9)],
+                Some("inr"),
+            ),
+            memo: std::cell::RefCell::new(None),
+        };
+        let complete = provider.search("1usd").remove(0);
+        for query in [
+            "1usd to ",
+            "1usd to i",
+            "1usd to in",
+            "$1 in ",
+            "1usd +",
+            "1usd to INR +",
+        ] {
+            let preview = provider.search(query).remove(0);
+            assert_eq!(preview.title, complete.title, "{query}");
+            assert_eq!(preview.subtitle, complete.subtitle, "{query}");
+            let Some(crate::commands::CalculationDetail::Currency { target_label, .. }) =
+                preview.calculation_detail
+            else {
+                panic!("lost prefix labels for {query}");
+            };
+            assert_eq!(target_label, "Indian Rupee");
+            let CommandAction::CopyToClipboard(value) = preview.action else {
+                panic!("lost prefix copy action");
+            };
+            assert_eq!(value, "83 INR");
+        }
+        assert_eq!(provider.search("1usd to eur")[0].title, "€0.90 EUR");
+        assert!(matches!(
+            provider.search("1usd / 0 +")[0].action,
+            CommandAction::EmptyState
+        ));
+        provider.fx.inner.write().unwrap().fetched_at = Some(UNIX_EPOCH);
+        assert!(provider.background_search("1usd to ").is_some());
+        assert!(provider.background_search("1usd to i").is_some());
     }
 }

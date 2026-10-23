@@ -12,6 +12,7 @@
 
 mod bases;
 mod currency;
+mod editing;
 mod engine;
 mod format;
 mod grammar;
@@ -40,7 +41,67 @@ struct Memo {
     query: String,
     revision: u64,
     at: std::time::Instant,
+    result: Evaluation,
+}
+
+#[derive(Clone)]
+struct Evaluation {
     result: Option<EvalResult>,
+    /// Only previews own a different source; complete queries reuse the caller's input.
+    source: Option<String>,
+    pending: bool,
+}
+
+fn resolve(input: &str, fx: &currency::FxCache) -> Evaluation {
+    if editing::word_operator_source(input).is_none()
+        && let Some(result) = evaluate(input, fx)
+    {
+        return Evaluation {
+            result: Some(result),
+            source: None,
+            pending: false,
+        };
+    }
+    if let Some(pending) = editing::source(input) {
+        let result = evaluate(&pending.source, fx);
+        if result.is_some()
+            || currency::needs_fetch(&pending.source, fx)
+            || (pending.awaiting_operand
+                && (pending.source.is_empty() || time::unfinished_duration(&pending.source)))
+        {
+            return Evaluation {
+                result,
+                source: Some(pending.source.into_owned()),
+                pending: true,
+            };
+        }
+    }
+    Evaluation {
+        result: None,
+        source: None,
+        pending: false,
+    }
+}
+
+fn evaluation_items(
+    query: &str,
+    evaluation: Evaluation,
+    fx: &currency::FxCache,
+) -> Vec<CommandItem> {
+    let source = evaluation.source.as_deref().unwrap_or(query);
+    match evaluation.result {
+        Some(result) => vec![result_item(source, result, fx)],
+        None if evaluation.pending => vec![CommandItem {
+            id: "calc:pending".into(),
+            action: CommandAction::PendingState,
+            ..error_item("Keep typing to complete the calculation.")
+        }],
+        None => vec![error_item(if time::is_time_query(query) {
+            "Invalid date or time. Try another expression."
+        } else {
+            "Invalid expression. Try another calculation."
+        })],
+    }
 }
 
 impl CalcProvider {
@@ -53,7 +114,7 @@ impl CalcProvider {
 
     // Detection and search cross the same evaluation seam. Retain only the
     // current query, invalidating on a rate refresh or a wall-clock tick.
-    fn evaluated(&self, query: &str) -> Option<EvalResult> {
+    fn evaluated(&self, query: &str) -> Evaluation {
         let revision = self.fx.revision();
         let mut memo = self.memo.borrow_mut();
         if let Some(memo) = memo.as_ref()
@@ -63,7 +124,7 @@ impl CalcProvider {
         {
             return memo.result.clone();
         }
-        let result = evaluate(query, &self.fx);
+        let result = resolve(query, &self.fx);
         if query.len() <= 4096 {
             *memo = Some(Memo {
                 query: query.into(),
@@ -111,25 +172,8 @@ fn evaluate(input: &str, fx: &currency::FxCache) -> Option<EvalResult> {
         QueryPlan::Numeric => units::convert(input)
             .or_else(|| bases::convert(input))
             .or_else(|| time::convert(input)) // zone pairs without a clock
-            .or_else(|| engine::evaluate(input, Some(fx)))
-            .or_else(|| evaluate_incomplete_arithmetic(input, fx)),
+            .or_else(|| engine::evaluate(input, Some(fx))),
     }
-}
-
-/// Keeps the previous valid arithmetic result visible while the user is in
-/// the middle of typing the next operation ("12 + 12 +"). Completed input
-/// still goes through the strict evaluators above; this fallback only trims
-/// a trailing run of operator characters and preserves the typed expression
-/// for display.
-fn evaluate_incomplete_arithmetic(input: &str, fx: &currency::FxCache) -> Option<EvalResult> {
-    let trimmed = input.trim_end();
-    let prefix = trimmed.trim_end_matches(['+', '-', '*', '/', '%', '^', '=', '<', '>', '&', '|']);
-    if prefix.len() == trimmed.len() || prefix.trim().is_empty() {
-        return None;
-    }
-    let mut result = engine::evaluate(prefix.trim_end(), Some(fx))?;
-    result.expression = trimmed.to_string();
-    Some(result)
 }
 
 /// Two-stage false-positive gate: a cheap first-character check declines
@@ -159,7 +203,12 @@ fn is_candidate(input: &str) -> bool {
             || constant_expression
             || lower.starts_with("in ")
             || lower.starts_with("now ")
-            || (c.is_ascii_alphabetic() && grammar::split_conversion(input).is_some())
+            || (c.is_ascii_alphabetic()
+                && (grammar::split_conversion(input).is_some()
+                    || lower
+                        .split_whitespace()
+                        .last()
+                        .is_some_and(|word| matches!(word, "to" | "in" | "as"))))
             || lower
                 .split_once('(')
                 .is_some_and(|(name, _)| name.chars().all(|c| c.is_ascii_alphabetic()))
@@ -268,7 +317,9 @@ impl CommandProvider for CalcProvider {
         if trimmed.is_empty() || !is_candidate(trimmed) {
             return false;
         }
-        self.evaluated(trimmed).is_some()
+        let evaluated = self.evaluated(trimmed);
+        evaluated.result.is_some()
+            || evaluated.pending
             || currency::recognizes_any(trimmed, &self.fx)
             || time::is_time_query(trimmed)
             || grammar::conversion_tokens(trimmed).is_some()
@@ -280,30 +331,32 @@ impl CommandProvider for CalcProvider {
         if trimmed.is_empty() {
             return Vec::new();
         }
-        match self.evaluated(trimmed) {
-            Some(result) => vec![result_item(trimmed, result, &self.fx)],
-            None => vec![error_item(if time::is_time_query(trimmed) {
-                "Invalid date or time. Try another expression."
-            } else {
-                "Invalid expression. Try another calculation."
-            })],
-        }
+        evaluation_items(trimmed, self.evaluated(trimmed), &self.fx)
     }
 
     fn background_search(&self, query: &str) -> Option<BackgroundSearch> {
         let trimmed = query.trim();
-        if trimmed.len() > 4096 || !currency::needs_fetch(trimmed, &self.fx) {
+        if trimmed.len() > 4096 {
+            return None;
+        }
+        let evaluation = self.evaluated(trimmed);
+        let source = evaluation.source.as_deref().unwrap_or(trimmed);
+        if !currency::needs_fetch(source, &self.fx) {
             return None;
         }
         let fx = self.fx.clone();
         let query = trimmed.to_string();
         Some(Box::new(move || {
             currency::fetch_blocking(&fx);
-            match evaluate(&query, &fx) {
-                Some(result) => vec![result_item(&query, result, &fx)],
-                None => vec![error_item(
-                    "Couldn't convert this amount. Check your expression or connection.",
-                )],
+            let evaluation = resolve(&query, &fx);
+            if evaluation.result.is_none()
+                && currency::needs_fetch(evaluation.source.as_deref().unwrap_or(&query), &fx)
+            {
+                vec![error_item(
+                    "Couldn't fetch exchange rates. Check your connection.",
+                )]
+            } else {
+                evaluation_items(&query, evaluation, &fx)
             }
         }))
     }
@@ -406,7 +459,7 @@ mod tests {
             let items = provider.search(query);
             assert_eq!(items.len(), 1, "missing preview for {query}");
             assert_eq!(items[0].title, "24");
-            assert_eq!(items[0].subtitle.as_deref(), Some(query));
+            assert_eq!(items[0].subtitle.as_deref(), Some("12 + 12"));
         }
         assert!(!provider.auto_claim("+"));
     }
@@ -520,6 +573,109 @@ mod tests {
         let provider = isolated_provider();
         for query in ["in design", "meet at work", "spotify", "1password", "pi"] {
             assert!(!provider.auto_claim(query), "{query}");
+        }
+    }
+    #[test]
+    fn pending_suffixes_preview_the_same_complete_input() {
+        let provider = isolated_provider();
+        for (pending, source) in [
+            ("1usd to ", "1usd"),
+            ("1 USD in", "1 USD"),
+            ("$1 as ", "$1"),
+            ("1usd to i", "1usd"),
+            ("1usd to ru", "1usd"),
+            ("1usd +", "1usd"),
+            ("10 km to ", "10 km"),
+            ("10 km to kilome", "10 km"),
+            ("26 to he", "26"),
+            ("0x", "0"),
+            ("26 as", "26"),
+            ("12 + 12 +", "12 + 12"),
+            ("12 + 12 * -", "12 + 12"),
+            ("2 plus", "2"),
+            ("2 mod", "2"),
+            ("2modulo", "2"),
+            ("20% +", "20%"),
+            ("5! +", "5!"),
+            ("20% of", "20%"),
+            ("2 * (", "2"),
+            ("(2 + 3", "(2 + 3)"),
+            ("2 * (3 +", "2 * (3)"),
+            ("sqrt(9", "sqrt(9)"),
+            ("sum(1,2,", "sum(1,2)"),
+            ("1e+", "1"),
+            ("4pm +", "4pm"),
+            ("4pm + 30 mi", "4pm + 30"),
+            ("12pm UTC to ", "12pm UTC"),
+            ("12pm UTC to New Y", "12pm UTC"),
+        ] {
+            assert!(provider.auto_claim(pending), "did not claim {pending}");
+            let preview = provider.search(pending).remove(0);
+            let complete = provider.search(source).remove(0);
+            assert_eq!(preview.title, complete.title, "{pending}");
+            if !pending.contains('(') {
+                assert_eq!(preview.subtitle, complete.subtitle, "{pending}");
+            }
+            assert!(
+                matches!(preview.action, CommandAction::CopyToClipboard(_)),
+                "{pending}"
+            );
+        }
+    }
+
+    #[test]
+    fn unfinished_starts_are_neutral_and_finished_errors_stay_invalid() {
+        let provider = isolated_provider();
+        for query in [
+            "(",
+            "sqrt(",
+            "in 2",
+            "in 2 ho",
+            "in 2 hours 30 mi",
+            "€",
+            "₹",
+            "-",
+            ".",
+            "-.",
+        ] {
+            assert!(provider.auto_claim(query), "{query}");
+            assert!(
+                matches!(
+                    provider.search(query)[0].action,
+                    CommandAction::PendingState
+                ),
+                "{query}"
+            );
+        }
+        for query in [
+            "2 / 0",
+            "2 / 0 +",
+            "10 km to kg",
+            "10 km to nope",
+            "1 USD to xyzzy",
+            "2 + unknown +",
+            "min(1,)",
+            "2 + 3)",
+        ] {
+            assert!(
+                matches!(provider.search(query)[0].action, CommandAction::EmptyState),
+                "{query}"
+            );
+        }
+        // Deleting or replacing the expression must never keep a different query's result.
+        provider.search("2+2");
+        assert!(matches!(
+            provider.search("10 km to kg")[0].action,
+            CommandAction::EmptyState
+        ));
+        assert_eq!(provider.search("26 to he")[0].title, "26");
+        assert_eq!(provider.search("26 to hex")[0].title, "0x1A");
+    }
+    #[test]
+    fn unicode_editing_boundaries_are_safe() {
+        let provider = isolated_provider();
+        for query in ["€to", "₹plus", "£", "1 km to µ", "in 2\u{00a0}ho"] {
+            assert_eq!(provider.search(query).len(), 1, "{query}");
         }
     }
 }

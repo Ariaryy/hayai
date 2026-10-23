@@ -1015,11 +1015,64 @@ fn parse_date_arithmetic_with_zone(
     })
 }
 
+pub(super) fn unfinished_duration(input: &str) -> bool {
+    let lower = input.to_ascii_lowercase();
+    let Some(duration) = lower.strip_prefix("in ") else {
+        return false;
+    };
+    let duration = duration.trim();
+    let start = duration
+        .char_indices()
+        .rev()
+        .find(|(_, c)| c.is_whitespace() || c.is_ascii_alphabetic())
+        .map_or(0, |(index, c)| index + c.len_utf8());
+    let (head, amount) = duration.split_at(start);
+    grammar::parse_amount(amount).is_some_and(|(_, consumed)| consumed == amount.len())
+        && (head.trim().is_empty() || parse_duration(head.trim()).is_some())
+}
+
+pub(super) fn duration_prefix(word: &str) -> bool {
+    [
+        "seconds", "secs", "minutes", "mins", "hours", "hrs", "days", "weeks", "wks", "months",
+        "years", "yrs",
+    ]
+    .iter()
+    .any(|name| name.starts_with(word) && *name != word)
+}
+
+pub(super) fn target_prefix(target: &str) -> bool {
+    if target.is_empty() || resolve_zone(target).is_some() {
+        return false;
+    }
+    let prefix = compact_place(target);
+    TIMEZONES
+        .iter()
+        .any(|(names, _)| names.iter().any(|name| name.starts_with(&prefix)))
+        || CITY_ZONES.iter().any(|zone| {
+            zone.aliases.iter().any(|name| name.starts_with(&prefix))
+                || compact_place(zone.identity).starts_with(&prefix)
+                || compact_place(zone.windows_key).starts_with(&prefix)
+        })
+}
+
+fn clock_literal(input: &str) -> Option<EvalResult> {
+    let ((hour, minute), rest) = parse_leading_clock(input)?;
+    if !rest.is_empty() {
+        return None;
+    }
+    Some(EvalResult {
+        expression: input.to_string(),
+        value: format_clock(i64::from(hour) * 60 + i64::from(minute)),
+        copy_value: None,
+    })
+}
+
 pub fn convert(input: &str) -> Option<EvalResult> {
     parse_clock_arithmetic(input)
         .or_else(|| parse_timezone_difference(input))
         .or_else(|| parse_timezone_conversion(input))
         .or_else(|| parse_date_arithmetic(input))
+        .or_else(|| clock_literal(input))
 }
 
 #[cfg(test)]

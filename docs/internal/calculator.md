@@ -13,8 +13,16 @@ arithmetic use `engine`, including compound expressions. `units` contains
 aliases and display labels, with no conversion factors or temperature math.
 Aliases are also normalized inside compound expressions.
 
-`QueryPlan` chooses currency, time, or numeric intent. Invalid currency/time
-requests cannot fall through and acquire a different numeric meaning. The
+`QueryPlan` chooses currency, time, or numeric intent. Completed invalid
+currency/time requests cannot fall through and acquire a different numeric
+meaning. `editing` recognizes unfinished suffixes across domains and evaluates
+one complete prefix using the same plan. Missing closing delimiters may be
+balanced for a preview. This uses the current input, never a previous query;
+metadata and clipboard precision are taken from the preview source too.
+Unfinished starts without a value use a distinct neutral `PendingState` notice.
+Word operators require a right operand, while completed postfix percentages
+and factorials remain valid. Unit completions use the engine's registry plus
+Hayai aliases, rather than another conversion-factor table. The
 picometer/PM collision is resolved by an explicit physical length target.
 Input length, nesting, output size, and a shared cooperative engine deadline
 bound evaluation. Recursive aggregates and comparisons share that deadline.
