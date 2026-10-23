@@ -112,6 +112,7 @@ pub fn convert(input: &str) -> Option<EvalResult> {
     let to_base = find_base_name(&target)?;
 
     Some(EvalResult {
+        copy_value: None,
         expression: format!("{} {}", from_base.format(value), from_base.label()),
         value: to_base.format(value),
     })

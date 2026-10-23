@@ -32,6 +32,9 @@ impl gpui::AssetSource for LauncherAssets {
             "icons/spinner.svg" => Some(include_bytes!("../assets/icons/spinner.svg")),
             "icons/scry.svg" => Some(include_bytes!("../assets/icons/scry.svg")),
             "icons/application.svg" => Some(include_bytes!("../assets/icons/application.svg")),
+            "icons/calculator-invalid.svg" => {
+                Some(include_bytes!("../assets/icons/calculator-invalid.svg"))
+            }
             "icons/search-empty.svg" => Some(include_bytes!("../assets/icons/search-empty.svg")),
             _ => None,
         };
@@ -45,6 +48,7 @@ impl gpui::AssetSource for LauncherAssets {
             "icons/spinner.svg",
             "icons/scry.svg",
             "icons/search-empty.svg",
+            "icons/calculator-invalid.svg",
             "icons/application.svg",
         ]
         .into_iter()

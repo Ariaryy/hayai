@@ -261,6 +261,13 @@ fn city_zone_for_key(key: &str) -> Option<&'static CityZone> {
         .find(|zone| zone.windows_key.eq_ignore_ascii_case(key))
 }
 
+fn compact_place(name: &str) -> String {
+    name.chars()
+        .filter(|c| !c.is_whitespace() && *c != '_')
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
 fn resolve_zone(token: &str) -> Option<ResolvedZone> {
     let lower = token.to_ascii_lowercase();
     if lower == SYSTEM_TIMEZONE {
@@ -282,10 +289,12 @@ fn resolve_zone(token: &str) -> Option<ResolvedZone> {
             ),
         });
     }
-    if let Some(zone) = CITY_ZONES
-        .iter()
-        .find(|zone| zone.aliases.contains(&lower.as_str()))
-    {
+    let compact = compact_place(&lower);
+    if let Some(zone) = CITY_ZONES.iter().find(|zone| {
+        zone.aliases.contains(&compact.as_str())
+            || zone.identity.eq_ignore_ascii_case(&lower)
+            || zone.windows_key.eq_ignore_ascii_case(&lower)
+    }) {
         return Some(ResolvedZone {
             kind: ZoneKind::Windows(zone.windows_key.to_string()),
             identity: zone.identity.to_string(),
@@ -443,6 +452,7 @@ fn parse_timezone_difference(input: &str) -> Option<EvalResult> {
         )
     };
     Some(EvalResult {
+        copy_value: None,
         expression: from.to_uppercase(),
         value,
     })
@@ -512,14 +522,18 @@ fn parse_clock(token: &str) -> Option<(u32, u32)> {
 
 fn parse_leading_clock(input: &str) -> Option<((u32, u32), &str)> {
     let input = input.trim_start();
-    let first_end = input.find(char::is_whitespace).unwrap_or(input.len());
+    let first_end = input
+        .find(|c: char| c.is_whitespace() || matches!(c, '+' | '-'))
+        .unwrap_or(input.len());
     let first = &input[..first_end];
     let rest = input[first_end..].trim_start();
     if let Some(clock) = parse_clock(first) {
         return Some((clock, rest));
     }
 
-    let meridiem_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+    let meridiem_end = rest
+        .find(|c: char| c.is_whitespace() || matches!(c, '+' | '-'))
+        .unwrap_or(rest.len());
     let meridiem = &rest[..meridiem_end];
     if !matches!(meridiem.to_ascii_lowercase().as_str(), "am" | "pm") {
         return None;
@@ -556,6 +570,28 @@ fn month_number(token: &str) -> Option<u32> {
     .map(|index| index as u32 + 1)
 }
 
+fn valid_date(year: i64, month: u32, day: u32) -> bool {
+    (1..=9999).contains(&year)
+        && (1..=12).contains(&month)
+        && day >= 1
+        && day <= days_in_month(year, month)
+}
+
+/// Recognition is distinct from successful evaluation: malformed clock/date
+/// requests must report an error, not fall through to physical units/arithmetic.
+pub fn is_time_query(input: &str) -> bool {
+    let lower = input.trim().to_ascii_lowercase();
+    parse_leading_clock(input).is_some()
+        || (input.trim_start().starts_with(|c: char| c.is_ascii_digit()) && lower.contains(" at "))
+        || lower
+            .strip_prefix("in ")
+            .is_some_and(|rest| grammar::parse_amount(rest.trim_start()).is_some())
+        || (grammar::parse_amount(input.trim_start()).is_some()
+            && [" from now", " after now", " before now", " ago", " later"]
+                .iter()
+                .any(|suffix| lower.ends_with(suffix)))
+}
+
 fn parse_zoned_clock(input: &str) -> Option<ParsedZonedClock> {
     let input = input.trim();
     let lower = input.to_ascii_lowercase();
@@ -577,22 +613,16 @@ fn parse_zoned_clock(input: &str) -> Option<ParsedZonedClock> {
         (year, month, day, input, false)
     };
 
-    let ((hour, minute), rest) = parse_leading_clock(clock_input)?;
-    let from_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-    if from_end == 0 {
+    if !valid_date(year as i64, month, day) {
         return None;
     }
-    let from_token = rest[..from_end].to_ascii_lowercase();
-    resolve_zone(&from_token)?;
-    let remainder = rest[from_end..].trim_start();
-    let (target, matched) = grammar::parse_keyword_then_target(remainder);
-    let to_token = if matched {
-        target
-    } else if remainder.is_empty() {
-        SYSTEM_TIMEZONE.to_string()
+    let ((hour, minute), rest) = parse_leading_clock(clock_input)?;
+    let (from_token, to_token) = if let Some((from, to)) = grammar::split_conversion(rest) {
+        (from.to_string(), to.to_string())
     } else {
-        return None;
+        (rest.to_string(), SYSTEM_TIMEZONE.to_string())
     };
+    resolve_zone(&from_token)?;
     resolve_zone(&to_token)?;
     Some(ParsedZonedClock {
         local: (year, month, day, hour, minute),
@@ -615,6 +645,33 @@ fn format_clock(total_minutes: i64) -> String {
     format!("{h12}:{minute:02} {suffix}")
 }
 
+// All OS date calculations stay within a small, explicitly supported domain.
+// Reject before float-to-integer conversion; Rust's saturating cast is not validation.
+const MAX_SECONDS: f64 = 366.0 * 10_000.0 * 86_400.0;
+fn bounded_seconds(value: f64) -> Option<i64> {
+    (value.is_finite() && value.abs() <= MAX_SECONDS).then(|| value.round() as i64)
+}
+
+fn day_note(days: i64) -> String {
+    match days {
+        0 => String::new(),
+        1 => " (+1 day)".into(),
+        -1 => " (-1 day)".into(),
+        n if n > 0 => format!(" (+{n} days)"),
+        n => format!(" ({n} days)"),
+    }
+}
+
+fn format_clock_seconds(seconds: i64) -> String {
+    let clock = format_clock(seconds.div_euclid(60));
+    let remainder = seconds.rem_euclid(60);
+    if remainder == 0 {
+        return clock;
+    }
+    let (time, meridiem) = clock.split_once(' ').unwrap();
+    format!("{time}:{remainder:02} {meridiem}")
+}
+
 /// "1pm + 5", "9:30am - 2 hours", or "4pm + 30 min".
 fn parse_clock_arithmetic(input: &str) -> Option<EvalResult> {
     let input = input.trim();
@@ -626,21 +683,26 @@ fn parse_clock_arithmetic(input: &str) -> Option<EvalResult> {
         (-1.0, rest.strip_prefix('-')?)
     };
     let rest = rest.trim();
-    let offset_minutes = if let Ok(hours) = rest.parse::<f64>() {
-        hours * 60.0
+    let offset_seconds = if let Ok(hours) = rest.parse::<f64>() {
+        hours * 3600.0
     } else {
         let duration = parse_duration(rest)?;
         if duration.months != 0 {
             return None;
         }
-        duration.seconds / 60.0
+        duration.seconds + duration.days as f64 * 86_400.0
     };
 
-    let source = hour as i64 * 60 + minute as i64;
-    let target = source + (sign * offset_minutes).round() as i64;
+    let source = hour as i64 * 3600 + minute as i64 * 60;
+    let target = source.checked_add(bounded_seconds(sign * offset_seconds)?)?;
     Some(EvalResult {
+        copy_value: None,
         expression: input.trim().to_string(),
-        value: format_clock(target),
+        value: format!(
+            "{}{}",
+            format_clock_seconds(target),
+            day_note(target.div_euclid(86_400))
+        ),
     })
 }
 
@@ -652,6 +714,9 @@ fn parse_timezone_conversion(input: &str) -> Option<EvalResult> {
     let target_zone = resolve_zone(&parsed.to_token)?;
     let (utc, source_offset) = zone_to_utc(&source_zone, parsed.local)?;
     let (target, target_offset) = zone_from_utc(&target_zone, utc)?;
+    if !valid_date(target.0 as i64, target.1, target.2) {
+        return None;
+    }
     let source_days = days_from_civil(parsed.local.0 as i64, parsed.local.1, parsed.local.2);
     let target_days = days_from_civil(target.0 as i64, target.1, target.2);
     let day_shift = target_days - source_days;
@@ -684,6 +749,7 @@ fn parse_timezone_conversion(input: &str) -> Option<EvalResult> {
         )
     };
     Some(EvalResult {
+        copy_value: None,
         expression: format!("{} {source_abbreviation}", format_clock(source_clock)),
         value,
     })
@@ -747,26 +813,74 @@ fn format_date(days_since_epoch: i64) -> String {
 #[derive(Default)]
 struct DurationParts {
     months: i64,
+    days: i64,
     seconds: f64,
+    has_clock: bool,
 }
 
 fn parse_duration(input: &str) -> Option<DurationParts> {
     let mut parts = DurationParts::default();
-    let mut tokens = input.split_whitespace();
+    let mut rest = input.trim();
     let mut found = false;
-    while let Some(amount) = tokens.next() {
-        let amount: f64 = amount.parse().ok()?;
-        let unit = tokens.next()?.trim_matches(|c: char| c == ',' || c == '.');
-        match unit {
-            "year" | "years" | "yr" | "yrs" => parts.months += (amount * 12.0).round() as i64,
-            "month" | "months" | "mo" => parts.months += amount.round() as i64,
-            "week" | "weeks" | "wk" | "wks" => parts.seconds += amount * 7.0 * 86_400.0,
-            "day" | "days" | "d" => parts.seconds += amount * 86_400.0,
-            "hour" | "hours" | "hr" | "hrs" | "h" => parts.seconds += amount * 3_600.0,
-            "minute" | "minutes" | "min" | "mins" => parts.seconds += amount * 60.0,
-            "second" | "seconds" | "sec" | "secs" | "s" => parts.seconds += amount,
-            _ => return None,
+    while !rest.is_empty() {
+        let (amount, consumed) = grammar::parse_amount(rest)?;
+        // Thousands shorthand belongs to conversions, never time arithmetic.
+        if rest[..consumed].ends_with(['k', 'K']) {
+            return None;
         }
+        rest = rest[consumed..].trim_start();
+        let end = rest
+            .find(|c: char| !c.is_ascii_alphabetic())
+            .unwrap_or(rest.len());
+        let unit = rest[..end].to_ascii_lowercase();
+        if !amount.is_finite() || amount.abs() > MAX_SECONDS {
+            return None;
+        }
+        match unit.as_str() {
+            "year" | "years" | "yr" | "yrs" | "month" | "months" | "mo" => {
+                if amount.fract() != 0.0 {
+                    return None;
+                }
+                let months = if unit.starts_with('y') {
+                    amount * 12.0
+                } else {
+                    amount
+                };
+                if months.abs() > 120_000.0 {
+                    return None;
+                }
+                parts.months = parts.months.checked_add(months as i64)?;
+                if parts.months.abs() > 120_000 {
+                    return None;
+                }
+            }
+            "week" | "weeks" | "wk" | "wks" | "day" | "days" | "d" => {
+                let days = if unit.starts_with('w') {
+                    amount * 7.0
+                } else {
+                    amount
+                };
+                bounded_seconds(days * 86_400.0)?;
+                parts.days = parts.days.checked_add(days.trunc() as i64)?;
+                bounded_seconds(parts.days as f64 * 86_400.0)?;
+                parts.has_clock |= days.fract() != 0.0;
+                parts.seconds += days.fract() * 86_400.0;
+                bounded_seconds(parts.seconds)?;
+            }
+            _ => {
+                parts.has_clock = true;
+                let factor = match unit.as_str() {
+                    "hour" | "hours" | "hr" | "hrs" | "h" => 3600.0,
+                    "minute" | "minutes" | "min" | "mins" => 60.0,
+                    "second" | "seconds" | "sec" | "secs" | "s" => 1.0,
+                    _ => return None,
+                };
+                parts.seconds += amount * factor;
+                bounded_seconds(parts.seconds)?;
+            }
+        }
+        rest =
+            rest[end..].trim_start_matches(|c: char| c.is_whitespace() || matches!(c, ',' | '.'));
         found = true;
     }
     found.then_some(parts)
@@ -781,16 +895,44 @@ fn days_in_month(year: i64, month: u32) -> u32 {
     (next - days_from_civil(year, month, 1)) as u32
 }
 
-fn add_months(year: i64, month: u32, day: u32, months: i64) -> (i64, u32, u32) {
-    let month_index = year * 12 + i64::from(month) - 1 + months;
+fn add_months(year: i64, month: u32, day: u32, months: i64) -> Option<(i64, u32, u32)> {
+    if !valid_date(year, month, day) {
+        return None;
+    }
+    let month_index = year
+        .checked_mul(12)?
+        .checked_add(i64::from(month) - 1)?
+        .checked_add(months)?;
     let target_year = month_index.div_euclid(12);
     let target_month = month_index.rem_euclid(12) as u32 + 1;
     let target_day = day.min(days_in_month(target_year, target_month));
-    (target_year, target_month, target_day)
+    valid_date(target_year, target_month, target_day).then_some((
+        target_year,
+        target_month,
+        target_day,
+    ))
 }
 
 /// Natural offsets anchored to the current local wall clock.
 fn parse_date_arithmetic(input: &str) -> Option<EvalResult> {
+    let zone = native::system_timezone_name();
+    parse_date_arithmetic_with_zone(input, native::local_now_seconds(), zone.as_deref())
+}
+
+// Inject the wall clock for deterministic calendar/second boundary tests.
+#[cfg(test)]
+fn parse_date_arithmetic_at(
+    input: &str,
+    now: (i32, u32, u32, u32, u32, u32),
+) -> Option<EvalResult> {
+    parse_date_arithmetic_with_zone(input, now, None)
+}
+
+fn parse_date_arithmetic_with_zone(
+    input: &str,
+    now: (i32, u32, u32, u32, u32, u32),
+    zone: Option<&str>,
+) -> Option<EvalResult> {
     let trimmed = input.trim();
     let lower = trimmed.to_lowercase();
     let (relative, at_time) = match lower.rsplit_once(" at ") {
@@ -811,33 +953,63 @@ fn parse_date_arithmetic(input: &str) -> Option<EvalResult> {
         (relative.strip_prefix("in ")?, 1)
     };
     let mut duration = parse_duration(duration_text.trim())?;
-    duration.months *= sign;
+    duration.months = duration.months.checked_mul(sign)?;
+    duration.days = duration.days.checked_mul(sign)?;
     duration.seconds *= sign as f64;
 
-    let (year, month, day, hour, minute) = native::local_now();
-    let (year, month, day) = add_months(year as i64, month, day, duration.months);
-    let start = days_from_civil(year, month, day) * 86_400
-        + i64::from(hour) * 3_600
-        + i64::from(minute) * 60;
-    let mut target = start + duration.seconds.round() as i64;
+    let (year, month, day, hour, minute, second) = now;
+    let (year, month, day) = add_months(year as i64, month, day, duration.months)?;
+    // Months and whole days are calendar operations. Sub-day durations are
+    // elapsed time: cross DST in UTC, never manufacture a nonexistent 2:30am.
+    let calendar_days = days_from_civil(year, month, day).checked_add(duration.days)?;
+    let (year, month, day) = civil_from_days(calendar_days);
+    if !valid_date(year, month, day) {
+        return None;
+    }
+    let start = calendar_days * 86_400
+        + i64::from(hour) * 3600
+        + i64::from(minute) * 60
+        + i64::from(second);
+    let offset = bounded_seconds(duration.seconds)?;
+    let mut target = if offset != 0 {
+        if let Some(zone) = zone {
+            let utc = native::timezone_local_to_utc(zone, (year as i32, month, day, hour, minute))?;
+            let utc_seconds =
+                (date_time_minutes(utc) * 60 + i64::from(second)).checked_add(offset)?;
+            let local =
+                native::timezone_utc_to_local(zone, minutes_date_time(utc_seconds.div_euclid(60)))?;
+            date_time_minutes(local) * 60 + utc_seconds.rem_euclid(60)
+        } else {
+            start.checked_add(offset)?
+        }
+    } else {
+        start
+    };
     if let Some((hour, minute)) = at_time {
         target =
             target.div_euclid(86_400) * 86_400 + i64::from(hour) * 3_600 + i64::from(minute) * 60;
     }
     let target_days = target.div_euclid(86_400);
-    let minute_of_day = target.rem_euclid(86_400) / 60;
-    let includes_time = at_time.is_some() || duration.seconds.rem_euclid(86_400.0) != 0.0;
+    let date = civil_from_days(target_days);
+    if !valid_date(date.0, date.1, date.2) {
+        return None;
+    }
+    if let Some(zone) = zone {
+        native::timezone_local_to_utc(zone, minutes_date_time(target.div_euclid(60)))?;
+    }
+    let includes_time = at_time.is_some() || duration.has_clock;
     let value = if includes_time {
         format!(
             "{}, {}",
             format_date(target_days),
-            format_clock(minute_of_day)
+            format_clock_seconds(target.rem_euclid(86_400))
         )
     } else {
         format_date(target_days)
     };
 
     Some(EvalResult {
+        copy_value: None,
         expression: trimmed.to_string(),
         value,
     })
@@ -863,7 +1035,7 @@ mod tests {
     #[test]
     fn clock_minus_hours_wraps_backward() {
         let result = convert("1am - 3").unwrap();
-        assert_eq!(result.value, "10:00 PM");
+        assert_eq!(result.value, "10:00 PM (-1 day)");
     }
 
     #[test]
@@ -964,18 +1136,26 @@ mod tests {
     }
 
     #[test]
-    fn minutes_from_now_uses_current_wall_clock() {
-        let (year, month, day, hour, minute) = native::local_now();
-        let start = days_from_civil(year as i64, month, day) * 86_400
-            + i64::from(hour) * 3_600
-            + i64::from(minute) * 60;
-        let target = start + 15 * 60;
-        let expected = format!(
-            "{}, {}",
-            format_date(target.div_euclid(86_400)),
-            format_clock(target.rem_euclid(86_400) / 60)
+    fn relative_seconds_use_an_injected_clock() {
+        let now = (2026, 10, 23, 16, 0, 15);
+        assert!(
+            parse_date_arithmetic_at("in 30sec", now)
+                .unwrap()
+                .value
+                .ends_with("4:00:45 PM")
         );
-        assert_eq!(convert("15 mins from now").unwrap().value, expected);
+        assert!(
+            parse_date_arithmetic_at("in 15 mins", now)
+                .unwrap()
+                .value
+                .ends_with("4:15:15 PM")
+        );
+        assert!(
+            parse_date_arithmetic_at("in 1 month", (2024, 1, 31, 12, 0, 0))
+                .unwrap()
+                .value
+                .contains("February 29, 2024")
+        );
     }
 
     #[test]
@@ -1003,5 +1183,74 @@ mod tests {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
         let z = days_from_civil(2026, 7, 30);
         assert_eq!(civil_from_days(z), (2026, 7, 30));
+    }
+    #[test]
+    fn validated_calendar_and_offsets() {
+        for query in [
+            "4pm + NaN",
+            "4pm + inf",
+            "4pm + 1e300",
+            "in 1e300 years",
+            "in 999999999 days",
+            "in NaN seconds",
+            "31 February 2026 at 12pm utc to gmt",
+            "0 February 2026 at 12pm utc to gmt",
+            "29 February 2025 at 12pm utc to gmt",
+        ] {
+            assert!(convert(query).is_none(), "{query}");
+        }
+        assert!(convert("29 February 2024 at 12pm utc to gmt").is_some());
+        assert_eq!(convert("4pm+30sec").unwrap().value, "4:00:30 PM");
+        assert_eq!(convert("4pm + 30 MIN").unwrap().value, "4:30 PM");
+        assert_eq!(convert("11pm+3").unwrap().value, "2:00 AM (+1 day)");
+        assert!(parse_date_arithmetic_at("in 1 day", (9999, 12, 31, 12, 0, 0)).is_none());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn multiword_places_and_iana_names_share_zone_rules() {
+        for source in [
+            "newyork",
+            "New York",
+            "America/New_York",
+            "Eastern Standard Time",
+        ] {
+            assert_eq!(
+                convert(&format!("1 July 2026 at 12pm {source} to UTC"))
+                    .unwrap()
+                    .value,
+                "July 1, 2026, 4:00 PM UTC",
+                "{source}"
+            );
+        }
+        assert!(convert("8 March 2026 at 2:30am New York to UTC").is_none());
+    }
+    #[cfg(windows)]
+    #[test]
+    fn elapsed_and_calendar_offsets_cross_dst_deliberately() {
+        let now = (2026, 3, 8, 1, 30, 0);
+        let zone = Some("Eastern Standard Time");
+        assert!(
+            parse_date_arithmetic_with_zone("in 2 hours", now, zone)
+                .unwrap()
+                .value
+                .ends_with("4:30 AM")
+        );
+        assert!(
+            parse_date_arithmetic_with_zone("in 24 hours", now, zone)
+                .unwrap()
+                .value
+                .ends_with("2:30 AM")
+        );
+        assert!(
+            parse_date_arithmetic_with_zone("in 1 day at 1:30am", now, zone)
+                .unwrap()
+                .value
+                .ends_with("1:30 AM")
+        );
+        assert!(
+            parse_date_arithmetic_with_zone("in 1 day at 2:30am", (2026, 3, 7, 1, 30, 0), zone)
+                .is_none()
+        );
     }
 }

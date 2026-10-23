@@ -1025,6 +1025,7 @@ impl LauncherRoot {
                 }),
                 CommandAction::CopyToClipboard(_)
                 | CommandAction::ShowText(_)
+                | CommandAction::EmptyState
                 | CommandAction::InstallFileSearch
                 | CommandAction::StartFileSearch
                 | CommandAction::UpdateFileSearch
@@ -1247,6 +1248,9 @@ impl LauncherRoot {
                 });
             }
             InputEvent::PressEnter { .. } => {
+                if self.list.read(cx).delegate().empty_state.is_some() {
+                    return;
+                }
                 if self.list.read(cx).delegate().show_about {
                     self.list.update(cx, |list, cx| {
                         list.delegate_mut().show_about = false;
@@ -1652,6 +1656,7 @@ impl LauncherRoot {
             Some(CommandAction::OpenFile(path)) if path.is_dir() => "Open Folder",
             Some(CommandAction::OpenFile(_)) => "Open File",
             Some(CommandAction::ShowText(_)) => "Show",
+            Some(CommandAction::EmptyState) => "",
             Some(CommandAction::InstallFileSearch) => "Install",
             Some(CommandAction::StartFileSearch) => "Start",
             Some(CommandAction::UpdateFileSearch) => "Update Scry Search",
@@ -1674,6 +1679,7 @@ impl gpui::Render for LauncherRoot {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let delegate = self.list.read(cx).delegate();
         let about = delegate.show_about;
+        let empty_notice = delegate.empty_state.is_some();
         // Compatibility results and explicit update navigation share one page.
         // A query refresh must not briefly expose the older setup renderer.
         let scry_page = delegate.show_scry_updates || delegate.needs_pinned_scry();
@@ -2061,7 +2067,7 @@ impl gpui::Render for LauncherRoot {
                                 )
                             }),
                     )
-                    .child(
+                    .when(!empty_notice, |footer| footer.child(
                         h_flex()
                             .gap_2()
                             .items_center()
@@ -2079,8 +2085,8 @@ impl gpui::Render for LauncherRoot {
                                     .flex_none(),
                                 cx,
                             )),
-                    )
-                    .when(!setup_screen || updates_page, |footer| { footer
+                    ))
+                    .when((!setup_screen || updates_page) && !empty_notice, |footer| { footer
 .child(div().mx_2().w(px(1.0)).h(px(16.0)).bg(cx.theme().border))
                     .child(
                         h_flex()
@@ -2275,6 +2281,7 @@ struct ResultListDelegate {
     /// Catalog handle retained ONLY for the icon cache (`IconSource::Path`).
     catalog: Rc<RefCell<Catalog>>,
     results: Vec<CommandItem>,
+    empty_state: Option<CommandItem>,
     /// Generation the current `results` belong to (see `PluginRegistry`).
     results_generation: u64,
     selected_index: Option<IndexPath>,
@@ -2610,13 +2617,14 @@ impl ResultListDelegate {
             selected_index: (!results.is_empty()).then(IndexPath::default),
             results,
             results_generation: dispatch.generation,
+            empty_state: None,
         }
     }
 
     fn apply_results(
         &mut self,
         generation: u64,
-        items: Vec<CommandItem>,
+        mut items: Vec<CommandItem>,
         cx: &mut Context<ListState<Self>>,
     ) {
         if crate::plugins::is_stale(self.results_generation, generation) {
@@ -2624,6 +2632,7 @@ impl ResultListDelegate {
         }
         self.results_generation = generation;
         self.search_pending = false;
+        self.empty_state = take_empty_state(&mut items);
         self.main_results = items
             .iter()
             .position(|item| is_hayai_action(&item.action))
@@ -2645,6 +2654,17 @@ impl ResultListDelegate {
         self.selected_index = (!self.results.is_empty()).then(|| self.index_path(0));
         cx.notify();
     }
+}
+
+/// Empty notices never enter list indexing, keyboard selection, or actions.
+/// A later successful query clears the notice through this same function.
+fn take_empty_state(items: &mut Vec<CommandItem>) -> Option<CommandItem> {
+    let notice = items
+        .iter()
+        .position(|item| matches!(item.action, CommandAction::EmptyState))
+        .map(|index| items.remove(index));
+    items.retain(|item| !matches!(item.action, CommandAction::EmptyState));
+    if items.is_empty() { notice } else { None }
 }
 
 fn scry_search_is_ready(items: &[CommandItem]) -> bool {
@@ -2861,15 +2881,21 @@ impl ListDelegate for ResultListDelegate {
             .when(!self.search_pending, |view| {
                 view.child(
                     gpui::svg()
-                        .path("icons/search-empty.svg")
+                        .path(if self.empty_state.is_some() {
+                            "icons/calculator-invalid.svg"
+                        } else {
+                            "icons/search-empty.svg"
+                        })
                         .size(px(40.0))
                         .flex_none()
                         .text_color(cx.theme().muted_foreground.opacity(0.65)),
                 )
-                .child(if self.file_search {
-                    "No files found. Try another search."
+                .child(if let Some(notice) = self.empty_state.as_ref() {
+                    notice.title.clone()
+                } else if self.file_search {
+                    "No files found. Try another search.".to_string()
                 } else {
-                    "No apps found. Try another search."
+                    "No apps found. Try another search.".to_string()
                 })
             })
     }
@@ -3232,7 +3258,7 @@ impl ListDelegate for ResultListDelegate {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
                 LauncherState::dismiss(window, cx);
             }
-            Some(CommandAction::ShowText(_)) => {
+            Some(CommandAction::ShowText(_) | CommandAction::EmptyState) => {
                 // Stays on screen; no-op.
             }
             Some(CommandAction::InstallFileSearch) => {
@@ -3246,7 +3272,9 @@ impl ListDelegate for ResultListDelegate {
                 self.start_scry(window, cx);
             }
             None => {
-                LauncherState::dismiss(window, cx);
+                if self.empty_state.is_none() {
+                    LauncherState::dismiss(window, cx);
+                }
             }
         }
     }
@@ -4006,5 +4034,36 @@ mod tests {
             format_expression_for_display("1 usd to inr"),
             "1 USD to INR"
         );
+    }
+    #[test]
+    fn empty_notices_are_not_selectable_results_and_recovery_clears_them() {
+        use super::{CommandAction, CommandItem, IconSource, take_empty_state};
+        let notice = CommandItem {
+            id: "calc:error".into(),
+            title: "Invalid expression".into(),
+            subtitle: None,
+            file_size: None,
+            calculation_detail: None,
+            icon: IconSource::None,
+            action: CommandAction::EmptyState,
+        };
+        let mut items = vec![notice];
+        assert_eq!(
+            take_empty_state(&mut items).unwrap().title,
+            "Invalid expression"
+        );
+        assert!(items.is_empty());
+        assert!(take_empty_state(&mut items).is_none());
+        items.push(CommandItem {
+            id: "calc:2+2".into(),
+            title: "4".into(),
+            subtitle: None,
+            file_size: None,
+            calculation_detail: None,
+            icon: IconSource::None,
+            action: CommandAction::CopyToClipboard("4".into()),
+        });
+        assert!(take_empty_state(&mut items).is_none());
+        assert_eq!(items.len(), 1);
     }
 }
