@@ -34,7 +34,7 @@ fn load_builtin_icon(bytes: &[u8]) -> Option<Arc<RenderImage>> {
         .ok()?
         .into_rgba8();
     // PNG decodes as straight RGBA; GPUI consumes straight BGRA.
-    for pixel in buffer.chunks_exact_mut(4) {
+    for pixel in buffer.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
