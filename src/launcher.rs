@@ -724,7 +724,15 @@ fn can_run_as_admin(path: &std::path::Path) -> bool {
     )
 }
 
+struct WheelAnimation {
+    motion: crate::scroll::SmoothScroll,
+    last_frame: std::time::Instant,
+    results_generation: u64,
+}
+
 struct LauncherRoot {
+    wheel_animation: Option<WheelAnimation>,
+    wheel_animation_id: u64,
     menu_request: u64,
     list: Entity<ListState<ResultListDelegate>>,
     search_input: Entity<InputState>,
@@ -752,6 +760,109 @@ struct LauncherRoot {
 const HISTORY_LIMIT: usize = 50;
 
 impl LauncherRoot {
+    fn cancel_wheel_animation(&mut self) {
+        self.wheel_animation = None;
+        self.wheel_animation_id = self.wheel_animation_id.wrapping_add(1);
+    }
+
+    fn on_result_wheel(
+        &mut self,
+        event: &gpui::ScrollWheelEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.action_menu.is_some() {
+            self.cancel_wheel_animation();
+            return;
+        }
+        // Precision devices already supply continuous pixel motion and inertia.
+        // Let the virtual list consume those events without a second filter.
+        if event.delta.precise() {
+            self.cancel_wheel_animation();
+            return;
+        }
+        let delta = event.delta.pixel_delta(window.line_height());
+        if delta.y == px(0.0) || delta.x.abs() > delta.y.abs() {
+            return;
+        }
+        let list = self.list.read(cx);
+        let handle = list.scroll_handle();
+        let current = f32::from(handle.offset().y);
+        let max_offset = f32::from(handle.max_offset().y);
+        let generation = list.delegate().results_generation;
+        if self.wheel_animation.as_ref().is_some_and(|animation| {
+            animation.results_generation != generation
+                || (animation.motion.position - current).abs() > 0.5
+        }) {
+            self.cancel_wheel_animation();
+        }
+        let start = self.wheel_animation.is_none();
+        let animation = self.wheel_animation.get_or_insert_with(|| WheelAnimation {
+            motion: crate::scroll::SmoothScroll::new(current),
+            last_frame: std::time::Instant::now(),
+            results_generation: generation,
+        });
+        animation.motion.push(f32::from(delta.y), max_offset);
+        // Capture before the child's default bubble-phase scroll handler, or
+        // every wheel tick would also jump the native scroll offset immediately.
+        cx.stop_propagation();
+        if start {
+            self.schedule_wheel_frame(window, cx);
+        }
+    }
+
+    fn schedule_wheel_frame(&self, window: &mut Window, cx: &mut Context<Self>) {
+        let root = cx.entity().downgrade();
+        let id = self.wheel_animation_id;
+        // GPUI invokes this through its display-frame loop; no 60Hz timer.
+        window.on_next_frame(move |window, cx| {
+            let _ = root.update(cx, |root, cx| {
+                if root.wheel_animation_id == id {
+                    root.advance_wheel_frame(window, cx);
+                }
+            });
+        });
+        window.request_animation_frame();
+    }
+
+    fn advance_wheel_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let visible = cx
+            .global::<LauncherGlobal>()
+            .clone_handle()
+            .borrow()
+            .visible;
+        let list = self.list.read(cx);
+        let handle = list.scroll_handle().clone();
+        let generation = list.delegate().results_generation;
+        let Some(animation) = self.wheel_animation.as_mut() else {
+            return;
+        };
+        if !visible
+            || self.action_menu.is_some()
+            || animation.results_generation != generation
+            || (f32::from(handle.offset().y) - animation.motion.position).abs() > 0.5
+        {
+            self.cancel_wheel_animation();
+            return;
+        }
+        let now = std::time::Instant::now();
+        let active = animation.motion.advance(
+            now.duration_since(animation.last_frame).as_secs_f32(),
+            f32::from(handle.max_offset().y),
+        );
+        animation.last_frame = now;
+        let mut offset = handle.offset();
+        offset.y = px(animation.motion.position);
+        handle.set_offset(offset);
+        self.list.update(cx, |_, cx| cx.notify());
+        cx.notify();
+        if active {
+            self.schedule_wheel_frame(window, cx);
+        } else {
+            self.cancel_wheel_animation();
+        }
+    }
+
     fn new(
         list: Entity<ListState<ResultListDelegate>>,
         search_input: Entity<InputState>,
@@ -818,6 +929,8 @@ impl LauncherRoot {
             intercept,
         ];
         Self {
+            wheel_animation: None,
+            wheel_animation_id: 0,
             menu_request: 0,
             list,
             search_input,
@@ -872,6 +985,7 @@ impl LauncherRoot {
     /// input — callers that re-show a hidden window handle OS-vs-GPUI focus
     /// ordering themselves (see `LauncherState::show`).
     fn reset_to_apps(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_wheel_animation();
         // The window is reused after hiding; transient overlays must not
         // survive into the next Alt+Space session.
         self.action_menu = None;
@@ -1189,6 +1303,7 @@ impl LauncherRoot {
     ) {
         match event {
             InputEvent::Change => {
+                self.cancel_wheel_animation();
                 self.action_menu = None;
                 // Only real user edits reach this arm — our own history-recall
                 // `set_value` calls below drive `perform_search_and_select_first`
@@ -1389,6 +1504,7 @@ impl LauncherRoot {
     }
 
     fn on_move_up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_wheel_animation();
         if self.list.read(cx).delegate().show_about
             || self.list.read(cx).delegate().show_updates
             || self.list.read(cx).delegate().show_scry_updates
@@ -1434,6 +1550,7 @@ impl LauncherRoot {
     }
 
     fn on_move_down(&mut self, _: &MoveDown, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_wheel_animation();
         if self.list.read(cx).delegate().show_about
             || self.list.read(cx).delegate().show_updates
             || self.list.read(cx).delegate().show_scry_updates
@@ -1993,7 +2110,17 @@ impl gpui::Render for LauncherRoot {
             } else {
                 // Clip virtualized rows to the results viewport so scrolling
                 // cannot paint text over the search input or footer.
-                div().flex_1().min_h_0().w_full().overflow_hidden()
+                div().relative().flex_1().min_h_0().w_full().overflow_hidden()
+                    .child({
+                        let root = cx.entity().downgrade();
+                        gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
+                            window.on_mouse_event(move |event: &gpui::ScrollWheelEvent, phase, window, cx| {
+                                if phase == gpui::DispatchPhase::Capture && bounds.contains(&event.position) {
+                                    let _ = root.update(cx, |root, cx| root.on_result_wheel(event, window, cx));
+                                }
+                            });
+                        }).absolute().size_full()
+                    })
                     .child(List::new(&self.list)
                         .scrollbar_visible(false)
                         .with_size(Size::Large)

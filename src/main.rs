@@ -7,6 +7,7 @@ mod files;
 mod launcher;
 mod native;
 mod plugins;
+mod scroll;
 mod scry;
 mod scry_updates;
 mod startup;
