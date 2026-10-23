@@ -1,5 +1,34 @@
 //! Wheel interpolation independent of display refresh rate.
 
+/// A wheel tick takes ownership from an ongoing precision gesture. Windows
+/// Direct Manipulation continues emitting Moved events during inertia, followed
+/// by Ended; a fresh touch always emits Started, even when interrupting inertia.
+#[derive(Default)]
+pub struct ScrollHandoff {
+    wheel_owns_input: bool,
+}
+
+impl ScrollHandoff {
+    pub fn wheel(&mut self) {
+        self.wheel_owns_input = true;
+    }
+
+    pub fn accept_precision(&mut self, phase: gpui::TouchPhase) -> bool {
+        match phase {
+            gpui::TouchPhase::Started => {
+                self.wheel_owns_input = false;
+                true
+            }
+            gpui::TouchPhase::Moved => !self.wheel_owns_input,
+            gpui::TouchPhase::Ended => {
+                let accept = !self.wheel_owns_input;
+                self.wheel_owns_input = false;
+                accept
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct SmoothScroll {
     pub position: f32,
@@ -42,6 +71,25 @@ impl SmoothScroll {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wheel_takes_over_inertia_until_end_or_a_fresh_touch() {
+        use gpui::TouchPhase::*;
+        let mut handoff = ScrollHandoff::default();
+        assert!(handoff.accept_precision(Started));
+        assert!(handoff.accept_precision(Moved));
+        handoff.wheel();
+        for _ in 0..100 {
+            assert!(!handoff.accept_precision(Moved));
+        }
+        assert!(!handoff.accept_precision(Ended));
+        assert!(handoff.accept_precision(Moved));
+        handoff.wheel();
+        assert!(!handoff.accept_precision(Moved));
+        assert!(handoff.accept_precision(Started));
+        assert!(handoff.accept_precision(Moved));
+        assert!(handoff.accept_precision(Ended));
+    }
 
     #[test]
     fn equal_time_has_equal_travel_at_60_120_and_240_hz() {

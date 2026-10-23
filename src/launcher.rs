@@ -732,6 +732,7 @@ struct WheelAnimation {
 
 struct LauncherRoot {
     wheel_animation: Option<WheelAnimation>,
+    scroll_handoff: crate::scroll::ScrollHandoff,
     menu_request: u64,
     list: Entity<ListState<ResultListDelegate>>,
     search_input: Entity<InputState>,
@@ -776,6 +777,12 @@ impl LauncherRoot {
         // Precision devices already supply continuous pixel motion and inertia.
         // Let the virtual list consume those events without a second filter.
         if event.delta.precise() {
+            // An old touchpad inertia tail must not cancel a mouse animation
+            // after the wheel takes over. Started always admits a fresh touch.
+            if !self.scroll_handoff.accept_precision(event.touch_phase) {
+                cx.stop_propagation();
+                return;
+            }
             self.cancel_wheel_animation();
             return;
         }
@@ -784,9 +791,15 @@ impl LauncherRoot {
             return;
         }
         let list = self.list.read(cx);
-        let handle = list.scroll_handle();
-        let current = f32::from(handle.offset().y);
-        let max_offset = f32::from(handle.max_offset().y);
+        let handle = list.scroll_handle().clone();
+        let max_offset = f32::from(handle.max_offset().y).max(0.0);
+        // Pixel input is native and may have left a raw offset beyond the edge
+        // before layout clamps it. Start the new wheel owner at the visible edge.
+        let current = f32::from(handle.offset().y).clamp(-max_offset, 0.0);
+        let mut offset = handle.offset();
+        offset.y = px(current);
+        handle.set_offset(offset);
+        self.scroll_handoff.wheel();
         let generation = list.delegate().results_generation;
         if self.wheel_animation.as_ref().is_some_and(|animation| {
             animation.results_generation != generation
@@ -916,6 +929,7 @@ impl LauncherRoot {
         ];
         Self {
             wheel_animation: None,
+            scroll_handoff: Default::default(),
             menu_request: 0,
             list,
             search_input,
@@ -971,6 +985,7 @@ impl LauncherRoot {
     /// ordering themselves (see `LauncherState::show`).
     fn reset_to_apps(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.cancel_wheel_animation();
+        self.scroll_handoff = Default::default();
         // The window is reused after hiding; transient overlays must not
         // survive into the next Alt+Space session.
         self.action_menu = None;
@@ -4017,6 +4032,102 @@ mod tests {
                             assert!(
                                 root.wheel_animation.is_none(),
                                 "animation must settle and stop requesting frames"
+                            );
+                        })
+                        .unwrap();
+                    window
+                        .update(cx, |_, window, cx| {
+                            let handle = root.read(cx).list.read(cx).scroll_handle().clone();
+                            let mut offset = handle.offset();
+                            offset.y = px(0.0);
+                            handle.set_offset(offset);
+                            let position = handle.bounds().origin + gpui::point(px(12.0), px(12.0));
+                            // Touchpad flick, opposing wheel tick, then the old
+                            // Direct Manipulation inertia continuing for many events.
+                            window.dispatch_event(
+                                gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                                    position,
+                                    delta: gpui::ScrollDelta::Pixels(gpui::point(
+                                        px(0.0),
+                                        px(200.0),
+                                    )),
+                                    touch_phase: gpui::TouchPhase::Started,
+                                    ..Default::default()
+                                }),
+                                cx,
+                            );
+                            window.dispatch_event(
+                                gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                                    position,
+                                    delta: gpui::ScrollDelta::Lines(gpui::point(0.0, -3.0)),
+                                    ..Default::default()
+                                }),
+                                cx,
+                            );
+                            for _ in 0..20 {
+                                window.dispatch_event(
+                                    gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                                        position,
+                                        delta: gpui::ScrollDelta::Pixels(gpui::point(
+                                            px(0.0),
+                                            px(20.0),
+                                        )),
+                                        touch_phase: gpui::TouchPhase::Moved,
+                                        ..Default::default()
+                                    }),
+                                    cx,
+                                );
+                            }
+                            let animation = root
+                                .read(cx)
+                                .wheel_animation
+                                .as_ref()
+                                .expect("old touchpad inertia must not cancel mouse scrolling");
+                            assert!(
+                                animation.motion.target < 0.0,
+                                "the first mouse tick must move down from the visible top"
+                            );
+                        })
+                        .unwrap();
+                    cx.background_executor()
+                        .timer(Duration::from_millis(500))
+                        .await;
+                    window
+                        .update(cx, |_, window, cx| {
+                            let handle = root.read(cx).list.read(cx).scroll_handle().clone();
+                            assert!(
+                                handle.offset().y < px(0.0),
+                                "mouse must move before old touchpad gesture ends"
+                            );
+                            assert!(
+                                root.read(cx).wheel_animation.is_none(),
+                                "mixed animation failed to settle: {:?}, offset={:?}, visible={}",
+                                root.read(cx).wheel_animation.as_ref().map(|a| (
+                                    a.motion.position,
+                                    a.motion.target,
+                                    a.last_frame.elapsed()
+                                )),
+                                handle.offset().y,
+                                cx.global::<LauncherGlobal>()
+                                    .clone_handle()
+                                    .borrow()
+                                    .visible
+                            );
+                            let before = handle.offset().y;
+                            let position = handle.bounds().origin + gpui::point(px(12.0), px(12.0));
+                            window.dispatch_event(
+                                gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                                    position,
+                                    delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(3.0))),
+                                    touch_phase: gpui::TouchPhase::Started,
+                                    ..Default::default()
+                                }),
+                                cx,
+                            );
+                            assert_eq!(
+                                handle.offset().y,
+                                before + px(3.0),
+                                "a new touchpad gesture must take over immediately"
                             );
                         })
                         .unwrap();
