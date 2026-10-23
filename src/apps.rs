@@ -82,6 +82,18 @@ impl CatalogGlobal {
 impl gpui::Global for CatalogGlobal {}
 
 impl Catalog {
+    #[cfg(test)]
+    pub(crate) fn install_test_catalog(cx: &mut App) {
+        cx.set_global(CatalogGlobal {
+            catalog: Rc::new(RefCell::new(Self {
+                apps: vec![],
+                icons: Default::default(),
+                icon_recency: Default::default(),
+                recents: vec![],
+            })),
+        });
+    }
+
     /// Install an empty catalog immediately and kick off the (slow) scan on
     /// the background pool so startup never blocks on it; recents load is a
     /// tiny file read and stays synchronous.

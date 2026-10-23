@@ -732,7 +732,6 @@ struct WheelAnimation {
 
 struct LauncherRoot {
     wheel_animation: Option<WheelAnimation>,
-    wheel_animation_id: u64,
     menu_request: u64,
     list: Entity<ListState<ResultListDelegate>>,
     search_input: Entity<InputState>,
@@ -762,7 +761,6 @@ const HISTORY_LIMIT: usize = 50;
 impl LauncherRoot {
     fn cancel_wheel_animation(&mut self) {
         self.wheel_animation = None;
-        self.wheel_animation_id = self.wheel_animation_id.wrapping_add(1);
     }
 
     fn on_result_wheel(
@@ -807,25 +805,15 @@ impl LauncherRoot {
         // every wheel tick would also jump the native scroll offset immediately.
         cx.stop_propagation();
         if start {
-            self.schedule_wheel_frame(window, cx);
+            // Input handlers cannot call request_animation_frame: that API
+            // reads current_view, which only exists during layout/painting.
+            // Mark the root dirty; render advances motion and requests frames.
+            cx.notify();
         }
     }
 
-    fn schedule_wheel_frame(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let root = cx.entity().downgrade();
-        let id = self.wheel_animation_id;
-        // GPUI invokes this through its display-frame loop; no 60Hz timer.
-        window.on_next_frame(move |window, cx| {
-            let _ = root.update(cx, |root, cx| {
-                if root.wheel_animation_id == id {
-                    root.advance_wheel_frame(window, cx);
-                }
-            });
-        });
-        window.request_animation_frame();
-    }
-
-    fn advance_wheel_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Advance before the list is laid out; only render may request more frames.
+    fn advance_wheel_frame(&mut self, cx: &mut Context<Self>) -> bool {
         let visible = cx
             .global::<LauncherGlobal>()
             .clone_handle()
@@ -835,7 +823,7 @@ impl LauncherRoot {
         let handle = list.scroll_handle().clone();
         let generation = list.delegate().results_generation;
         let Some(animation) = self.wheel_animation.as_mut() else {
-            return;
+            return false;
         };
         if !visible
             || self.action_menu.is_some()
@@ -843,7 +831,7 @@ impl LauncherRoot {
             || (f32::from(handle.offset().y) - animation.motion.position).abs() > 0.5
         {
             self.cancel_wheel_animation();
-            return;
+            return false;
         }
         let now = std::time::Instant::now();
         let active = animation.motion.advance(
@@ -855,12 +843,10 @@ impl LauncherRoot {
         offset.y = px(animation.motion.position);
         handle.set_offset(offset);
         self.list.update(cx, |_, cx| cx.notify());
-        cx.notify();
-        if active {
-            self.schedule_wheel_frame(window, cx);
-        } else {
+        if !active {
             self.cancel_wheel_animation();
         }
+        active
     }
 
     fn new(
@@ -930,7 +916,6 @@ impl LauncherRoot {
         ];
         Self {
             wheel_animation: None,
-            wheel_animation_id: 0,
             menu_request: 0,
             list,
             search_input,
@@ -1774,6 +1759,11 @@ impl Focusable for LauncherRoot {
 
 impl gpui::Render for LauncherRoot {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.wheel_animation.is_some() && self.advance_wheel_frame(cx) {
+            // current_view exists here during layout. Calling this from wheel
+            // events or on_next_frame callbacks panics on the pinned GPUI rev.
+            _window.request_animation_frame();
+        }
         let delegate = self.list.read(cx).delegate();
         let about = delegate.show_about;
         let empty_notice = delegate.empty_state.is_some();
@@ -3925,6 +3915,117 @@ impl ResultRow {
 #[cfg(test)]
 mod tests {
     use super::{format_expression_for_display, format_result_for_display};
+
+    /// Exercises actual event capture, render phases and frame requests. Run
+    /// separately: this briefly opens a native window and needs a Windows desktop.
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "native GUI smoke: cargo test wheel_scroll_gui_smoke -- --ignored --test-threads=1"]
+    fn wheel_scroll_gui_smoke() {
+        use super::*;
+        const SUCCESS: &str = "wheel_scroll_gui_smoke: event, animation and settling passed";
+        // The pinned Windows platform calls ExitProcess when its event loop
+        // quits. Run it in a child so an early zero exit cannot fool libtest.
+        if std::env::var_os("HAYAI_SCROLL_GUI_CHILD").is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "launcher::tests::wheel_scroll_gui_smoke",
+                    "--exact",
+                    "--ignored",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env("HAYAI_SCROLL_GUI_CHILD", "1")
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                output.status.success() && stderr.contains(SUCCESS),
+                "GUI smoke failed: {:?}\n{}\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                stderr
+            );
+            return;
+        }
+        std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_secs(10));
+            eprintln!("GUI smoke timed out");
+            std::process::exit(2);
+        });
+        struct Rows;
+        impl crate::commands::CommandProvider for Rows {
+            fn namespace(&self) -> &'static str {
+                "smoke"
+            }
+            fn search(&self, _: &str) -> Vec<CommandItem> {
+                (0..200)
+                    .map(|i| CommandItem {
+                        id: format!("smoke:{i}"),
+                        title: format!("Smoke row {i}"),
+                        subtitle: None,
+                        file_size: None,
+                        calculation_detail: None,
+                        icon: IconSource::None,
+                        action: CommandAction::LaunchApplication("unused.exe".into()),
+                    })
+                    .collect()
+            }
+        }
+        gpui_platform::application()
+            .with_assets(crate::LauncherAssets)
+            .run(move |cx| {
+                gpui_component::init(cx);
+                gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
+                crate::apply_launcher_theme(cx);
+                let launcher = LauncherState::install(cx);
+                Catalog::install_test_catalog(cx);
+                let mut registry = PluginRegistry::new();
+                registry.register(Rows);
+                crate::plugins::RegistryGlobal::install(cx, registry);
+                launcher.borrow_mut().show(cx);
+                let window = launcher.borrow().window.unwrap();
+                let root = launcher.borrow().view.clone().unwrap();
+                cx.spawn(async move |cx| {
+                    // Let the real list lay out before dispatching through its
+                    // capture listener. The original scheduler panicked right here.
+                    cx.background_executor()
+                        .timer(Duration::from_millis(200))
+                        .await;
+                    window
+                        .update(cx, |_, window, cx| {
+                            let bounds = root.read(cx).list.read(cx).scroll_handle().bounds();
+                            window.dispatch_event(
+                                gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                                    position: bounds.origin + gpui::point(px(12.0), px(12.0)),
+                                    delta: gpui::ScrollDelta::Lines(gpui::point(0.0, -6.0)),
+                                    ..Default::default()
+                                }),
+                                cx,
+                            );
+                            assert!(root.read(cx).wheel_animation.is_some());
+                        })
+                        .unwrap();
+                    cx.background_executor()
+                        .timer(Duration::from_millis(500))
+                        .await;
+                    window
+                        .update(cx, |_, _, cx| {
+                            let root = root.read(cx);
+                            let handle = root.list.read(cx).scroll_handle();
+                            assert!(handle.offset().y < px(0.0));
+                            assert!(
+                                root.wheel_animation.is_none(),
+                                "animation must settle and stop requesting frames"
+                            );
+                        })
+                        .unwrap();
+                    eprintln!("{SUCCESS}");
+                    cx.update(|cx| cx.quit());
+                })
+                .detach();
+            });
+    }
 
     #[test]
     fn icon_warm_region_stays_bounded_at_result_edges() {
