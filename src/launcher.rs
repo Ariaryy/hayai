@@ -775,10 +775,9 @@ impl LauncherRoot {
             return;
         }
         // Precision devices already supply continuous pixel motion and inertia.
-        // Let the virtual list consume those events without a second filter.
+        // Apply that motion directly, but bound it per event just like the wheel.
         if event.delta.precise() {
             self.cancel_wheel_animation();
-            return;
         }
         let delta = event.delta.pixel_delta(window.line_height());
         if delta.y == px(0.0) || delta.x.abs() > delta.y.abs() {
@@ -786,8 +785,21 @@ impl LauncherRoot {
         }
         let list = self.list.read(cx);
         let handle = list.scroll_handle().clone();
-        let current = f32::from(handle.offset().y);
-        let max_offset = f32::from(handle.max_offset().y);
+        let max_offset = f32::from(handle.max_offset().y).max(0.0);
+        // The native scroll handler only clamps during layout. Input can arrive
+        // before that pass, so never treat its raw offset as a visible position:
+        // a reverse tick would otherwise be consumed by invisible overscroll.
+        let current = f32::from(handle.offset().y).clamp(-max_offset, 0.0);
+        let mut offset = handle.offset();
+        offset.y = px(current);
+        handle.set_offset(offset);
+        if event.delta.precise() {
+            offset.y = px((current + f32::from(delta.y)).clamp(-max_offset, 0.0));
+            handle.set_offset(offset);
+            self.list.update(cx, |_, cx| cx.notify());
+            cx.stop_propagation();
+            return;
+        }
         let generation = list.delegate().results_generation;
         let delta_y = f32::from(delta.y);
         // Do not keep even a zero-distance animation alive against an edge.
@@ -4077,7 +4089,10 @@ mod tests {
                                 };
                                 assert!(
                                     (f32::from(handle.offset().y) - edge).abs() <= 0.25,
-                                    "forceful scroll must reach the boundary"
+                                    "forceful scroll must reach boundary: top={at_top}, offset={:?}, max={:?}, motion={:?}, visible={}",
+                                    handle.offset().y, handle.max_offset().y,
+                                    root.read(cx).wheel_animation.as_ref().map(|a| (a.motion.position, a.motion.target)),
+                                    cx.global::<LauncherGlobal>().clone_handle().borrow().visible
                                 );
                                 let position =
                                     handle.bounds().origin + gpui::point(px(12.0), px(12.0));
@@ -4098,6 +4113,13 @@ mod tests {
                                         "outward boundary input must discard pending motion"
                                     );
                                 }
+                                // GPUI's native scroll handler can leave an unclamped
+                                // offset between input and layout. The displayed list
+                                // is still at the edge; one reverse tick must use that
+                                // edge, not pay off an invisible raw-offset overshoot.
+                                let mut pending = handle.offset();
+                                pending.y += px(if at_top { 1000.0 } else { -1000.0 });
+                                handle.set_offset(pending);
                                 window.dispatch_event(
                                     gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
                                         position,
@@ -4106,6 +4128,22 @@ mod tests {
                                     }),
                                     cx,
                                 );
+                                let animation = root
+                                    .read(cx)
+                                    .wheel_animation
+                                    .as_ref()
+                                    .expect("first inward tick starts motion");
+                                if at_top {
+                                    assert!(
+                                        animation.motion.target < 0.0,
+                                        "first tick must leave top despite pending overscroll"
+                                    );
+                                } else {
+                                    assert!(
+                                        animation.motion.target > edge,
+                                        "first tick must leave bottom despite pending overscroll"
+                                    );
+                                }
                                 f32::from(handle.offset().y)
                             })
                             .unwrap();
@@ -4140,6 +4178,26 @@ mod tests {
                             })
                             .unwrap();
                     }
+                    window.update(cx, |_, window, cx| {
+                        let handle = root.read(cx).list.read(cx).scroll_handle().clone();
+                        let max = f32::from(handle.max_offset().y);
+                        let position = handle.bounds().origin + gpui::point(px(12.0), px(12.0));
+                        for (edge, outward, inward) in [(0.0, 1000.0, -3.0), (-max, -1000.0, 3.0)] {
+                            let mut offset = handle.offset();
+                            offset.y = px(edge);
+                            handle.set_offset(offset);
+                            // Pixel input must remain direct, while its raw
+                            // handle is bounded even before another layout pass.
+                            for delta in [outward, outward, inward] {
+                                window.dispatch_event(gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                                    position, delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(delta))), ..Default::default()
+                                }), cx);
+                                assert!((-max..=0.0).contains(&f32::from(handle.offset().y)));
+                                assert!(root.read(cx).wheel_animation.is_none());
+                            }
+                            assert!((f32::from(handle.offset().y) - (edge + inward)).abs() < 0.01, "first pixel reverse tick must move immediately");
+                        }
+                    }).unwrap();
                     eprintln!("{SUCCESS}");
                     cx.update(|cx| cx.quit());
                 })
