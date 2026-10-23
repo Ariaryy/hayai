@@ -724,7 +724,16 @@ fn can_run_as_admin(path: &std::path::Path) -> bool {
     )
 }
 
+struct WheelAnimation {
+    motion: crate::scroll::SmoothScroll,
+    last_frame: std::time::Instant,
+    results_generation: u64,
+}
+
 struct LauncherRoot {
+    wheel_animation: Option<WheelAnimation>,
+    scroll_handoff: crate::scroll::ScrollHandoff,
+    keyboard_heading: Option<(IndexPath, u64)>,
     menu_request: u64,
     list: Entity<ListState<ResultListDelegate>>,
     search_input: Entity<InputState>,
@@ -752,6 +761,109 @@ struct LauncherRoot {
 const HISTORY_LIMIT: usize = 50;
 
 impl LauncherRoot {
+    fn cancel_wheel_animation(&mut self) {
+        self.wheel_animation = None;
+    }
+
+    fn on_result_wheel(
+        &mut self,
+        event: &gpui::ScrollWheelEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.keyboard_heading = None;
+        if self.action_menu.is_some() {
+            self.cancel_wheel_animation();
+            return;
+        }
+        // Precision devices already supply continuous pixel motion and inertia.
+        // Let the virtual list consume those events without a second filter.
+        if event.delta.precise() {
+            // An old touchpad inertia tail must not cancel a mouse animation
+            // after the wheel takes over. Started always admits a fresh touch.
+            if !self.scroll_handoff.accept_precision(event.touch_phase) {
+                cx.stop_propagation();
+                return;
+            }
+            self.cancel_wheel_animation();
+            return;
+        }
+        let delta = event.delta.pixel_delta(window.line_height());
+        if delta.y == px(0.0) || delta.x.abs() > delta.y.abs() {
+            return;
+        }
+        let list = self.list.read(cx);
+        let handle = list.scroll_handle().clone();
+        let max_offset = f32::from(handle.max_offset().y).max(0.0);
+        // Pixel input is native and may have left a raw offset beyond the edge
+        // before layout clamps it. Start the new wheel owner at the visible edge.
+        let current = f32::from(handle.offset().y).clamp(-max_offset, 0.0);
+        let mut offset = handle.offset();
+        offset.y = px(current);
+        handle.set_offset(offset);
+        self.scroll_handoff.wheel();
+        let generation = list.delegate().results_generation;
+        if self.wheel_animation.as_ref().is_some_and(|animation| {
+            animation.results_generation != generation
+                || (animation.motion.position - current).abs() > 0.5
+        }) {
+            self.cancel_wheel_animation();
+        }
+        let start = self.wheel_animation.is_none();
+        let animation = self.wheel_animation.get_or_insert_with(|| WheelAnimation {
+            motion: crate::scroll::SmoothScroll::new(current),
+            last_frame: std::time::Instant::now(),
+            results_generation: generation,
+        });
+        animation.motion.push(f32::from(delta.y), max_offset);
+        // Capture before the child's default bubble-phase scroll handler, or
+        // every wheel tick would also jump the native scroll offset immediately.
+        cx.stop_propagation();
+        if start {
+            // Input handlers cannot call request_animation_frame: that API
+            // reads current_view, which only exists during layout/painting.
+            // Mark the root dirty; render advances motion and requests frames.
+            cx.notify();
+        }
+    }
+
+    /// Advance before the list is laid out; only render may request more frames.
+    fn advance_wheel_frame(&mut self, cx: &mut Context<Self>) -> bool {
+        let visible = cx
+            .global::<LauncherGlobal>()
+            .clone_handle()
+            .borrow()
+            .visible;
+        let list = self.list.read(cx);
+        let handle = list.scroll_handle().clone();
+        let generation = list.delegate().results_generation;
+        let Some(animation) = self.wheel_animation.as_mut() else {
+            return false;
+        };
+        if !visible
+            || self.action_menu.is_some()
+            || animation.results_generation != generation
+            || (f32::from(handle.offset().y) - animation.motion.position).abs() > 0.5
+        {
+            self.cancel_wheel_animation();
+            return false;
+        }
+        let now = std::time::Instant::now();
+        let active = animation.motion.advance(
+            now.duration_since(animation.last_frame).as_secs_f32(),
+            f32::from(handle.max_offset().y),
+        );
+        animation.last_frame = now;
+        let mut offset = handle.offset();
+        offset.y = px(animation.motion.position);
+        handle.set_offset(offset);
+        self.list.update(cx, |_, cx| cx.notify());
+        if !active {
+            self.cancel_wheel_animation();
+        }
+        active
+    }
+
     fn new(
         list: Entity<ListState<ResultListDelegate>>,
         search_input: Entity<InputState>,
@@ -818,6 +930,9 @@ impl LauncherRoot {
             intercept,
         ];
         Self {
+            wheel_animation: None,
+            scroll_handoff: Default::default(),
+            keyboard_heading: None,
             menu_request: 0,
             list,
             search_input,
@@ -872,6 +987,8 @@ impl LauncherRoot {
     /// input — callers that re-show a hidden window handle OS-vs-GPUI focus
     /// ordering themselves (see `LauncherState::show`).
     fn reset_to_apps(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_wheel_animation();
+        self.scroll_handoff = Default::default();
         // The window is reused after hiding; transient overlays must not
         // survive into the next Alt+Space session.
         self.action_menu = None;
@@ -1189,6 +1306,7 @@ impl LauncherRoot {
     ) {
         match event {
             InputEvent::Change => {
+                self.cancel_wheel_animation();
                 self.action_menu = None;
                 // Only real user edits reach this arm — our own history-recall
                 // `set_value` calls below drive `perform_search_and_select_first`
@@ -1343,7 +1461,7 @@ impl LauncherRoot {
         if self.action_menu.take().is_some() {
             cx.notify();
         }
-        self.list.update(cx, |list, cx| {
+        self.keyboard_heading = self.list.update(cx, |list, cx| {
             let count = list.delegate().results.len();
             if list.delegate().notification_visible() {
                 let notices = list.delegate().notification_count();
@@ -1372,10 +1490,13 @@ impl LauncherRoot {
                 list.delegate_mut().notification_selected = next < notices;
                 list.scroll_to_selected_item(window, cx);
                 cx.notify();
-                return;
+                return list
+                    .selected_index()
+                    .filter(|ix| ix.row == 0)
+                    .map(|ix| (ix, list.delegate().results_generation));
             }
             if count == 0 {
-                return;
+                return None;
             }
             let current = list
                 .selected_index()
@@ -1385,10 +1506,31 @@ impl LauncherRoot {
             let ix = list.delegate().index_path(next);
             list.set_selected_index(Some(ix), window, cx);
             list.scroll_to_selected_item(window, cx);
+            (ix.row == 0).then_some((ix, list.delegate().results_generation))
         });
     }
 
+    fn reveal_keyboard_heading(&mut self, cx: &mut Context<Self>) {
+        let Some((selected, generation)) = self.keyboard_heading.take() else {
+            return;
+        };
+        let list = self.list.read(cx);
+        if list.selected_index() != Some(selected)
+            || list.delegate().results_generation != generation
+        {
+            return;
+        }
+        // The pinned List includes a header and footer entry for each nonempty
+        // section, including zero-height footers. Target the header, not row 0.
+        let header = section_header_entry(
+            (0..selected.section).map(|section| list.delegate().items_count(section, cx)),
+        );
+        list.scroll_handle()
+            .scroll_to_item(header, gpui::ScrollStrategy::Top);
+    }
+
     fn on_move_up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_wheel_animation();
         if self.list.read(cx).delegate().show_about
             || self.list.read(cx).delegate().show_updates
             || self.list.read(cx).delegate().show_scry_updates
@@ -1407,7 +1549,9 @@ impl LauncherRoot {
                     .is_some_and(|ix| ix.row == 0)
                 && self.search_input.read(cx).value().is_empty()
             {
-                self.recall_history(1, window, cx);
+                if !self.recall_history(1, window, cx) {
+                    self.move_selection(0, window, cx);
+                }
                 return;
             }
             self.move_selection(-1, window, cx);
@@ -1427,13 +1571,16 @@ impl LauncherRoot {
             // row around to the last row and look like backwards nav).
             // Below the top result, Up should just move the selection up
             // like normal list navigation.
-            self.recall_history(1, window, cx);
+            if !self.recall_history(1, window, cx) {
+                self.move_selection(0, window, cx);
+            }
             return;
         }
         self.move_selection(-1, window, cx);
     }
 
     fn on_move_down(&mut self, _: &MoveDown, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_wheel_animation();
         if self.list.read(cx).delegate().show_about
             || self.list.read(cx).delegate().show_updates
             || self.list.read(cx).delegate().show_scry_updates
@@ -1657,6 +1804,11 @@ impl Focusable for LauncherRoot {
 
 impl gpui::Render for LauncherRoot {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.wheel_animation.is_some() && self.advance_wheel_frame(cx) {
+            // current_view exists here during layout. Calling this from wheel
+            // events or on_next_frame callbacks panics on the pinned GPUI rev.
+            _window.request_animation_frame();
+        }
         let delegate = self.list.read(cx).delegate();
         let about = delegate.show_about;
         let empty_notice = delegate.empty_state.is_some();
@@ -1993,7 +2145,22 @@ impl gpui::Render for LauncherRoot {
             } else {
                 // Clip virtualized rows to the results viewport so scrolling
                 // cannot paint text over the search input or footer.
-                div().flex_1().min_h_0().w_full().overflow_hidden()
+                div().relative().flex_1().min_h_0().w_full().overflow_hidden()
+                    .child({
+                        let root = cx.entity().downgrade();
+                        let layout_root = root.clone();
+                        gpui::canvas(move |_, _, cx| {
+                            // Layout has queued List's selected-row scroll. Replace
+                            // it here so the section heading appears in this frame.
+                            let _ = layout_root.update(cx, |root, cx| root.reveal_keyboard_heading(cx));
+                        }, move |bounds, _, window, _| {
+                            window.on_mouse_event(move |event: &gpui::ScrollWheelEvent, phase, window, cx| {
+                                if phase == gpui::DispatchPhase::Capture && bounds.contains(&event.position) {
+                                    let _ = root.update(cx, |root, cx| root.on_result_wheel(event, window, cx));
+                                }
+                            });
+                        }).absolute().size_full()
+                    })
                     .child(List::new(&self.list)
                         .scrollbar_visible(false)
                         .with_size(Size::Large)
@@ -2179,6 +2346,13 @@ fn notification_kind(row: usize, hayai: bool, scry: bool) -> Option<UpdateNotifi
         (0, false, true) | (1, true, true) => Some(UpdateNotification::Scry),
         _ => None,
     }
+}
+
+fn section_header_entry(previous_sections: impl Iterator<Item = usize>) -> usize {
+    previous_sections
+        .filter(|count| *count > 0)
+        .map(|count| count + 2)
+        .sum()
 }
 
 fn result_index_path(flat: usize, main: usize, total: usize) -> IndexPath {
@@ -3798,6 +3972,238 @@ impl ResultRow {
 #[cfg(test)]
 mod tests {
     use super::{format_expression_for_display, format_result_for_display};
+
+    /// Exercises actual event capture, render phases and frame requests. Run
+    /// separately: this briefly opens a native window and needs a Windows desktop.
+    #[cfg(windows)]
+    #[test]
+    fn keyboard_heading_entries_skip_empty_sections_and_include_headers() {
+        assert_eq!(super::section_header_entry([0].into_iter()), 0);
+        assert_eq!(super::section_header_entry([2].into_iter()), 4);
+        assert_eq!(super::section_header_entry([0, 10].into_iter()), 12);
+        assert_eq!(super::section_header_entry([2, 10].into_iter()), 16);
+        assert_eq!(super::section_header_entry([0, 0].into_iter()), 0);
+    }
+
+    #[test]
+    #[ignore = "native GUI smoke: cargo test wheel_scroll_gui_smoke -- --ignored --test-threads=1"]
+    fn wheel_scroll_gui_smoke() {
+        use super::*;
+        const SUCCESS: &str = "wheel_scroll_gui_smoke: event, animation and settling passed";
+        // The pinned Windows platform calls ExitProcess when its event loop
+        // quits. Run it in a child so an early zero exit cannot fool libtest.
+        if std::env::var_os("HAYAI_SCROLL_GUI_CHILD").is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "launcher::tests::wheel_scroll_gui_smoke",
+                    "--exact",
+                    "--ignored",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env("HAYAI_SCROLL_GUI_CHILD", "1")
+                .output()
+                .unwrap();
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                output.status.success() && stderr.contains(SUCCESS),
+                "GUI smoke failed: {:?}\n{}\n{}",
+                output.status,
+                String::from_utf8_lossy(&output.stdout),
+                stderr
+            );
+            return;
+        }
+        std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_secs(10));
+            eprintln!("GUI smoke timed out");
+            std::process::exit(2);
+        });
+        struct Rows;
+        impl crate::commands::CommandProvider for Rows {
+            fn namespace(&self) -> &'static str {
+                "smoke"
+            }
+            fn search(&self, _: &str) -> Vec<CommandItem> {
+                (0..200)
+                    .map(|i| CommandItem {
+                        id: format!("smoke:{i}"),
+                        title: format!("Smoke row {i}"),
+                        subtitle: None,
+                        file_size: None,
+                        calculation_detail: None,
+                        icon: IconSource::None,
+                        action: CommandAction::LaunchApplication("unused.exe".into()),
+                    })
+                    .collect()
+            }
+        }
+        gpui_platform::application()
+            .with_assets(crate::LauncherAssets)
+            .run(move |cx| {
+                gpui_component::init(cx);
+                gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
+                crate::apply_launcher_theme(cx);
+                let launcher = LauncherState::install(cx);
+                Catalog::install_test_catalog(cx);
+                let mut registry = PluginRegistry::new();
+                registry.register(Rows);
+                crate::plugins::RegistryGlobal::install(cx, registry);
+                launcher.borrow_mut().show(cx);
+                let window = launcher.borrow().window.unwrap();
+                let root = launcher.borrow().view.clone().unwrap();
+                cx.spawn(async move |cx| {
+                    // Let the real list lay out before dispatching through its
+                    // capture listener. The original scheduler panicked right here.
+                    cx.background_executor()
+                        .timer(Duration::from_millis(200))
+                        .await;
+                    window
+                        .update(cx, |_, window, cx| {
+                            let bounds = root.read(cx).list.read(cx).scroll_handle().bounds();
+                            window.dispatch_event(
+                                gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                                    position: bounds.origin + gpui::point(px(12.0), px(12.0)),
+                                    delta: gpui::ScrollDelta::Lines(gpui::point(0.0, -6.0)),
+                                    ..Default::default()
+                                }),
+                                cx,
+                            );
+                            assert!(root.read(cx).wheel_animation.is_some());
+                        })
+                        .unwrap();
+                    cx.background_executor()
+                        .timer(Duration::from_millis(500))
+                        .await;
+                    window
+                        .update(cx, |_, _, cx| {
+                            let root = root.read(cx);
+                            let handle = root.list.read(cx).scroll_handle();
+                            assert!(handle.offset().y < px(0.0));
+                            assert!(
+                                root.wheel_animation.is_none(),
+                                "animation must settle and stop requesting frames"
+                            );
+                        })
+                        .unwrap();
+                    window.update(cx, |_, window, cx| {
+                        root.update(cx, |root, cx| {
+                            for _ in 0..20 { root.move_selection(1, window, cx); }
+                        });
+                    }).unwrap();
+                    cx.background_executor().timer(Duration::from_millis(100)).await;
+                    window.update(cx, |_, window, cx| {
+                        assert!(root.read(cx).list.read(cx).scroll_handle().offset().y < px(0.0));
+                        root.update(cx, |root, cx| {
+                            for _ in 0..20 { root.move_selection(-1, window, cx); }
+                        });
+                    }).unwrap();
+                    cx.background_executor().timer(Duration::from_millis(100)).await;
+                    window.update(cx, |_, _, cx| {
+                        assert_eq!(root.read(cx).list.read(cx).scroll_handle().offset().y, px(0.0), "keyboard navigation back to the first row must reveal its section heading");
+                    }).unwrap();
+                    window
+                        .update(cx, |_, window, cx| {
+                            let handle = root.read(cx).list.read(cx).scroll_handle().clone();
+                            let mut offset = handle.offset();
+                            offset.y = px(0.0);
+                            handle.set_offset(offset);
+                            let position = handle.bounds().origin + gpui::point(px(12.0), px(12.0));
+                            // Touchpad flick, opposing wheel tick, then the old
+                            // Direct Manipulation inertia continuing for many events.
+                            window.dispatch_event(
+                                gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                                    position,
+                                    delta: gpui::ScrollDelta::Pixels(gpui::point(
+                                        px(0.0),
+                                        px(200.0),
+                                    )),
+                                    touch_phase: gpui::TouchPhase::Started,
+                                    ..Default::default()
+                                }),
+                                cx,
+                            );
+                            window.dispatch_event(
+                                gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                                    position,
+                                    delta: gpui::ScrollDelta::Lines(gpui::point(0.0, -3.0)),
+                                    ..Default::default()
+                                }),
+                                cx,
+                            );
+                            for _ in 0..20 {
+                                window.dispatch_event(
+                                    gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                                        position,
+                                        delta: gpui::ScrollDelta::Pixels(gpui::point(
+                                            px(0.0),
+                                            px(20.0),
+                                        )),
+                                        touch_phase: gpui::TouchPhase::Moved,
+                                        ..Default::default()
+                                    }),
+                                    cx,
+                                );
+                            }
+                            let animation = root
+                                .read(cx)
+                                .wheel_animation
+                                .as_ref()
+                                .expect("old touchpad inertia must not cancel mouse scrolling");
+                            assert!(
+                                animation.motion.target < 0.0,
+                                "the first mouse tick must move down from the visible top"
+                            );
+                        })
+                        .unwrap();
+                    cx.background_executor()
+                        .timer(Duration::from_millis(500))
+                        .await;
+                    window
+                        .update(cx, |_, window, cx| {
+                            let handle = root.read(cx).list.read(cx).scroll_handle().clone();
+                            assert!(
+                                handle.offset().y < px(0.0),
+                                "mouse must move before old touchpad gesture ends"
+                            );
+                            assert!(
+                                root.read(cx).wheel_animation.is_none(),
+                                "mixed animation failed to settle: {:?}, offset={:?}, visible={}",
+                                root.read(cx).wheel_animation.as_ref().map(|a| (
+                                    a.motion.position,
+                                    a.motion.target,
+                                    a.last_frame.elapsed()
+                                )),
+                                handle.offset().y,
+                                cx.global::<LauncherGlobal>()
+                                    .clone_handle()
+                                    .borrow()
+                                    .visible
+                            );
+                            let before = handle.offset().y;
+                            let position = handle.bounds().origin + gpui::point(px(12.0), px(12.0));
+                            window.dispatch_event(
+                                gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                                    position,
+                                    delta: gpui::ScrollDelta::Pixels(gpui::point(px(0.0), px(3.0))),
+                                    touch_phase: gpui::TouchPhase::Started,
+                                    ..Default::default()
+                                }),
+                                cx,
+                            );
+                            assert_eq!(
+                                handle.offset().y,
+                                before + px(3.0),
+                                "a new touchpad gesture must take over immediately"
+                            );
+                        })
+                        .unwrap();
+                    eprintln!("{SUCCESS}");
+                    cx.update(|cx| cx.quit());
+                })
+                .detach();
+            });
+    }
 
     #[test]
     fn icon_warm_region_stays_bounded_at_result_edges() {
