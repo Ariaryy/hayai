@@ -30,7 +30,8 @@ Win32 runtime thread ── NativeCommand channel ── GPUI launcher window
 - `src/apps.rs` scans installed applications and lazily decodes icons on the
   background pool.
 - `src/files.rs` translates file mode into debounced Scry queries.
-- `src/calc/` contains small, ordered evaluators for calculator-shaped input.
+- `src/calc/` classifies calculator intent and shares one bounded numeric
+  engine across physical and currency conversions. See [calculator invariants](calculator.md).
 
 The native thread never accesses GPUI state directly. Expensive shell, icon,
 network, and file-search work must stay outside rendering and input callbacks.
@@ -82,3 +83,22 @@ The measurement shows no idle RSS regression. Active working-set values vary
 with GPUI and catalog paging, but the calculator branch was also lower in this
 comparison. The Windows timezone implementation uses OS APIs and adds no new
 runtime dependency or resident timezone database.
+
+### Calculator pipeline measurement (2026-10-23)
+
+The redesign adds no dependencies. `scripts/measure-calculator.ps1` measures a
+release executable after a 15-second startup wait, then opens and hides its
+owned window around five identical queries: `1 Mb to MB`, `1 lb to kg`,
+`12pm newyork to ist`, `12pm london to ist`, and `5 kg * 9.8 m/s^2 to N`.
+Active RSS is the median of five working-set samples; warmed idle is sampled
+two seconds after the final hide. The original executable was built from
+`fb27f81` in a detached checkout and copied before building the branch.
+
+Steady cold-idle samples were 56.20 MiB before and 57.46 MiB after. Repeated
+warmed active medians varied from 90.02–107.72 MiB before and 91.58–102.35 MiB
+after, with overlapping ranges; these are spot measurements, not evidence of
+a memory reduction. A representative warmed private-memory comparison was
+86.23 MiB before and 82.02 MiB after. Record the small observed cold-idle
+increase rather than treating the redesign as free. New retained state is
+bounded to the current query, shared immutable rates, and four expiring native
+timezone definitions per thread.

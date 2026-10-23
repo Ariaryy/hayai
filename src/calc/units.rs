@@ -1,435 +1,345 @@
-//! Unit conversion: length, mass, data, temperature. Static factor tables
-//! (temperature is affine, not multiplicative, so it's special-cased).
-
-use super::EvalResult;
-use super::format::format_number;
-use super::grammar;
+//! Physical conversions share fend's exact unit definitions and arithmetic.
+//! This module only supplies friendly aliases and presentation labels. Never
+//! add numeric factors here: simple and compound expressions must agree.
+use super::{EvalResult, engine, grammar};
 
 struct Unit {
-    names: &'static [&'static str],
+    aliases: &'static [&'static str],
+    symbol: &'static str,
     label: &'static str,
-    factor: f64,
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum Dimension {
-    Length,
-    Mass,
-    Data,
-    Speed,
-}
-
-const LENGTH: &[Unit] = &[
+const UNITS: &[Unit] = &[
     Unit {
-        names: &["m", "meter", "meters", "metre", "metres"],
+        aliases: &["m", "meter", "meters", "metre", "metres"],
+        symbol: "m",
         label: "Meter",
-        factor: 1.0,
     },
     Unit {
-        names: &["km", "kilometer", "kilometers", "kilometre", "kilometres"],
+        aliases: &["km", "kilometer", "kilometers", "kilometre", "kilometres"],
+        symbol: "km",
         label: "Kilometer",
-        factor: 1000.0,
     },
     Unit {
-        names: &[
+        aliases: &[
             "cm",
             "centimeter",
             "centimeters",
             "centimetre",
             "centimetres",
         ],
+        symbol: "cm",
         label: "Centimeter",
-        factor: 0.01,
     },
     Unit {
-        names: &[
+        aliases: &[
             "mm",
             "millimeter",
             "millimeters",
             "millimetre",
             "millimetres",
         ],
+        symbol: "mm",
         label: "Millimeter",
-        factor: 0.001,
     },
     Unit {
-        names: &["pm", "picometer", "picometers", "picometre", "picometres"],
+        aliases: &["pm", "picometer", "picometers", "picometre", "picometres"],
+        symbol: "pm",
         label: "Picometer",
-        factor: 0.000_000_000_001,
     },
     Unit {
-        names: &["mile", "miles", "mi"],
+        aliases: &["mi", "mile", "miles"],
+        symbol: "mi",
         label: "Mile",
-        factor: 1609.344,
     },
     Unit {
-        names: &["yard", "yards", "yd"],
+        aliases: &["yd", "yard", "yards"],
+        symbol: "yd",
         label: "Yard",
-        factor: 0.9144,
     },
     Unit {
-        names: &["foot", "feet", "ft"],
+        aliases: &["ft", "foot", "feet"],
+        symbol: "ft",
         label: "Foot",
-        factor: 0.3048,
     },
     Unit {
-        names: &["inch", "inches", "in"],
+        aliases: &["in", "inch", "inches"],
+        symbol: "inch",
         label: "Inch",
-        factor: 0.0254,
     },
     Unit {
-        names: &["nmi", "nauticalmile", "nauticalmiles"],
+        aliases: &["nmi", "nauticalmile", "nauticalmiles"],
+        symbol: "nautical_mile",
         label: "Nautical Mile",
-        factor: 1852.0,
     },
-];
-
-const MASS: &[Unit] = &[
     Unit {
-        names: &["kg", "kilogram", "kilograms"],
+        aliases: &["kg", "kilogram", "kilograms"],
+        symbol: "kg",
         label: "Kilogram",
-        factor: 1.0,
     },
     Unit {
-        names: &["g", "gram", "grams"],
+        aliases: &["g", "gram", "grams"],
+        symbol: "g",
         label: "Gram",
-        factor: 0.001,
     },
     Unit {
-        names: &["mg", "milligram", "milligrams"],
+        aliases: &["mg", "milligram", "milligrams"],
+        symbol: "mg",
         label: "Milligram",
-        factor: 0.000_001,
     },
     Unit {
-        names: &["lb", "lbs", "pound", "pounds"],
+        aliases: &["lb", "lbs", "pound", "pounds"],
+        symbol: "lb",
         label: "Pound",
-        factor: 0.453_592,
     },
     Unit {
-        names: &["oz", "ounce", "ounces"],
+        aliases: &["oz", "ounce", "ounces"],
+        symbol: "oz",
         label: "Ounce",
-        factor: 0.028_349_5,
     },
     Unit {
-        names: &["ton", "tonne", "tons", "tonnes"],
+        aliases: &["tonne", "tonnes", "ton", "tons"],
+        symbol: "tonne",
         label: "Metric Ton",
-        factor: 1000.0,
     },
     Unit {
-        names: &["stone", "st"],
+        aliases: &["stone", "st"],
+        symbol: "stone",
         label: "Stone",
-        factor: 6.350_29,
     },
-];
-
-const DATA: &[Unit] = &[
     Unit {
-        names: &["b", "byte", "bytes"],
+        aliases: &["byte", "bytes"],
+        symbol: "B",
         label: "Byte",
-        factor: 1.0,
     },
     Unit {
-        names: &["bit", "bits"],
+        aliases: &["b", "bit", "bits"],
+        symbol: "bit",
         label: "Bit",
-        factor: 0.125,
     },
     Unit {
-        names: &["kb", "kilobyte", "kilobytes"],
+        aliases: &["kb", "kilobyte", "kilobytes"],
+        symbol: "KB",
         label: "Kilobyte",
-        factor: 1_000.0,
     },
     Unit {
-        names: &["mb", "megabyte", "megabytes"],
+        aliases: &["mb", "megabyte", "megabytes"],
+        symbol: "MB",
         label: "Megabyte",
-        factor: 1_000_000.0,
     },
     Unit {
-        names: &["gb", "gigabyte", "gigabytes"],
+        aliases: &["gb", "gigabyte", "gigabytes"],
+        symbol: "GB",
         label: "Gigabyte",
-        factor: 1_000_000_000.0,
     },
     Unit {
-        names: &["tb", "terabyte", "terabytes"],
+        aliases: &["tb", "terabyte", "terabytes"],
+        symbol: "TB",
         label: "Terabyte",
-        factor: 1_000_000_000_000.0,
     },
     Unit {
-        names: &["kib", "kibibyte", "kibibytes"],
+        aliases: &["kib", "kibibyte", "kibibytes"],
+        symbol: "KiB",
         label: "Kibibyte",
-        factor: 1024.0,
     },
     Unit {
-        names: &["mib", "mebibyte", "mebibytes"],
+        aliases: &["mib", "mebibyte", "mebibytes"],
+        symbol: "MiB",
         label: "Mebibyte",
-        factor: 1024.0 * 1024.0,
     },
     Unit {
-        names: &["gib", "gibibyte", "gibibytes"],
+        aliases: &["gib", "gibibyte", "gibibytes"],
+        symbol: "GiB",
         label: "Gibibyte",
-        factor: 1024.0 * 1024.0 * 1024.0,
     },
     Unit {
-        names: &["tib", "tebibyte", "tebibytes"],
+        aliases: &["tib", "tebibyte", "tebibytes"],
+        symbol: "TiB",
         label: "Tebibyte",
-        factor: 1024.0 * 1024.0 * 1024.0 * 1024.0,
     },
-];
-
-const SPEED: &[Unit] = &[
     Unit {
-        names: &["m/s", "meter/second", "meters/second"],
+        aliases: &["m/s", "meter/second", "meters/second"],
+        symbol: "m/s",
         label: "Meter per Second",
-        factor: 1.0,
     },
     Unit {
-        names: &["km/s", "kilometer/second", "kilometers/second"],
+        aliases: &["km/s", "kilometer/second", "kilometers/second"],
+        symbol: "km/s",
         label: "Kilometer per Second",
-        factor: 1000.0,
     },
     Unit {
-        names: &["c", "lightspeed", "speedoflight"],
+        aliases: &["c", "lightspeed", "speedoflight"],
+        symbol: "c",
         label: "Speed of Light",
-        factor: 299_792_458.0,
     },
 ];
 
-fn find_unit(token: &str) -> Option<(Dimension, f64)> {
-    for (dimension, table) in [
-        (Dimension::Length, LENGTH),
-        (Dimension::Mass, MASS),
-        (Dimension::Data, DATA),
-        (Dimension::Speed, SPEED),
-    ] {
-        if let Some(unit) = table.iter().find(|u| u.names.contains(&token)) {
-            return Some((dimension, unit.factor));
-        }
-    }
-    None
-}
-
-fn unit_label(token: &str) -> Option<&'static str> {
-    LENGTH
+fn canonical(token: &str) -> String {
+    // A mixed-case symbol is intentional (Mb differs from MB). Only known
+    // lowercase legacy spellings and full names are aliases.
+    UNITS
         .iter()
-        .chain(MASS)
-        .chain(DATA)
-        .chain(SPEED)
-        .find(|unit| unit.names.contains(&token))
-        .map(|unit| unit.label)
+        .find(|unit| unit.aliases.contains(&token))
+        .map_or_else(|| token.to_string(), |unit| unit.symbol.to_string())
 }
 
-#[derive(Clone, Copy)]
-enum Temp {
-    Celsius,
-    Fahrenheit,
-    Kelvin,
+pub(super) fn canonical_word(token: &str) -> Option<&'static str> {
+    if matches!(token, "in" | "b") {
+        return None;
+    } // Fend already handles inches/bits; rewriting b would corrupt 0b literals.
+    UNITS
+        .iter()
+        .find(|unit| unit.aliases.contains(&token) && unit.symbol != token)
+        .map(|unit| unit.symbol)
 }
 
-fn find_temp(token: &str) -> Option<Temp> {
-    match token {
-        "c" | "celsius" | "°c" => Some(Temp::Celsius),
-        "f" | "fahrenheit" | "°f" => Some(Temp::Fahrenheit),
-        "k" | "kelvin" => Some(Temp::Kelvin),
+fn temperature(token: &str) -> Option<(&'static str, &'static str)> {
+    match token.to_ascii_lowercase().as_str() {
+        "c" | "°c" | "celsius" => Some(("C", "Celsius")),
+        "f" | "°f" | "fahrenheit" => Some(("F", "Fahrenheit")),
+        "k" | "kelvin" => Some(("K", "Kelvin")),
         _ => None,
     }
 }
 
-impl Temp {
-    fn to_celsius(self, v: f64) -> f64 {
-        match self {
-            Temp::Celsius => v,
-            Temp::Fahrenheit => (v - 32.0) * 5.0 / 9.0,
-            Temp::Kelvin => v - 273.15,
+/// A temperature target supplies the context for ambiguous c/f/k symbols,
+/// including inside parentheses. Apply this before the shared engine parser.
+pub(super) fn temperature_expression(input: &str) -> Option<String> {
+    let (source, target) = grammar::split_conversion(input)?;
+    let target = temperature(target)?.0;
+    let mut output = String::with_capacity(input.len());
+    let mut word = String::new();
+    let flush = |word: &mut String, output: &mut String| {
+        if !word.is_empty() {
+            output.push_str(temperature(word).map_or(word.as_str(), |unit| unit.0));
+            word.clear();
+        }
+    };
+    for ch in source.chars() {
+        if ch.is_ascii_alphabetic() {
+            word.push(ch);
+        } else {
+            flush(&mut word, &mut output);
+            output.push(ch);
         }
     }
-
-    fn convert_from_celsius(self, c: f64) -> f64 {
-        match self {
-            Temp::Celsius => c,
-            Temp::Fahrenheit => c * 9.0 / 5.0 + 32.0,
-            Temp::Kelvin => c + 273.15,
-        }
-    }
+    flush(&mut word, &mut output);
+    Some(format!("{output} to {target}"))
 }
 
-fn temp_label(temp: Temp) -> &'static str {
-    match temp {
-        Temp::Celsius => "Celsius",
-        Temp::Fahrenheit => "Fahrenheit",
-        Temp::Kelvin => "Kelvin",
-    }
-}
-
-fn temp_symbol(temp: Temp) -> &'static str {
-    match temp {
-        Temp::Celsius => "°C",
-        Temp::Fahrenheit => "°F",
-        Temp::Kelvin => "K",
-    }
-}
-
-fn parse_conversion(input: &str) -> Option<(f64, String, String)> {
-    let (amount, from, to) = grammar::parse_conversion(input).or_else(|| {
-        let input = input.trim();
-        let from_end = input.find(char::is_whitespace)?;
-        let from = input[..from_end].to_lowercase();
-        let rest = input[from_end..].trim_start();
-        let (to, matched) = grammar::parse_keyword_then_target(rest);
-        matched.then_some((1.0, from, to))
-    })?;
-    Some((amount, compact_unit_token(&from), compact_unit_token(&to)))
-}
-
-fn compact_unit_token(token: &str) -> String {
-    if token.contains('/') {
-        token.split_whitespace().collect()
-    } else {
-        token.to_string()
-    }
-}
-
-fn format_unit_number(value: f64) -> String {
-    if value != 0.0 && value.abs() < 0.000_001 {
-        let scientific = format!("{value:e}");
-        let (mantissa, exponent) = scientific.split_once('e').unwrap();
-        return format!("{} × 10^{}", mantissa, exponent.parse::<i32>().unwrap());
-    }
-    format_number(value)
-}
-
-fn labels_for_pair(from: &str, to: &str) -> Option<(String, String)> {
-    if let (Some(from_temp), Some(to_temp)) = (find_temp(from), find_temp(to)) {
-        return Some((
-            temp_label(from_temp).to_string(),
-            temp_label(to_temp).to_string(),
-        ));
-    }
-
-    let (from_dimension, _) = find_unit(from)?;
-    let (to_dimension, _) = find_unit(to)?;
-    (from_dimension == to_dimension).then(|| {
-        (
-            unit_label(from).unwrap().to_string(),
-            unit_label(to).unwrap().to_string(),
-        )
+fn parsed(input: &str) -> Option<(String, String, String)> {
+    grammar::conversion_tokens(input).or_else(|| {
+        let (from, to) = grammar::split_conversion(input.trim())?;
+        Some(("1".into(), from.into(), to.into()))
     })
+}
+
+pub(super) fn is_clock_collision(input: &str) -> bool {
+    parsed(input).is_some_and(|(_, from, to)| {
+        from == "pm"
+            && UNITS.iter().any(|unit| {
+                unit.aliases.contains(&to.as_str())
+                    && matches!(
+                        unit.symbol,
+                        "m" | "km" | "cm" | "mm" | "pm" | "mi" | "ft" | "inch"
+                    )
+            })
+    })
+}
+
+pub fn convert(input: &str) -> Option<EvalResult> {
+    let (amount, from, to) = parsed(input)?;
+    let compact_from: String = from.split_whitespace().collect();
+    let compact_to: String = to.split_whitespace().collect();
+    let (source, target) =
+        if let (Some(source), Some(target)) = (temperature(&from), temperature(&to)) {
+            (source.0.to_string(), target.0.to_string())
+        } else {
+            (canonical(&compact_from), canonical(&compact_to))
+        };
+    // Preserve compound expressions, including their whitespace.
+    let source = if from.contains(char::is_whitespace) && !from.contains('/') {
+        from.clone()
+    } else {
+        source
+    };
+    let target = if to.contains(char::is_whitespace) && !to.contains('/') {
+        to.clone()
+    } else {
+        target
+    };
+    let mut result = engine::evaluate(&format!("{amount} {source} to {target}"), None)?;
+    result.expression = format!("{amount} {from}");
+    Some(result)
+}
+
+fn label(token: &str) -> String {
+    UNITS
+        .iter()
+        .find(|unit| unit.aliases.contains(&token) || unit.symbol == token)
+        .map_or_else(|| token.to_string(), |unit| unit.label.to_string())
 }
 
 pub(super) fn conversion_detail(input: &str, result: &EvalResult) -> Option<(String, String)> {
-    if let Some((_, from, to)) = parse_conversion(input) {
-        return labels_for_pair(&from, &to);
+    if super::currency::contains_currency(input) {
+        return None;
     }
-
-    // The general expression engine also performs useful implicit SI
-    // conversions (for example, "1 c" -> "299792458 m/s"). Recover the
-    // source and emitted target units so those results use the same card.
-    let input = input.trim();
-    let (_, consumed) = grammar::parse_amount(input)?;
-    let from = input[consumed..].trim().to_ascii_lowercase();
+    if let Some((_, from, to)) = parsed(input) {
+        if let (Some(source), Some(target)) = (temperature(&from), temperature(&to)) {
+            return Some((source.1.into(), target.1.into()));
+        }
+        return Some((label(&from), label(&to)));
+    }
+    let (_, consumed) = grammar::amount_token(input)?;
+    let from = input[consumed..].trim();
     if from.is_empty() || from.contains(char::is_whitespace) {
         return None;
     }
-    let target_start = result.value.find(char::is_whitespace)?;
-    let to = compact_unit_token(&result.value[target_start..].trim().to_ascii_lowercase());
-    labels_for_pair(&from, &to)
-}
-
-/// Attempts a unit conversion. `None` means either the input isn't shaped
-/// like a conversion, or the tokens aren't recognized units — the caller
-/// then tries currency conversion next.
-pub fn convert(input: &str) -> Option<EvalResult> {
-    let (amount, from, to) = parse_conversion(input)?;
-
-    if let (Some(from_t), Some(to_t)) = (find_temp(&from), find_temp(&to)) {
-        let result = to_t.convert_from_celsius(from_t.to_celsius(amount));
-        return Some(EvalResult {
-            expression: format!("{} {}", format_number(amount), temp_symbol(from_t)),
-            value: format!("{} {}", format_number(result), temp_symbol(to_t)),
-        });
-    }
-
-    let expression = format!("{} {}", format_number(amount), from);
-    let (from_dim, from_factor) = find_unit(&from)?;
-    let (to_dim, to_factor) = find_unit(&to)?;
-    if from_dim != to_dim {
-        return None; // mismatched dimensions (e.g. "km to kg") — not a valid conversion
-    }
-    let result = amount * from_factor / to_factor;
-    Some(EvalResult {
-        expression,
-        value: format!("{} {}", format_unit_number(result), to),
-    })
+    let (_, to) = result.value.split_once(char::is_whitespace)?;
+    Some((label(from), label(to.trim())))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn length() {
-        let r = convert("10 km in miles").unwrap();
-        assert!(r.value.starts_with("6.2"));
-        assert_eq!(
-            conversion_detail("1 inch to cm", &r),
-            Some(("Inch".into(), "Centimeter".into()))
-        );
-        let implied = convert("inch to cm").unwrap();
-        assert_eq!(implied.expression, "1 inch");
-        assert_eq!(implied.value, "2.54 cm");
+    fn symbols_preserve_case() {
+        assert_eq!(convert("1 Mb to MB").unwrap().value, "0.125 MB");
+        assert_eq!(convert("1 MB to Mb").unwrap().value, "8 Mb");
+        assert_eq!(convert("1 gb to mb").unwrap().value, "1000 MB");
+        assert_eq!(convert("1 b to B").unwrap().value, "0.125 B");
+        assert_eq!(convert("1 Gb to GB").unwrap().value, "0.125 GB");
+        assert_eq!(convert("1 kb to KB").unwrap().value, "1 kB");
     }
-
     #[test]
-    fn mass() {
-        let r = convert("1 kg to lb").unwrap();
-        assert!(r.value.starts_with("2.2"));
+    fn canonical_factors_are_shared() {
+        for unit in ["lb", "oz", "stone"] {
+            assert_eq!(
+                convert(&format!("1 {unit} to kg")).unwrap().value,
+                engine::evaluate(&format!("(1 {unit}) to kg"), None)
+                    .unwrap()
+                    .value
+            );
+        }
+        assert_eq!(convert("1 lb to kg").unwrap().value, "0.45359237 kg");
     }
-
     #[test]
-    fn data() {
-        let r = convert("1 gb to mb").unwrap();
-        assert_eq!(r.value, "1,000 mb");
-    }
-
-    #[test]
-    fn temperature() {
-        let r = convert("100 c to f").unwrap();
-        assert_eq!(r.expression, "100 °C");
-        assert_eq!(r.value, "212 °F");
-        let r = convert("0 c to k").unwrap();
-        assert_eq!(r.value, "273.15 K");
-    }
-
-    #[test]
-    fn picometers_and_light_speed_use_unit_cards() {
-        let picometers = convert("1 pm to m").unwrap();
-        assert_eq!(picometers.expression, "1 pm");
-        assert_eq!(picometers.value, "1 × 10^-12 m");
-        assert_eq!(
-            conversion_detail("1 pm to m", &picometers),
-            Some(("Picometer".into(), "Meter".into()))
-        );
-
-        let light = convert("1 c to m / s").unwrap();
-        assert_eq!(light.value, "299,792,458 m/s");
-        assert_eq!(
-            conversion_detail("1 c to m / s", &light),
-            Some(("Speed of Light".into(), "Meter per Second".into()))
-        );
-
-        let kilometers = convert("1 km/s to m/s").unwrap();
-        assert_eq!(kilometers.value, "1,000 m/s");
-        assert_eq!(
-            conversion_detail("1 km/s to m/s", &kilometers),
-            Some(("Kilometer per Second".into(), "Meter per Second".into()))
-        );
-    }
-
-    #[test]
-    fn rejects_mismatched_dimensions() {
+    fn conversions_cover_broad_dimensions() {
+        for input in [
+            "1 acre to m^2",
+            "2 cups to ml",
+            "1 kWh to J",
+            "2 bar to psi",
+            "1 GiB to MiB",
+            "1 c to m/s",
+            "1 pm to m",
+            "5k km to miles",
+            "inch to cm",
+            "5.5kg as lb",
+        ] {
+            assert!(convert(input).is_some(), "{input}");
+        }
+        assert_eq!(convert("100 c to f").unwrap().value, "212 °F");
         assert!(convert("10 km to kg").is_none());
-    }
-
-    #[test]
-    fn rejects_unknown_units() {
-        assert!(convert("10 ironman to miles").is_none());
     }
 }

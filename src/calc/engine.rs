@@ -7,9 +7,22 @@
 use super::EvalResult;
 use super::currency::FxCache;
 use std::borrow::Cow;
+use std::time::{Duration, Instant};
 
+const MAX_INPUT_BYTES: usize = 4096;
+const MAX_DEPTH: usize = 48;
+struct Budget {
+    deadline: Instant,
+}
+impl fend_core::Interrupt for Budget {
+    fn should_interrupt(&self) -> bool {
+        Instant::now() >= self.deadline
+    }
+}
+
+type RateTable = std::sync::Arc<std::collections::HashMap<String, f64>>;
 #[derive(Clone)]
-struct CachedRates(FxCache);
+struct CachedRates(Option<RateTable>);
 
 impl fend_core::ExchangeRateFnV2 for CachedRates {
     fn relative_to_base_currency(
@@ -18,7 +31,8 @@ impl fend_core::ExchangeRateFnV2 for CachedRates {
         _options: &fend_core::ExchangeRateFnV2Options,
     ) -> Result<f64, Box<dyn std::error::Error + Send + Sync + 'static>> {
         self.0
-            .rate_for(currency)
+            .as_ref()
+            .and_then(|rates| rates.get(&currency.to_ascii_lowercase()).copied())
             .ok_or_else(|| format!("no cached rate for {currency}").into())
     }
 }
@@ -28,40 +42,79 @@ impl fend_core::ExchangeRateFnV2 for CachedRates {
 /// A fresh context makes each launcher query independent. Context construction
 /// does not build a unit registry at runtime; the engine's unit data is static.
 pub fn evaluate(input: &str, rates: Option<&FxCache>) -> Option<EvalResult> {
+    if input.len() > MAX_INPUT_BYTES {
+        return None;
+    }
+    let budget = Budget {
+        deadline: Instant::now() + Duration::from_millis(12),
+    };
+    let snapshot = rates.and_then(FxCache::snapshot);
+    evaluate_inner(input, snapshot.as_ref(), &budget, 0)
+}
+
+fn evaluate_inner(
+    input: &str,
+    rates: Option<&RateTable>,
+    budget: &Budget,
+    depth: usize,
+) -> Option<EvalResult> {
+    if depth >= MAX_DEPTH || fend_core::Interrupt::should_interrupt(budget) {
+        return None;
+    }
+    let mut nesting = 0usize;
+    for c in input.chars() {
+        if c == '(' {
+            nesting += 1;
+        }
+        if nesting >= MAX_DEPTH {
+            return None;
+        }
+        if c == ')' {
+            nesting = nesting.checked_sub(1)?;
+        }
+    }
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return None;
     }
 
-    if let Some(result) = evaluate_aggregate(trimmed, rates) {
+    if let Some(result) = evaluate_aggregate(trimmed, rates, budget, depth + 1) {
         return Some(result);
     }
 
-    if let Some(value) = evaluate_ordering(trimmed, rates) {
+    if let Some(value) = evaluate_ordering(trimmed, rates, budget, depth + 1) {
         return Some(EvalResult {
+            copy_value: None,
             expression: trimmed.to_string(),
             value: value.to_string(),
         });
     }
 
-    let normalized = normalize_syntax(trimmed);
+    let temperature = super::units::temperature_expression(trimmed);
+    let normalized = normalize_syntax(temperature.as_deref().unwrap_or(trimmed));
     let mut context = fend_core::Context::new();
     context.disable_rng();
     if let Some(rates) = rates {
-        context.set_exchange_rate_handler_v2(CachedRates(rates.clone()));
+        context.set_exchange_rate_handler_v2(CachedRates(Some(rates.clone())));
     }
-    let result = fend_core::evaluate(&normalized, &mut context).ok()?;
-    if result.output_is_empty() {
+    let result = fend_core::evaluate_with_interrupt(&normalized, &mut context, budget).ok()?;
+    if result.output_is_empty() || result.get_main_result().len() > 8192 {
         return None;
     }
 
     Some(EvalResult {
+        copy_value: None,
         expression: trimmed.to_string(),
         value: normalize_output(result.get_main_result()),
     })
 }
 
-fn evaluate_aggregate(input: &str, rates: Option<&FxCache>) -> Option<EvalResult> {
+fn evaluate_aggregate(
+    input: &str,
+    rates: Option<&RateTable>,
+    budget: &Budget,
+    depth: usize,
+) -> Option<EvalResult> {
     let open = input.find('(')?;
     if !input.ends_with(')') {
         return None;
@@ -80,18 +133,20 @@ fn evaluate_aggregate(input: &str, rates: Option<&FxCache>) -> Option<EvalResult
 
     let value = match name.as_str() {
         "sum" => {
-            evaluate(
+            evaluate_inner(
                 &args
                     .iter()
                     .map(|arg| format!("({arg})"))
                     .collect::<Vec<_>>()
                     .join(" + "),
                 rates,
+                budget,
+                depth + 1,
             )?
             .value
         }
         "avg" | "mean" | "average" => {
-            evaluate(
+            evaluate_inner(
                 &format!(
                     "({}) / {}",
                     args.iter()
@@ -101,6 +156,8 @@ fn evaluate_aggregate(input: &str, rates: Option<&FxCache>) -> Option<EvalResult
                     args.len()
                 ),
                 rates,
+                budget,
+                depth + 1,
             )?
             .value
         }
@@ -108,15 +165,21 @@ fn evaluate_aggregate(input: &str, rates: Option<&FxCache>) -> Option<EvalResult
             let mut selected = args[0];
             for candidate in &args[1..] {
                 let operator = if name == "min" { "<" } else { ">" };
-                if evaluate_ordering(&format!("({candidate}) {operator} ({selected})"), rates)? {
+                if evaluate_ordering(
+                    &format!("({candidate}) {operator} ({selected})"),
+                    rates,
+                    budget,
+                    depth + 1,
+                )? {
                     selected = candidate;
                 }
             }
-            evaluate(selected, rates)?.value
+            evaluate_inner(selected, rates, budget, depth + 1)?.value
         }
         _ => unreachable!(),
     };
     Some(EvalResult {
+        copy_value: None,
         expression: input.to_string(),
         value,
     })
@@ -145,26 +208,32 @@ fn split_arguments(input: &str) -> Option<Vec<&str>> {
         return None;
     }
     let last = input[start..].trim();
-    if !last.is_empty() {
-        args.push(last);
+    if last.is_empty() {
+        return None;
     }
+    args.push(last);
     Some(args)
 }
 
-fn evaluate_ordering(input: &str, rates: Option<&FxCache>) -> Option<bool> {
+fn evaluate_ordering(
+    input: &str,
+    rates: Option<&RateTable>,
+    budget: &Budget,
+    depth: usize,
+) -> Option<bool> {
     let (index, operator) = find_top_level_ordering(input)?;
     let lhs = input[..index].trim();
     let rhs = input[index + operator.len()..].trim();
     if lhs.is_empty() || rhs.is_empty() {
         return None;
     }
-    let difference = evaluate(&format!("({lhs}) - ({rhs})"), rates)?;
-    let number = parse_leading_number(&difference.value)?;
+    let difference = evaluate_inner(&format!("({lhs}) - ({rhs})"), rates, budget, depth + 1)?;
+    let sign = parse_number_sign(&difference.value)?;
     Some(match operator {
-        ">" => number > 0.0,
-        ">=" => number >= 0.0,
-        "<" => number < 0.0,
-        "<=" => number <= 0.0,
+        ">" => sign.is_gt(),
+        ">=" => !sign.is_lt(),
+        "<" => sign.is_lt(),
+        "<=" => !sign.is_gt(),
         _ => return None,
     })
 }
@@ -198,13 +267,20 @@ fn find_top_level_ordering(input: &str) -> Option<(usize, &'static str)> {
     None
 }
 
-fn parse_leading_number(output: &str) -> Option<f64> {
-    let token = output
-        .trim_start()
-        .split_once(char::is_whitespace)
-        .map_or(output.trim(), |(first, _)| first)
-        .replace(',', "");
-    token.parse().ok()
+fn parse_number_sign(output: &str) -> Option<std::cmp::Ordering> {
+    let token = output.split_whitespace().next()?.replace(',', "");
+    let (mantissa, _) = token.split_once(['e', 'E']).unwrap_or((&token, ""));
+    let digits = mantissa.trim_start_matches(['+', '-']);
+    if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit() || c == '.') {
+        return None;
+    }
+    Some(if digits.chars().all(|c| matches!(c, '0' | '.')) {
+        std::cmp::Ordering::Equal
+    } else if mantissa.starts_with('-') {
+        std::cmp::Ordering::Less
+    } else {
+        std::cmp::Ordering::Greater
+    })
 }
 
 /// Translate familiar calculator words that the engine deliberately leaves
@@ -213,10 +289,11 @@ fn parse_leading_number(output: &str) -> Option<f64> {
 fn normalize_syntax(input: &str) -> Cow<'_, str> {
     let needs_rewrite = input.contains("**")
         || input.split(|c: char| !c.is_ascii_alphabetic()).any(|word| {
-            matches!(
-                word.to_ascii_lowercase().as_str(),
-                "add" | "plus" | "minus" | "mul" | "div" | "mod" | "modulo" | "pow" | "power"
-            )
+            super::units::canonical_word(word).is_some()
+                || matches!(
+                    word.to_ascii_lowercase().as_str(),
+                    "add" | "plus" | "minus" | "mul" | "div" | "mod" | "modulo" | "pow" | "power"
+                )
         });
     if !needs_rewrite {
         return Cow::Borrowed(input);
@@ -235,7 +312,7 @@ fn normalize_syntax(input: &str) -> Cow<'_, str> {
             "div" => "/",
             "mod" | "modulo" => "%",
             "pow" | "power" => "^",
-            _ => word.as_str(),
+            _ => super::units::canonical_word(word).unwrap_or(word.as_str()),
         };
         output.push_str(replacement);
         word.clear();
@@ -331,5 +408,30 @@ mod tests {
         ] {
             assert!(evaluate(input, None).is_some(), "did not evaluate {input}");
         }
+    }
+    #[test]
+    fn evaluation_budget_is_shared_and_input_is_bounded() {
+        let expired = Budget {
+            deadline: Instant::now() - Duration::from_secs(1),
+        };
+        assert!(evaluate_inner("sum(1,2,3)", None, &expired, 0).is_none());
+        assert!(evaluate(&"1".repeat(4097), None).is_none());
+        assert!(evaluate(&format!("{}1{}", "(".repeat(50), ")".repeat(50)), None).is_none());
+        assert!(split_arguments("1,").is_none());
+    }
+    #[test]
+    fn comparisons_do_not_narrow_to_floating_point() {
+        assert_eq!(
+            parse_number_sign("1e-999 m"),
+            Some(std::cmp::Ordering::Greater)
+        );
+        assert_eq!(
+            parse_number_sign("-1e999 m"),
+            Some(std::cmp::Ordering::Less)
+        );
+        assert_eq!(
+            parse_number_sign("0.000 m"),
+            Some(std::cmp::Ordering::Equal)
+        );
     }
 }

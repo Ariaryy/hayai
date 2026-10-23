@@ -1498,31 +1498,58 @@ pub fn system_timezone_name() -> Option<String> {
     String::from_utf16(&name[..len]).ok()
 }
 
+thread_local! {
+    // Keep only the few zones in use, rather than retaining the Windows zone
+    // table. Expiry picks up OS rule updates without a resident polling task.
+    static TIMEZONE_CACHE: std::cell::RefCell<Vec<(String, std::time::Instant,
+        windows_sys::Win32::System::Time::DYNAMIC_TIME_ZONE_INFORMATION)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 fn dynamic_timezone(
     key_name: &str,
 ) -> Option<windows_sys::Win32::System::Time::DYNAMIC_TIME_ZONE_INFORMATION> {
     use windows_sys::Win32::System::Time::{
         DYNAMIC_TIME_ZONE_INFORMATION, EnumDynamicTimeZoneInformation,
     };
-
+    let cached = TIMEZONE_CACHE.with(|cache| {
+        cache
+            .borrow()
+            .iter()
+            .find(|(key, at, _)| key.eq_ignore_ascii_case(key_name) && at.elapsed().as_secs() < 60)
+            .map(|(_, _, info)| *info)
+    });
+    if cached.is_some() {
+        return cached;
+    }
     for index in 0.. {
         let mut info = DYNAMIC_TIME_ZONE_INFORMATION::default();
         let status = unsafe { EnumDynamicTimeZoneInformation(index, &mut info) };
-        if status == 259 {
-            return None; // ERROR_NO_MORE_ITEMS
-        }
         if status != 0 {
-            // Any other Win32 error is persistent for this call. Fail the
-            // lookup instead of spinning on the launcher input path.
             return None;
         }
         let len = info
             .TimeZoneKeyName
             .iter()
-            .position(|character| *character == 0)
+            .position(|c| *c == 0)
             .unwrap_or(info.TimeZoneKeyName.len());
-        let candidate = String::from_utf16_lossy(&info.TimeZoneKeyName[..len]);
-        if candidate.eq_ignore_ascii_case(key_name) {
+        // Compare in UTF-16 without allocating every preceding zone's name.
+        let matches = key_name.is_ascii()
+            && len == key_name.len()
+            && info.TimeZoneKeyName[..len]
+                .iter()
+                .zip(key_name.bytes())
+                .all(|(left, right)| *left <= 127 && (*left as u8).eq_ignore_ascii_case(&right));
+        if matches {
+            TIMEZONE_CACHE.with(|cache| {
+                let mut cache = cache.borrow_mut();
+                cache.retain(|(key, at, _)| {
+                    !key.eq_ignore_ascii_case(key_name) && at.elapsed().as_secs() < 60
+                });
+                if cache.len() == 4 {
+                    cache.remove(0);
+                }
+                cache.push((key_name.into(), std::time::Instant::now(), info));
+            });
             return Some(info);
         }
     }
@@ -1562,8 +1589,22 @@ pub fn timezone_local_to_utc(
     let timezone = dynamic_timezone(key_name)?;
     let local = system_time(local);
     let mut utc = SYSTEMTIME::default();
-    (unsafe { TzSpecificLocalTimeToSystemTimeEx(&timezone, &local, &mut utc) } != 0)
-        .then(|| date_time(utc))
+    if unsafe { TzSpecificLocalTimeToSystemTimeEx(&timezone, &local, &mut utc) } == 0 {
+        return None;
+    }
+    let mut roundtrip = SYSTEMTIME::default();
+    if unsafe {
+        windows_sys::Win32::System::Time::SystemTimeToTzSpecificLocalTimeEx(
+            &timezone,
+            &utc,
+            &mut roundtrip,
+        )
+    } == 0
+        || date_time(roundtrip) != date_time(local)
+    {
+        return None;
+    }
+    Some(date_time(utc))
 }
 
 pub fn timezone_utc_to_local(
@@ -1597,6 +1638,22 @@ pub fn local_now() -> (i32, u32, u32, u32, u32) {
         time.wDay as u32,
         time.wHour as u32,
         time.wMinute as u32,
+    )
+}
+
+/// Seconds are retained for calculator elapsed-time expressions.
+pub fn local_now_seconds() -> (i32, u32, u32, u32, u32, u32) {
+    use windows_sys::Win32::Foundation::SYSTEMTIME;
+    use windows_sys::Win32::System::SystemInformation::GetLocalTime;
+    let mut time = SYSTEMTIME::default();
+    unsafe { GetLocalTime(&mut time) };
+    (
+        time.wYear.into(),
+        time.wMonth.into(),
+        time.wDay.into(),
+        time.wHour.into(),
+        time.wMinute.into(),
+        time.wSecond.into(),
     )
 }
 
