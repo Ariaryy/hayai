@@ -25,6 +25,20 @@ pub const REQUIRED_VERSION: &str = "v0.1.1";
 static CHECK_LOCK: Mutex<()> = Mutex::new(());
 static UPDATING: AtomicBool = AtomicBool::new(false);
 pub static DIAGNOSTICS: crate::updates::DiagnosticLog = crate::updates::DiagnosticLog::new();
+static CHECK_DIAGNOSTICS: crate::updates::DiagnosticLog = crate::updates::DiagnosticLog::new();
+
+fn copy_operation_logs(
+    check: &crate::updates::DiagnosticLog,
+    install: &crate::updates::DiagnosticLog,
+) -> String {
+    // Preserve installation evidence when an independent discovery check runs.
+    // Allocate the combined text only when the user explicitly copies it.
+    format!("{}\n{}", install.snapshot(), check.snapshot())
+}
+
+pub fn diagnostic_snapshot() -> String {
+    copy_operation_logs(&CHECK_DIAGNOSTICS, &DIAGNOSTICS)
+}
 
 pub struct Progress {
     pub message: String,
@@ -192,17 +206,22 @@ fn run(
         }
     })?;
     let mut command = Command::new(path);
-    DIAGNOSTICS.append(&format!("\nCommand: scry {}\n", args.join(" ")));
+    let diagnostics = if args.first() == Some(&"check-update") {
+        &CHECK_DIAGNOSTICS
+    } else {
+        &DIAGNOSTICS
+    };
+    diagnostics.append(&format!("\nCommand: scry {}\n", args.join(" ")));
     command.args(args);
     let result = run_command_logged(
         command,
         updating,
         Duration::from_secs(if updating { 20 * 60 } else { 60 }),
         progress,
-        true,
+        Some(diagnostics),
     );
     if let Err(error) = &result {
-        DIAGNOSTICS.append(&format!("\nRunner error: {error}\n"));
+        diagnostics.append(&format!("\nRunner error: {error}\n"));
     }
     result
 }
@@ -214,7 +233,7 @@ fn run_command(
     timeout: Duration,
     progress: impl FnMut(Progress),
 ) -> Result<(Value, i32), String> {
-    run_command_logged(command, updating, timeout, progress, false)
+    run_command_logged(command, updating, timeout, progress, None)
 }
 
 fn run_command_logged(
@@ -222,7 +241,7 @@ fn run_command_logged(
     updating: bool,
     timeout: Duration,
     mut progress: impl FnMut(Progress),
-    record: bool,
+    diagnostics: Option<&'static crate::updates::DiagnosticLog>,
 ) -> Result<(Value, i32), String> {
     command
         .stdin(Stdio::null())
@@ -250,8 +269,8 @@ fn run_command_logged(
                 .by_ref()
                 .take((MAX_LINE + 1) as u64)
                 .read_until(b'\n', &mut line);
-            if record {
-                DIAGNOSTICS.append(&String::from_utf8_lossy(&line));
+            if let Some(diagnostics) = diagnostics {
+                diagnostics.append(&String::from_utf8_lossy(&line));
             }
             match read {
                 Ok(0) => break,
@@ -315,8 +334,8 @@ fn run_command_logged(
             }
             std::thread::sleep(Duration::from_millis(25));
         };
-        if record {
-            DIAGNOSTICS.append(&format!("\nProcess exit code: {:?}\n", exit.code()));
+        if let Some(diagnostics) = diagnostics {
+            diagnostics.append(&format!("\nProcess exit code: {:?}\n", exit.code()));
         }
         Ok((
             terminal
@@ -386,7 +405,7 @@ fn cached_discovery(
 
 pub fn check(force: bool) -> Discovery {
     let _guard = CHECK_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    DIAGNOSTICS.reset(concat!(
+    CHECK_DIAGNOSTICS.reset(concat!(
         "Hayai ",
         env!("CARGO_PKG_VERSION"),
         " / Scry update check\n"
@@ -409,7 +428,7 @@ pub fn check(force: bool) -> Discovery {
         && let Ok(value) = serde_json::from_reader::<_, Value>(file.take((MAX_LINE + 1) as u64))
         && let Some(result) = cached_discovery(&value, &current, channel, now, force)
     {
-        DIAGNOSTICS.append(&format!("Source: cached discovery\n{}\n", value["result"]));
+        CHECK_DIAGNOSTICS.append(&format!("Source: cached discovery\n{}\n", value["result"]));
         return result;
     }
     let result = run(
@@ -439,12 +458,12 @@ pub fn check(force: bool) -> Discovery {
                 result
             }
             Err(error) => {
-                DIAGNOSTICS.append(&format!("Validation error: {error}\n"));
+                CHECK_DIAGNOSTICS.append(&format!("Validation error: {error}\n"));
                 Discovery::failed(error)
             }
         },
         Err(error) => {
-            DIAGNOSTICS.append(&format!("Check failed: {error}\n"));
+            CHECK_DIAGNOSTICS.append(&format!("Check failed: {error}\n"));
             Discovery::failed(error)
         }
     }
@@ -514,6 +533,28 @@ pub fn install(tag: &str, progress: impl FnMut(Progress)) -> Result<String, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn later_update_checks_preserve_the_original_installation_failure() {
+        let check = crate::updates::DiagnosticLog::new();
+        let install = crate::updates::DiagnosticLog::new();
+        install.reset("Scry update installation\n");
+        let failure =
+            r#"{"event":"result","exit_code":23,"message":"Another daemon owns the query pipe"}"#;
+        install.append(failure);
+        check.reset("Previous check\n");
+        check.append("Old result");
+        check.reset("Scry update check\n");
+        check.append(r#"{"event":"check_update","exit_code":0,"state":"available"}"#);
+        let copied = copy_operation_logs(&check, &install);
+        assert!(copied.contains(failure));
+        assert!(copied.contains("check_update"));
+        assert!(!copied.contains("Old result"));
+        assert_eq!(
+            install.snapshot(),
+            format!("Scry update installation\n{failure}")
+        );
+    }
 
     #[test]
     fn discovery_cache_respects_freshness_manual_spacing_and_context() {
