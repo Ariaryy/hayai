@@ -42,7 +42,7 @@ cleanup notification, and release of an evicted image's final reference.
 
 ## Follow-up: prefilter row icons for display DPI
 
-The row remains 22 logical pixels. The background worker now uses area averaging
+The initial DPI follow-up kept rows at 22 logical pixels and used area averaging
 to reduce decoded icons to ceil(22 * window scale) physical pixels: 22 at 100%,
 28 at 125%, 33 at 150%, and 44 at 200%. Small sources are not upscaled on the CPU.
 This avoids relying on the renderer's bilinear sampler to minify 48px images;
@@ -70,3 +70,37 @@ checkerboard into a uniform icon, rather than aliasing its alternating pixels.
 `cargo test --release`: 126 passed, 2 ignored. Manual visual checks on real app
 icons across monitors remain unverified. Sources still come from the existing
 48px shell extraction, so this change does not add detail for scales above 200%.
+
+## Revision: scroll prefetch and sharper fractional-DPI filtering
+
+The box average looked soft at 125-150% DPI. Row preparation now uses Lanczos3
+at the same target dimensions, preserving edge contrast with a wider reconstruction
+filter. DPI cache handling and the 128-entry limit are unchanged.
+
+Each virtualized result row warms up to 16 neighboring rows in either direction.
+Prefetch protects a region of 32 rows on either side of that rendered row from
+its own evictions, and does not promote speculative cache hits over demand hits.
+It stops admitting speculative loads when eight decodes are pending, leaving
+visible-row requests unrestricted by that speculative threshold. Completion
+repaints refill nearby icons without timers or a retained work queue. The bound
+still includes all pending and completed entries. A fast jump into uncached
+results or the first cold open can still briefly show missing icons; prefetch
+cannot guarantee instantaneous shell extraction.
+
+The same controlled 1,000-icon workload after this revision retained 128 entries:
+
+- 125% / 28px: empty RSS 8,355,840 bytes; populated RSS 9,162,752 bytes;
+  growth 806,912 bytes (0.77 MiB). Private bytes: 1,605,632 to 2,277,376.
+- 150% / 33px: empty RSS 8,347,648 bytes; populated RSS 9,306,112 bytes;
+  growth 958,464 bytes (0.91 MiB). Private bytes: 1,593,344 to 2,416,640.
+
+Use HAYAI_ICON_BENCH_PIXELS=28 or 33 with the ignored test to reproduce. These
+measure the retained CPU cache and filter allocations, not full-window idle/active
+RSS, speculative task peaks, scroll latency, GPU storage, or perceived sharpness.
+The previous 22px box-filter measurement is historical, not a like-for-like
+fractional-DPI comparison. Full-app visual validation remains outstanding.
+
+`cargo test --release`: 129 passed, 2 ignored. Added tests check protected-region
+eviction, no LRU promotion on prefetch hits, speculative admission limits with
+visible-request priority, and neighborhood bounds at the start/end of results.
+The fine checkerboard test continues to verify antialiasing in the image interior.

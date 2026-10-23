@@ -19,6 +19,8 @@ const MAX_RECENTS: usize = 30;
 /// 128 48x48 icons retain at most 1.125 MiB of pixel data. Include failed
 /// decodes and pending requests in the bound so arbitrary file browsing is safe.
 const MAX_ICONS: usize = 128;
+/// Speculation must leave the worker pool available for visible rows.
+const MAX_PREFETCH_PENDING: usize = 8;
 
 pub struct AppEntry {
     pub name: String,
@@ -58,7 +60,8 @@ enum IconCache {
 pub enum IconRequest {
     /// Already decoded (or already failed) — nothing more to do.
     Ready(Option<Arc<RenderImage>>),
-    /// A decode is already in flight; wait for it.
+    /// A decode is in flight, or admission is deferred until another load
+    /// completes. That completion repaints the view so it can retry.
     Loading,
     /// Not started yet — the caller should decode `.0` in the background and
     /// report it back via [`Catalog::set_icon_ready`].
@@ -183,12 +186,37 @@ impl Catalog {
         &mut self,
         path: &Path,
         pixel_size: u32,
+        on_evict: impl FnMut(Arc<RenderImage>),
+    ) -> IconRequest {
+        self.request_icon_with_policy(path, pixel_size, false, |_| false, on_evict)
+    }
+
+    /// Warm nearby rows without displacing the current viewport or promoting
+    /// speculative hits over icons the user has actually seen.
+    pub fn prefetch_icon(
+        &mut self,
+        path: &Path,
+        pixel_size: u32,
+        protected: impl Fn(&Path) -> bool,
+        on_evict: impl FnMut(Arc<RenderImage>),
+    ) -> IconRequest {
+        self.request_icon_with_policy(path, pixel_size, true, protected, on_evict)
+    }
+
+    fn request_icon_with_policy(
+        &mut self,
+        path: &Path,
+        pixel_size: u32,
+        prefetch: bool,
+        protected: impl Fn(&Path) -> bool,
         mut on_evict: impl FnMut(Arc<RenderImage>),
     ) -> IconRequest {
         match self.icons.get(path) {
             Some(IconCache::Ready(icon, size)) if *size == pixel_size => {
                 let icon = icon.clone();
-                if let Some(index) = self.icon_recency.iter().position(|entry| entry == path) {
+                if !prefetch
+                    && let Some(index) = self.icon_recency.iter().position(|entry| entry == path)
+                {
                     let entry = self.icon_recency.remove(index).unwrap();
                     self.icon_recency.push_back(entry);
                 }
@@ -197,6 +225,16 @@ impl Catalog {
             Some(IconCache::Loading(_)) => return IconRequest::Loading,
             _ => {}
         }
+        if prefetch
+            && self
+                .icons
+                .values()
+                .filter(|entry| matches!(entry, IconCache::Loading(_)))
+                .count()
+                >= MAX_PREFETCH_PENDING
+        {
+            return IconRequest::Loading;
+        }
         // Keep one rendition per path. Let pending loads finish before replacing
         // them so a DPI change cannot duplicate a decode or publish stale pixels.
         if let Some(IconCache::Ready(Some(image), _)) = self.icons.remove(path) {
@@ -204,11 +242,13 @@ impl Catalog {
         }
         self.icon_recency.retain(|entry| entry != path);
         if self.icons.len() >= MAX_ICONS {
-            let Some(oldest) = self.icon_recency.pop_front() else {
+            let Some(position) = self.icon_recency.iter().position(|entry| !protected(entry))
+            else {
                 // All slots are in flight. A completion notifies the view, which
                 // retries this row; never duplicate an outstanding shell decode.
                 return IconRequest::Loading;
             };
+            let oldest = self.icon_recency.remove(position).unwrap();
             if let Some(IconCache::Ready(Some(image), _)) = self.icons.remove(&oldest) {
                 // RenderImage's drop does not release GPUI's sprite-atlas entry.
                 // The caller owns the current Window and removes it there.
@@ -598,6 +638,78 @@ mod tests {
         ));
         assert_eq!(catalog.icons.len(), 1);
         assert_eq!(catalog.icon_recency.len(), 1);
+    }
+
+    #[test]
+    fn icon_prefetch_protects_viewport_and_does_not_promote_hits() {
+        use super::*;
+        let mut catalog = Catalog {
+            apps: vec![],
+            icons: Default::default(),
+            icon_recency: Default::default(),
+            recents: vec![],
+        };
+        for i in 0..MAX_ICONS {
+            let path = PathBuf::from(i.to_string());
+            catalog.request_icon(&path, 28, |_| {});
+            catalog.set_icon_ready(path, 28, None);
+        }
+        // Speculatively finding an old icon must not make it newer than a
+        // viewport icon. Protect the visible region when admitting new rows.
+        catalog.prefetch_icon(Path::new("0"), 28, |_| false, |_| {});
+        assert_eq!(catalog.icon_recency.front().unwrap(), Path::new("0"));
+        let protected = |path: &Path| path.to_str().unwrap().parse::<usize>().unwrap() < 64;
+        assert!(matches!(
+            catalog.prefetch_icon(Path::new("next"), 28, protected, |_| {}),
+            IconRequest::Load(_)
+        ));
+        for i in 0..64 {
+            assert!(catalog.icons.contains_key(Path::new(&i.to_string())));
+        }
+        assert!(!catalog.icons.contains_key(Path::new("64")));
+        assert_eq!(catalog.icons.len(), MAX_ICONS);
+        assert!(matches!(
+            catalog.prefetch_icon(Path::new("blocked"), 28, |_| true, |_| {}),
+            IconRequest::Loading
+        ));
+        assert_eq!(catalog.icons.len(), MAX_ICONS);
+    }
+
+    #[test]
+    fn icon_prefetch_limits_pending_work_but_admits_visible_misses() {
+        use super::*;
+        let mut catalog = Catalog {
+            apps: vec![],
+            icons: Default::default(),
+            icon_recency: Default::default(),
+            recents: vec![],
+        };
+        for i in 0..MAX_PREFETCH_PENDING {
+            assert!(matches!(
+                catalog.prefetch_icon(Path::new(&i.to_string()), 28, |_| false, |_| {}),
+                IconRequest::Load(_)
+            ));
+        }
+        assert!(matches!(
+            catalog.prefetch_icon(Path::new("wait"), 28, |_| false, |_| {}),
+            IconRequest::Loading
+        ));
+        assert!(!catalog.icons.contains_key(Path::new("wait")));
+        assert!(matches!(
+            catalog.request_icon(Path::new("visible"), 28, |_| {}),
+            IconRequest::Load(_)
+        ));
+        // A completion frees a speculative slot, and a repaint can refill it.
+        catalog.set_icon_ready("0".into(), 28, None);
+        catalog.set_icon_ready("visible".into(), 28, None);
+        assert!(matches!(
+            catalog.prefetch_icon(Path::new("wait"), 28, |_| false, |_| {}),
+            IconRequest::Load(_)
+        ));
+        assert!(matches!(
+            catalog.request_icon(Path::new("wait"), 28, |_| {}),
+            IconRequest::Loading
+        ));
     }
 
     /// Run in a fresh process, with one test thread, for comparable CPU RSS.

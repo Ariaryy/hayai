@@ -2289,6 +2289,45 @@ struct ResultListDelegate {
 }
 
 impl ResultListDelegate {
+    fn prefetch_icons_near(
+        &self,
+        row: usize,
+        window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) {
+        // render_item is driven by the virtual list, so this follows mouse
+        // scrolling as well as keyboard navigation. Protect two screens around
+        // the rendered row and warm the nearest offscreen rows in both directions.
+        // The cache admits at most eight speculative pending decodes; completions
+        // repaint the list and refill the warm region without a timer or queue.
+        let protected = icon_neighborhood(row, self.results.len(), 32);
+        let protected = &self.results[protected];
+        let pixels = row_icon_pixels(window.scale_factor());
+        for distance in 1..=16 {
+            for index in [row.checked_add(distance), row.checked_sub(distance)]
+                .into_iter()
+                .flatten()
+            {
+                let Some(CommandItem {
+                    icon: IconSource::Path(path),
+                    ..
+                }) = self.results.get(index)
+                else {
+                    continue;
+                };
+                let request = self.catalog.borrow_mut().prefetch_icon(
+                    path,
+                    pixels,
+                    |candidate| protected.iter().any(|item| matches!(&item.icon, IconSource::Path(path) if path == candidate)),
+                    |image| { let _ = window.drop_image(image); },
+                );
+                if let IconRequest::Load(path) = request {
+                    spawn_icon_load(path, pixels, self.catalog.clone(), cx);
+                }
+            }
+        }
+    }
+
     fn needs_pinned_scry(&self) -> bool {
         self.file_search
             && self.results.iter().any(|item| {
@@ -3037,6 +3076,7 @@ impl ListDelegate for ResultListDelegate {
                 IconSource::None => None,
             }
         };
+        self.prefetch_icons_near(self.flat_index(ix), _window, cx);
         let selected = self.selected_index == Some(ix);
         // Only `CalcProvider` produces `CopyToClipboard` today, so this
         // doubles as "is this a calculator result" without adding a field
@@ -3316,6 +3356,10 @@ impl ListDelegate for ResultListDelegate {
     }
 }
 
+fn icon_neighborhood(row: usize, count: usize, radius: usize) -> std::ops::Range<usize> {
+    row.saturating_sub(radius).min(count)..row.saturating_add(radius).saturating_add(1).min(count)
+}
+
 fn row_icon_pixels(scale: f32) -> u32 {
     (22.0 * scale).ceil().clamp(1.0, 256.0) as u32
 }
@@ -3324,9 +3368,19 @@ pub(crate) fn prepare_row_icon(icon: native::IconImage, pixels: u32) -> Option<A
     let buffer = image::RgbaImage::from_raw(icon.width, icon.height, icon.bgra)?;
     // The GPU uses bilinear sampling without mipmaps. Prefilter on the worker
     // before upload so minifying a 48px source does not skip fine icon details.
+    // Lanczos preserves small edges better than the previous box average, which
+    // visibly softened app glyphs at low/fractional DPI.
     // Preserve undersized sources rather than allocating an upscaled bitmap.
     let buffer = if buffer.width() > pixels || buffer.height() > pixels {
-        image::imageops::thumbnail(&buffer, pixels, pixels)
+        let ratio = pixels as f64 / buffer.width().max(buffer.height()) as f64;
+        let width = (buffer.width() as f64 * ratio).round().max(1.0) as u32;
+        let height = (buffer.height() as f64 * ratio).round().max(1.0) as u32;
+        image::imageops::resize(
+            &buffer,
+            width,
+            height,
+            image::imageops::FilterType::Lanczos3,
+        )
     } else {
         buffer
     };
@@ -3772,6 +3826,15 @@ mod tests {
     use super::{format_expression_for_display, format_result_for_display};
 
     #[test]
+    fn icon_warm_region_stays_bounded_at_result_edges() {
+        assert_eq!(super::icon_neighborhood(0, 1000, 32), 0..33);
+        assert_eq!(super::icon_neighborhood(500, 1000, 32), 468..533);
+        assert_eq!(super::icon_neighborhood(999, 1000, 32), 967..1000);
+        assert_eq!(super::icon_neighborhood(0, 0, 32), 0..0);
+        assert_eq!(super::icon_neighborhood(usize::MAX, 10, 32), 10..10);
+    }
+
+    #[test]
     fn row_icon_prefilter_averages_fine_details_at_physical_size() {
         assert_eq!(super::row_icon_pixels(1.0), 22);
         assert_eq!(super::row_icon_pixels(1.25), 28);
@@ -3795,9 +3858,13 @@ mod tests {
         .unwrap();
         assert_eq!(icon.size(0).width.0, 22);
         assert_eq!(icon.size(0).height.0, 22);
-        for pixel in icon.as_bytes(0).unwrap().chunks_exact(4) {
-            assert!((127..=128).contains(&pixel[0]));
-            assert_eq!(pixel[3], 255);
+        let bytes = icon.as_bytes(0).unwrap();
+        for y in 3..19 {
+            for x in 3..19 {
+                let pixel = &bytes[(y * 22 + x) * 4..][..4];
+                assert!((127..=128).contains(&pixel[0]));
+                assert_eq!(pixel[3], 255);
+            }
         }
     }
 
