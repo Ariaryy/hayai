@@ -27,28 +27,30 @@ const LAUNCHER_WIDTH: f32 = 720.0;
 const LAUNCHER_HEIGHT: f32 = 400.0;
 
 const SCRY_SETUP_ICON_SIZE: f32 = 56.0;
-const HAYAI_ROW_ICON_SIZE: f32 = 28.0;
+const HAYAI_ROW_ICON_SIZE: f32 = 22.0;
 
-fn render_update_icon(renderer: &gpui::SvgRenderer, scale: f32) -> Option<Arc<RenderImage>> {
-    // Keep spare raster resolution for fractional Windows scaling. The same
-    // cached SVG render serves the notification and Check for updates row.
-    renderer
-        .render_single_frame(
-            include_bytes!("../assets/icons/update.svg"),
-            HAYAI_ROW_ICON_SIZE * 2.0 * scale / 1024.0,
-        )
-        .ok()
+fn load_builtin_icon(bytes: &[u8]) -> Option<Arc<RenderImage>> {
+    let mut buffer = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
+        .ok()?
+        .into_rgba8();
+    // PNG decodes as straight RGBA; GPUI consumes straight BGRA.
+    for pixel in buffer.as_chunks_mut::<4>().0 {
+        pixel.swap(0, 2);
+    }
+    Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
 }
 
-fn render_scry_setup_icon(renderer: &gpui::SvgRenderer, scale: f32) -> Option<Arc<RenderImage>> {
-    // GPUI supplies 2x supersampling; size the SVG to the physical display
-    // resolution first, rather than minifying its 2048px intrinsic raster.
-    renderer
-        .render_single_frame(
-            include_bytes!("../assets/icons/scry.svg"),
-            SCRY_SETUP_ICON_SIZE * scale / 1024.0,
-        )
-        .ok()
+fn builtin_row_icon(icon: &Option<Arc<RenderImage>>, pixels: u32) -> Option<Arc<RenderImage>> {
+    let icon = icon.as_ref()?;
+    let dimensions = icon.size(0);
+    prepare_row_icon(
+        native::IconImage {
+            width: dimensions.width.0 as u32,
+            height: dimensions.height.0 as u32,
+            bgra: icon.as_bytes(0)?.to_vec(),
+        },
+        pixels,
+    )
 }
 
 fn format_expression_for_display(expression: &str) -> String {
@@ -802,29 +804,6 @@ impl LauncherRoot {
                 this.on_intercepted_key(key, control_k, window, cx);
             });
         });
-        let renderer = cx.svg_renderer();
-        let icon_list = list.clone();
-        let scale = window.scale_factor();
-        cx.spawn(async move |_, cx| {
-            let icons = cx
-                .background_spawn(async move {
-                    let brand = renderer
-                        .render_single_frame(
-                            include_bytes!("../assets/hayai.svg"),
-                            56.0 * scale / 1024.0,
-                        )
-                        .ok();
-                    let update = render_update_icon(&renderer, scale);
-                    (brand, update)
-                })
-                .await;
-            icon_list.update(cx, |list, cx| {
-                list.delegate_mut().brand_icon = icons.0;
-                list.delegate_mut().update_icon = icons.1;
-                cx.notify();
-            });
-        })
-        .detach();
         let _subscriptions = vec![
             cx.subscribe_in(&search_input, window, Self::on_search_event),
             cx.observe_in(&list, window, |this, list, window, cx| {
@@ -2276,7 +2255,8 @@ struct ResultListDelegate {
     starting_scry: bool,
     last_query: String,
     scry_icon: Option<Arc<RenderImage>>,
-    scry_icon_scale: f32,
+    builtin_row_icons: [Option<Arc<RenderImage>>; 3],
+    builtin_row_pixels: u32,
     file_search: bool,
     registry: Rc<RefCell<PluginRegistry>>,
     /// Catalog handle retained ONLY for the icon cache (`IconSource::Path`).
@@ -2289,6 +2269,65 @@ struct ResultListDelegate {
 }
 
 impl ResultListDelegate {
+    fn refresh_builtin_row_icons(&mut self, window: &mut Window) {
+        let pixels = row_icon_pixels(window.scale_factor());
+        if self.builtin_row_pixels == pixels {
+            return;
+        }
+        // Keep the 56px detail-card images separate from the 22px row rasters.
+        // Rebuild only on DPI changes and release the previous atlas entries.
+        for icon in &mut self.builtin_row_icons {
+            if let Some(icon) = icon.take() {
+                let _ = window.drop_image(icon);
+            }
+        }
+        self.builtin_row_icons = [
+            builtin_row_icon(&self.brand_icon, pixels),
+            builtin_row_icon(&self.update_icon, pixels),
+            builtin_row_icon(&self.scry_icon, pixels),
+        ];
+        self.builtin_row_pixels = pixels;
+    }
+
+    fn prefetch_icons_near(
+        &self,
+        row: usize,
+        window: &mut Window,
+        cx: &mut Context<ListState<Self>>,
+    ) {
+        // render_item is driven by the virtual list, so this follows mouse
+        // scrolling as well as keyboard navigation. Protect two screens around
+        // the rendered row and warm the nearest offscreen rows in both directions.
+        // The cache admits at most eight speculative pending decodes; completions
+        // repaint the list and refill the warm region without a timer or queue.
+        let protected = icon_neighborhood(row, self.results.len(), 32);
+        let protected = &self.results[protected];
+        let pixels = row_icon_pixels(window.scale_factor());
+        for distance in 1..=16 {
+            for index in [row.checked_add(distance), row.checked_sub(distance)]
+                .into_iter()
+                .flatten()
+            {
+                let Some(CommandItem {
+                    icon: IconSource::Path(path),
+                    ..
+                }) = self.results.get(index)
+                else {
+                    continue;
+                };
+                let request = self.catalog.borrow_mut().prefetch_icon(
+                    path,
+                    pixels,
+                    |candidate| protected.iter().any(|item| matches!(&item.icon, IconSource::Path(path) if path == candidate)),
+                    |image| { let _ = window.drop_image(image); },
+                );
+                if let IconRequest::Load(path) = request {
+                    spawn_icon_load(path, pixels, self.catalog.clone(), cx);
+                }
+            }
+        }
+    }
+
     fn needs_pinned_scry(&self) -> bool {
         self.file_search
             && self.results.iter().any(|item| {
@@ -2387,20 +2426,13 @@ impl ResultListDelegate {
         self.scry_checked = Some(std::time::Instant::now());
         self.scry_ready = false;
         self.scry_message = "Checking for Scry Search updates…".into();
-        let scale = window.scale_factor();
-        let renderer = cx.svg_renderer();
-        let cached_icon = self.scry_icon.clone();
         cx.spawn_in(window, async move |list, cx| {
-            let (result, icon, ready) = cx
+            let (result, ready) = cx
                 .background_spawn(async move {
                     let result = crate::scry_updates::check(force);
                     let ready = result.state == crate::scry_updates::State::Current
                         && native::scry_compatibility() == crate::scry::Compatibility::Ready;
-                    (
-                        result,
-                        cached_icon.or_else(|| render_scry_setup_icon(&renderer, scale)),
-                        ready,
-                    )
+                    (result, ready)
                 })
                 .await;
             let _ = cx.update(|window, cx| {
@@ -2418,8 +2450,6 @@ impl ResultListDelegate {
                         delegate.scry_discovery = None;
                         delegate.scry_checked = None;
                     }
-                    delegate.scry_icon = icon;
-                    delegate.scry_icon_scale = scale;
                     reconcile_notification_selection(list, previous, window, cx);
                     cx.notify();
                 })
@@ -2575,6 +2605,11 @@ impl ResultListDelegate {
     }
 
     fn new(registry: Rc<RefCell<PluginRegistry>>, catalog: Rc<RefCell<Catalog>>) -> Self {
+        // These tiny embedded PNGs are decoded before the first frame, rather
+        // than appearing after an asynchronous SVG raster job completes.
+        let brand_icon = load_builtin_icon(include_bytes!("../assets/hayai.png"));
+        let update_icon = load_builtin_icon(include_bytes!("../assets/icons/update.png"));
+        let scry_icon = load_builtin_icon(include_bytes!("../assets/icons/scry.png"));
         let dispatch = registry.borrow_mut().dispatch("");
         let results = registry.borrow().search(&dispatch);
         let main_results = results
@@ -2604,14 +2639,15 @@ impl ResultListDelegate {
             show_updates: false,
             update_result: None,
             apps_view: true,
-            brand_icon: None,
-            update_icon: None,
+            brand_icon,
+            update_icon,
             update_failed: false,
             restarting_update: false,
             starting_scry: false,
             last_query: String::new(),
-            scry_icon: None,
-            scry_icon_scale: 0.0,
+            scry_icon,
+            builtin_row_icons: Default::default(),
+            builtin_row_pixels: 0,
             file_search: false,
             registry,
             catalog,
@@ -2753,11 +2789,6 @@ impl ListDelegate for ResultListDelegate {
             cx.notify();
             let generation = dispatch.generation;
             let registry = self.registry.clone();
-            let scale = window.scale_factor();
-            let cached_icon = (self.scry_icon_scale == scale)
-                .then(|| self.scry_icon.clone())
-                .flatten();
-            let renderer = cx.svg_renderer();
             let debounce = !dispatch.query.is_empty();
             cx.spawn_in(window, async move |list, cx| {
                 if debounce {
@@ -2770,34 +2801,12 @@ impl ListDelegate for ResultListDelegate {
                 if registry.borrow().current_generation() != generation {
                     return;
                 }
-                let (items, scry_icon) = cx
-                    .background_spawn(async move {
-                        let items = job();
-                        let setup = items.iter().any(|item| {
-                            item.id.starts_with("files:compatibility:")
-                                || matches!(
-                                    item.action,
-                                    CommandAction::InstallFileSearch
-                                        | CommandAction::StartFileSearch
-                                )
-                        });
-                        let icon = if setup {
-                            cached_icon.or_else(|| render_scry_setup_icon(&renderer, scale))
-                        } else {
-                            None
-                        };
-                        (items, icon)
-                    })
-                    .await;
+                let items = cx.background_spawn(async move { job() }).await;
                 if registry.borrow().current_generation() != generation {
                     return;
                 }
                 let _ = cx.update(|window, cx| {
                     list.update(cx, |list, cx| {
-                        if let Some(icon) = scry_icon {
-                            list.delegate_mut().scry_icon = Some(icon);
-                            list.delegate_mut().scry_icon_scale = scale;
-                        }
                         list.delegate_mut().apply_results(generation, items, cx);
                         // An empty query can switch the first populated section.
                         // Remeasure after the async results arrive; measuring an
@@ -2923,6 +2932,7 @@ impl ListDelegate for ResultListDelegate {
         _window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Option<Self::Item> {
+        self.refresh_builtin_row_icons(_window);
         if self.notification_visible() && ix.section == 0 {
             let scry = self.notification_kind(ix.row)? == UpdateNotification::Scry;
             let title = if scry {
@@ -2988,9 +2998,9 @@ impl ListDelegate for ResultListDelegate {
                     Some(subtitle),
                     None,
                     if scry {
-                        self.scry_icon.clone()
+                        self.builtin_row_icons[2].clone()
                     } else {
-                        self.update_icon.clone()
+                        self.builtin_row_icons[1].clone()
                     },
                     self.notification_selected && self.selected_index == Some(ix),
                     false,
@@ -3006,21 +3016,30 @@ impl ListDelegate for ResultListDelegate {
             );
         }
         let icon = if matches!(item.action, CommandAction::CheckForUpdates) {
-            self.update_icon.clone()
+            self.builtin_row_icons[1].clone()
         } else if is_hayai_action(&item.action) {
-            self.brand_icon.clone()
+            self.builtin_row_icons[0].clone()
         } else {
             match &item.icon {
                 IconSource::Path(path) => {
                     let mut catalog = self.catalog.borrow_mut();
-                    match catalog.request_icon(path, |image| {
-                        let _ = _window.drop_image(image);
-                    }) {
+                    match catalog.request_icon(
+                        path,
+                        row_icon_pixels(_window.scale_factor()),
+                        |image| {
+                            let _ = _window.drop_image(image);
+                        },
+                    ) {
                         IconRequest::Ready(icon) => icon,
                         IconRequest::Loading => None,
                         IconRequest::Load(path) => {
                             drop(catalog);
-                            spawn_icon_load(path, self.catalog.clone(), cx);
+                            spawn_icon_load(
+                                path,
+                                row_icon_pixels(_window.scale_factor()),
+                                self.catalog.clone(),
+                                cx,
+                            );
                             None
                         }
                     }
@@ -3028,6 +3047,7 @@ impl ListDelegate for ResultListDelegate {
                 IconSource::None => None,
             }
         };
+        self.prefetch_icons_near(self.flat_index(ix), _window, cx);
         let selected = self.selected_index == Some(ix);
         // Only `CalcProvider` produces `CopyToClipboard` today, so this
         // doubles as "is this a calculator result" without adding a field
@@ -3307,25 +3327,61 @@ impl ListDelegate for ResultListDelegate {
     }
 }
 
+fn icon_neighborhood(row: usize, count: usize, radius: usize) -> std::ops::Range<usize> {
+    row.saturating_sub(radius).min(count)..row.saturating_add(radius).saturating_add(1).min(count)
+}
+
+fn row_icon_pixels(scale: f32) -> u32 {
+    // Exact-size filtering followed by fractional-DPI GPU sampling softened
+    // small glyphs. Keep 25% sampling headroom, capped at the shell's 48px
+    // source, to preserve detail without retaining oversized rasters.
+    (22.0 * scale * 1.25).ceil().clamp(1.0, 48.0) as u32
+}
+
+pub(crate) fn prepare_row_icon(icon: native::IconImage, pixels: u32) -> Option<Arc<RenderImage>> {
+    let buffer = image::RgbaImage::from_raw(icon.width, icon.height, icon.bgra)?;
+    // The GPU uses bilinear sampling without mipmaps. Prefilter on the worker
+    // before upload so minifying a 48px source does not skip fine icon details.
+    // Lanczos preserves small edges better than the previous box average, which
+    // visibly softened app glyphs at low/fractional DPI.
+    // Preserve undersized sources rather than allocating an upscaled bitmap.
+    let buffer = if buffer.width() > pixels || buffer.height() > pixels {
+        let ratio = pixels as f64 / buffer.width().max(buffer.height()) as f64;
+        let width = (buffer.width() as f64 * ratio).round().max(1.0) as u32;
+        let height = (buffer.height() as f64 * ratio).round().max(1.0) as u32;
+        image::imageops::resize(
+            &buffer,
+            width,
+            height,
+            image::imageops::FilterType::Lanczos3,
+        )
+    } else {
+        buffer
+    };
+    Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
+}
+
 /// Decode `path`'s icon on the background thread pool, then hand the result
 /// back to the catalog and repaint. GDI/COM icon extraction is too slow to do
 /// synchronously in the render path (it blocks keystrokes).
 fn spawn_icon_load(
     path: PathBuf,
+    pixel_size: u32,
     catalog: Rc<RefCell<Catalog>>,
     cx: &mut Context<ListState<ResultListDelegate>>,
 ) {
     cx.spawn(async move |list, cx| {
         let decode_path = path.clone();
         let rendered = cx
-            .background_spawn(async move { native::extract_icon_rgba(&decode_path) })
-            .await
-            .and_then(|icon| {
-                let buffer = image::RgbaImage::from_raw(icon.width, icon.height, icon.bgra)?;
-                Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
-            });
+            .background_spawn(async move {
+                native::extract_icon_rgba(&decode_path)
+                    .and_then(|icon| prepare_row_icon(icon, pixel_size))
+            })
+            .await;
 
-        catalog.borrow_mut().set_icon_ready(path, rendered);
+        catalog
+            .borrow_mut()
+            .set_icon_ready(path, pixel_size, rendered);
         let _ = list.update(cx, |_, cx| cx.notify());
     })
     .detach();
@@ -3744,6 +3800,49 @@ mod tests {
     use super::{format_expression_for_display, format_result_for_display};
 
     #[test]
+    fn icon_warm_region_stays_bounded_at_result_edges() {
+        assert_eq!(super::icon_neighborhood(0, 1000, 32), 0..33);
+        assert_eq!(super::icon_neighborhood(500, 1000, 32), 468..533);
+        assert_eq!(super::icon_neighborhood(999, 1000, 32), 967..1000);
+        assert_eq!(super::icon_neighborhood(0, 0, 32), 0..0);
+        assert_eq!(super::icon_neighborhood(usize::MAX, 10, 32), 10..10);
+    }
+
+    #[test]
+    fn row_icon_prefilter_averages_fine_details_at_physical_size() {
+        assert_eq!(super::row_icon_pixels(1.0), 28);
+        assert_eq!(super::row_icon_pixels(1.25), 35);
+        assert_eq!(super::row_icon_pixels(1.5), 42);
+        assert_eq!(super::row_icon_pixels(2.0), 48);
+        let mut bgra = Vec::new();
+        for y in 0..44 {
+            for x in 0..44 {
+                let value = if (x + y) % 2 == 0 { 0 } else { 255 };
+                bgra.extend_from_slice(&[value, value, value, 255]);
+            }
+        }
+        let icon = super::prepare_row_icon(
+            crate::native::IconImage {
+                width: 44,
+                height: 44,
+                bgra,
+            },
+            22,
+        )
+        .unwrap();
+        assert_eq!(icon.size(0).width.0, 22);
+        assert_eq!(icon.size(0).height.0, 22);
+        let bytes = icon.as_bytes(0).unwrap();
+        for y in 3..19 {
+            for x in 3..19 {
+                let pixel = &bytes[(y * 22 + x) * 4..][..4];
+                assert!((127..=128).contains(&pixel[0]));
+                assert_eq!(pixel[3], 255);
+            }
+        }
+    }
+
+    #[test]
     fn empty_results_keep_a_valid_measurement_section_when_search_is_cleared() {
         for (main, total, section) in [(0, 0, 1), (5, 5, 1), (0, 2, 2), (5, 7, 1)] {
             assert_eq!(super::result_index_path(0, main, total).section, section);
@@ -3828,11 +3927,12 @@ mod tests {
     }
 
     #[test]
-    fn notification_svg_renders_without_a_bitmap_asset() {
-        let renderer = gpui::SvgRenderer::new(std::sync::Arc::new(crate::LauncherAssets));
-        let icon = super::render_update_icon(&renderer, 1.25).expect("render update SVG");
-        assert_eq!(icon.size(0).width.0, 140);
-        assert_eq!(icon.size(0).height.0, 140);
+    fn embedded_notification_icon_decodes_without_svg_work() {
+        let icon = super::load_builtin_icon(include_bytes!("../assets/icons/update.png"))
+            .expect("decode baked update icon");
+        assert_eq!(super::HAYAI_ROW_ICON_SIZE, 22.0);
+        assert_eq!(icon.size(0).width.0, 128);
+        assert_eq!(icon.size(0).height.0, 128);
         assert!(
             icon.as_bytes(0)
                 .unwrap()
@@ -3868,20 +3968,20 @@ mod tests {
     }
 
     #[test]
-    fn scry_setup_icon_renders_at_display_resolution() {
-        let renderer = gpui::SvgRenderer::new(std::sync::Arc::new(crate::LauncherAssets));
-        for (scale, expected) in [(1.0, 112), (1.25, 140), (2.0, 224)] {
-            let icon = super::render_scry_setup_icon(&renderer, scale).expect("render Scry vector");
-            assert_eq!(icon.size(0).width.0, expected);
-            assert_eq!(icon.size(0).height.0, expected);
-            assert!(
-                icon.as_bytes(0)
-                    .unwrap()
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .any(|pixel| pixel[3] != 0)
-            );
+    fn baked_builtin_icons_have_separate_row_and_detail_sizes() {
+        for bytes in [
+            include_bytes!("../assets/hayai.png").as_slice(),
+            include_bytes!("../assets/icons/update.png").as_slice(),
+            include_bytes!("../assets/icons/scry.png").as_slice(),
+        ] {
+            let source = super::load_builtin_icon(bytes).expect("decode baked icon");
+            for scale in [1.0, 1.25, 1.5, 2.0] {
+                let pixels = super::row_icon_pixels(scale);
+                let row = super::builtin_row_icon(&Some(source.clone()), pixels).unwrap();
+                assert_eq!(row.size(0).width.0, pixels as i32);
+                assert_eq!(row.size(0).height.0, pixels as i32);
+            }
+            assert_eq!(source.size(0).width.0, 128);
         }
     }
 
