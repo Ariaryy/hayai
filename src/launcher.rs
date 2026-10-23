@@ -726,6 +726,7 @@ fn can_run_as_admin(path: &std::path::Path) -> bool {
 
 struct WheelAnimation {
     motion: crate::scroll::SmoothScroll,
+    direction: f32,
     last_frame: std::time::Instant,
     results_generation: u64,
 }
@@ -784,12 +785,33 @@ impl LauncherRoot {
             return;
         }
         let list = self.list.read(cx);
-        let handle = list.scroll_handle();
+        let handle = list.scroll_handle().clone();
         let current = f32::from(handle.offset().y);
         let max_offset = f32::from(handle.max_offset().y);
         let generation = list.delegate().results_generation;
+        let delta_y = f32::from(delta.y);
+        // Do not keep even a zero-distance animation alive against an edge.
+        // Clamp the displayed offset and discard target/timing state immediately
+        // so the next inward tick starts fresh rather than reusing a wheel burst.
+        let edge = if current >= -0.25 && delta_y > 0.0 {
+            Some(0.0)
+        } else if current <= -max_offset + 0.25 && delta_y < 0.0 {
+            Some(-max_offset)
+        } else {
+            None
+        };
+        if let Some(edge) = edge {
+            self.cancel_wheel_animation();
+            let mut offset = handle.offset();
+            offset.y = px(edge);
+            handle.set_offset(offset);
+            self.list.update(cx, |_, cx| cx.notify());
+            cx.stop_propagation();
+            return;
+        }
         if self.wheel_animation.as_ref().is_some_and(|animation| {
             animation.results_generation != generation
+                || animation.direction * delta_y < 0.0
                 || (animation.motion.position - current).abs() > 0.5
         }) {
             self.cancel_wheel_animation();
@@ -797,10 +819,13 @@ impl LauncherRoot {
         let start = self.wheel_animation.is_none();
         let animation = self.wheel_animation.get_or_insert_with(|| WheelAnimation {
             motion: crate::scroll::SmoothScroll::new(current),
+            direction: delta_y.signum(),
             last_frame: std::time::Instant::now(),
             results_generation: generation,
         });
-        animation.motion.push(f32::from(delta.y), max_offset);
+        // Reversal above rebases both position and elapsed time on the visible
+        // offset. Old frame time must not be applied to a newly reversed target.
+        animation.motion.push(delta_y, max_offset);
         // Capture before the child's default bubble-phase scroll handler, or
         // every wheel tick would also jump the native scroll offset immediately.
         cx.stop_propagation();
@@ -4020,6 +4045,101 @@ mod tests {
                             );
                         })
                         .unwrap();
+                    for (at_top, inward) in [(true, -3.0), (false, 3.0)] {
+                        window
+                            .update(cx, |_, window, cx| {
+                                let position =
+                                    root.read(cx).list.read(cx).scroll_handle().bounds().origin
+                                        + gpui::point(px(12.0), px(12.0));
+                                window.dispatch_event(
+                                    gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                                        position,
+                                        delta: gpui::ScrollDelta::Lines(gpui::point(
+                                            0.0,
+                                            if at_top { 1000.0 } else { -1000.0 },
+                                        )),
+                                        ..Default::default()
+                                    }),
+                                    cx,
+                                );
+                            })
+                            .unwrap();
+                        cx.background_executor()
+                            .timer(Duration::from_millis(500))
+                            .await;
+                        let mut previous = window
+                            .update(cx, |_, window, cx| {
+                                let handle = root.read(cx).list.read(cx).scroll_handle().clone();
+                                let edge = if at_top {
+                                    0.0
+                                } else {
+                                    -f32::from(handle.max_offset().y)
+                                };
+                                assert!(
+                                    (f32::from(handle.offset().y) - edge).abs() <= 0.25,
+                                    "forceful scroll must reach the boundary"
+                                );
+                                let position =
+                                    handle.bounds().origin + gpui::point(px(12.0), px(12.0));
+                                for _ in 0..20 {
+                                    window.dispatch_event(
+                                        gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                                            position,
+                                            delta: gpui::ScrollDelta::Lines(gpui::point(
+                                                0.0,
+                                                if at_top { 1000.0 } else { -1000.0 },
+                                            )),
+                                            ..Default::default()
+                                        }),
+                                        cx,
+                                    );
+                                    assert!(
+                                        root.read(cx).wheel_animation.is_none(),
+                                        "outward boundary input must discard pending motion"
+                                    );
+                                }
+                                window.dispatch_event(
+                                    gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                                        position,
+                                        delta: gpui::ScrollDelta::Lines(gpui::point(0.0, inward)),
+                                        ..Default::default()
+                                    }),
+                                    cx,
+                                );
+                                f32::from(handle.offset().y)
+                            })
+                            .unwrap();
+                        let boundary = previous;
+                        // Every sampled frame must move away from the edge:
+                        // no old target may pull the viewport back towards it.
+                        for _ in 0..20 {
+                            cx.background_executor()
+                                .timer(Duration::from_millis(16))
+                                .await;
+                            let current = window
+                                .update(cx, |_, _, cx| {
+                                    f32::from(
+                                        root.read(cx).list.read(cx).scroll_handle().offset().y,
+                                    )
+                                })
+                                .unwrap();
+                            if at_top {
+                                assert!(current <= previous + 0.01, "bounced towards top");
+                            } else {
+                                assert!(current >= previous - 0.01, "bounced towards bottom");
+                            }
+                            previous = current;
+                        }
+                        assert!(
+                            (previous - boundary) * inward > 0.25,
+                            "inward wheel input must move away from the edge"
+                        );
+                        window
+                            .update(cx, |_, _, cx| {
+                                assert!(root.read(cx).wheel_animation.is_none())
+                            })
+                            .unwrap();
+                    }
                     eprintln!("{SUCCESS}");
                     cx.update(|cx| cx.quit());
                 })
