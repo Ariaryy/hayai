@@ -15,7 +15,7 @@
 
 <p><sub>Native · Rust &amp; GPUI</sub></p>
 
-<img src="assets/hayai-showcase.png" alt="Hayai's dark launcher showing application results, a search field, and keyboard shortcuts for commands and contextual actions" width="960">
+<img src="docs/images/hayai-showcase.png" alt="Hayai's dark launcher showing application results, a search field, and keyboard shortcuts for commands and contextual actions" width="960">
 
 </div>
 
