@@ -3660,11 +3660,20 @@ impl ResultRow {
                                     .child(div().w(px(1.0)).flex_1().bg(conversion_color))
                                     .child(
                                         div()
-                                            .px_1()
-                                            .text_lg()
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .text_color(conversion_color)
-                                            .child("→"),
+                                            // A fixed SVG slot avoids font-baseline offsets;
+                                            // equal flex rules above/below keep its gaps symmetric.
+                                            .size(px(28.0))
+                                            .flex_none()
+                                            .flex()
+                                            .items_center()
+                                            .justify_center()
+                                            .child(
+                                                gpui::svg()
+                                                    .path("icons/arrow-right.svg")
+                                                    .size(px(20.0))
+                                                    .flex_none()
+                                                    .text_color(conversion_color),
+                                            ),
                                     )
                                     .when_some(note, |center, label| {
                                         center.child(

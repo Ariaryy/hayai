@@ -28,6 +28,7 @@ impl gpui::AssetSource for LauncherAssets {
     fn load(&self, path: &str) -> anyhow::Result<Option<std::borrow::Cow<'static, [u8]>>> {
         let bytes: Option<&'static [u8]> = match path {
             "icons/enter.svg" => Some(include_bytes!("../assets/icons/enter.svg")),
+            "icons/arrow-right.svg" => Some(include_bytes!("../assets/icons/arrow-right.svg")),
             "icons/update.svg" => Some(include_bytes!("../assets/icons/update.svg")),
             "icons/spinner.svg" => Some(include_bytes!("../assets/icons/spinner.svg")),
             "icons/scry.svg" => Some(include_bytes!("../assets/icons/scry.svg")),
@@ -44,6 +45,7 @@ impl gpui::AssetSource for LauncherAssets {
     fn list(&self, path: &str) -> anyhow::Result<Vec<gpui::SharedString>> {
         Ok([
             "icons/enter.svg",
+            "icons/arrow-right.svg",
             "icons/update.svg",
             "icons/spinner.svg",
             "icons/scry.svg",
