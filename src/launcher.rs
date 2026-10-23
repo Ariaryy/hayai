@@ -1026,6 +1026,7 @@ impl LauncherRoot {
                 CommandAction::CopyToClipboard(_)
                 | CommandAction::ShowText(_)
                 | CommandAction::EmptyState
+                | CommandAction::PendingState
                 | CommandAction::InstallFileSearch
                 | CommandAction::StartFileSearch
                 | CommandAction::UpdateFileSearch
@@ -1656,7 +1657,7 @@ impl LauncherRoot {
             Some(CommandAction::OpenFile(path)) if path.is_dir() => "Open Folder",
             Some(CommandAction::OpenFile(_)) => "Open File",
             Some(CommandAction::ShowText(_)) => "Show",
-            Some(CommandAction::EmptyState) => "",
+            Some(CommandAction::EmptyState | CommandAction::PendingState) => "",
             Some(CommandAction::InstallFileSearch) => "Install",
             Some(CommandAction::StartFileSearch) => "Start",
             Some(CommandAction::UpdateFileSearch) => "Update Scry Search",
@@ -2661,9 +2662,19 @@ impl ResultListDelegate {
 fn take_empty_state(items: &mut Vec<CommandItem>) -> Option<CommandItem> {
     let notice = items
         .iter()
-        .position(|item| matches!(item.action, CommandAction::EmptyState))
+        .position(|item| {
+            matches!(
+                item.action,
+                CommandAction::EmptyState | CommandAction::PendingState
+            )
+        })
         .map(|index| items.remove(index));
-    items.retain(|item| !matches!(item.action, CommandAction::EmptyState));
+    items.retain(|item| {
+        !matches!(
+            item.action,
+            CommandAction::EmptyState | CommandAction::PendingState
+        )
+    });
     if items.is_empty() { notice } else { None }
 }
 
@@ -2881,11 +2892,17 @@ impl ListDelegate for ResultListDelegate {
             .when(!self.search_pending, |view| {
                 view.child(
                     gpui::svg()
-                        .path(if self.empty_state.is_some() {
-                            "icons/calculator-invalid.svg"
-                        } else {
-                            "icons/search-empty.svg"
-                        })
+                        .path(
+                            if self.empty_state.as_ref().is_some_and(|notice| {
+                                matches!(notice.action, CommandAction::PendingState)
+                            }) {
+                                "icons/calculator.svg"
+                            } else if self.empty_state.is_some() {
+                                "icons/calculator-invalid.svg"
+                            } else {
+                                "icons/search-empty.svg"
+                            },
+                        )
                         .size(px(40.0))
                         .flex_none()
                         .text_color(cx.theme().muted_foreground.opacity(0.65)),
@@ -3258,7 +3275,11 @@ impl ListDelegate for ResultListDelegate {
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
                 LauncherState::dismiss(window, cx);
             }
-            Some(CommandAction::ShowText(_) | CommandAction::EmptyState) => {
+            Some(
+                CommandAction::ShowText(_)
+                | CommandAction::EmptyState
+                | CommandAction::PendingState,
+            ) => {
                 // Stays on screen; no-op.
             }
             Some(CommandAction::InstallFileSearch) => {

@@ -25,6 +25,8 @@ pub enum CommandAction {
     /// A presentation notice consumed before result indexing. It is never a
     /// selectable or executable result; title/subtitle describe the empty view.
     EmptyState,
+    /// An unfinished calculation without a complete prefix yet.
+    PendingState,
     #[allow(dead_code)]
     InstallFileSearch,
     #[allow(dead_code)]

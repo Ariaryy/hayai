@@ -85,6 +85,15 @@ INR`) use the same rate cache. Currency displays follow common zero-, two-,
 and three-decimal minor units and preserve nonzero amounts smaller than a
 minor unit.
 
+While typing, unfinished conversions (`1usd to `, `10 km to kilome`, `26 to
+he`), operators, and function arguments preview the complete part of the same
+query. The preview's value, conversion labels, and clipboard value all refer
+to that complete part. Completed valid units still win over guesses about
+partial names. Inputs without a complete value yet, such as `sqrt(` or `in 2
+ho`, show a neutral “keep typing” state. Completed invalid expressions still
+show the invalid-expression screen; a different query's old result is never
+reused.
+
 Calculations have input, nesting, output, and execution limits to keep the
 launcher responsive. Use `Space` → `=` for an explicit calculator request
 when automatic detection declines an expression.
