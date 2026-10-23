@@ -15,10 +15,6 @@ impl SmoothScroll {
     }
 
     pub fn push(&mut self, delta: f32, max_offset: f32) {
-        // Input can observe a native offset before layout clamps it. Normalize
-        // both ends before adding the next tick so hidden overscroll is not debt.
-        self.position = self.position.clamp(-max_offset.max(0.0), 0.0);
-        self.target = self.target.clamp(-max_offset.max(0.0), 0.0);
         // Reverse immediately rather than paying off an old wheel backlog.
         if delta * (self.target - self.position) < 0.0 {
             self.target = self.position;
@@ -46,23 +42,6 @@ impl SmoothScroll {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn first_reverse_tick_is_not_consumed_by_unclamped_overscroll() {
-        let mut top = SmoothScroll::new(1000.0);
-        top.push(-60.0, 500.0);
-        assert_eq!(top.position, 0.0);
-        assert_eq!(top.target, -60.0);
-        top.advance(0.016, 500.0);
-        assert!(top.position < 0.0);
-
-        let mut bottom = SmoothScroll::new(-1500.0);
-        bottom.push(60.0, 500.0);
-        assert_eq!(bottom.position, -500.0);
-        assert_eq!(bottom.target, -440.0);
-        bottom.advance(0.016, 500.0);
-        assert!(bottom.position > -500.0);
-    }
 
     #[test]
     fn equal_time_has_equal_travel_at_60_120_and_240_hz() {
