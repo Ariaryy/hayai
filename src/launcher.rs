@@ -733,6 +733,7 @@ struct WheelAnimation {
 struct LauncherRoot {
     wheel_animation: Option<WheelAnimation>,
     scroll_handoff: crate::scroll::ScrollHandoff,
+    keyboard_heading: Option<(IndexPath, u64)>,
     menu_request: u64,
     list: Entity<ListState<ResultListDelegate>>,
     search_input: Entity<InputState>,
@@ -770,6 +771,7 @@ impl LauncherRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.keyboard_heading = None;
         if self.action_menu.is_some() {
             self.cancel_wheel_animation();
             return;
@@ -930,6 +932,7 @@ impl LauncherRoot {
         Self {
             wheel_animation: None,
             scroll_handoff: Default::default(),
+            keyboard_heading: None,
             menu_request: 0,
             list,
             search_input,
@@ -1458,7 +1461,7 @@ impl LauncherRoot {
         if self.action_menu.take().is_some() {
             cx.notify();
         }
-        self.list.update(cx, |list, cx| {
+        self.keyboard_heading = self.list.update(cx, |list, cx| {
             let count = list.delegate().results.len();
             if list.delegate().notification_visible() {
                 let notices = list.delegate().notification_count();
@@ -1487,10 +1490,13 @@ impl LauncherRoot {
                 list.delegate_mut().notification_selected = next < notices;
                 list.scroll_to_selected_item(window, cx);
                 cx.notify();
-                return;
+                return list
+                    .selected_index()
+                    .filter(|ix| ix.row == 0)
+                    .map(|ix| (ix, list.delegate().results_generation));
             }
             if count == 0 {
-                return;
+                return None;
             }
             let current = list
                 .selected_index()
@@ -1500,7 +1506,27 @@ impl LauncherRoot {
             let ix = list.delegate().index_path(next);
             list.set_selected_index(Some(ix), window, cx);
             list.scroll_to_selected_item(window, cx);
+            (ix.row == 0).then_some((ix, list.delegate().results_generation))
         });
+    }
+
+    fn reveal_keyboard_heading(&mut self, cx: &mut Context<Self>) {
+        let Some((selected, generation)) = self.keyboard_heading.take() else {
+            return;
+        };
+        let list = self.list.read(cx);
+        if list.selected_index() != Some(selected)
+            || list.delegate().results_generation != generation
+        {
+            return;
+        }
+        // The pinned List includes a header and footer entry for each nonempty
+        // section, including zero-height footers. Target the header, not row 0.
+        let header = section_header_entry(
+            (0..selected.section).map(|section| list.delegate().items_count(section, cx)),
+        );
+        list.scroll_handle()
+            .scroll_to_item(header, gpui::ScrollStrategy::Top);
     }
 
     fn on_move_up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
@@ -1523,7 +1549,9 @@ impl LauncherRoot {
                     .is_some_and(|ix| ix.row == 0)
                 && self.search_input.read(cx).value().is_empty()
             {
-                self.recall_history(1, window, cx);
+                if !self.recall_history(1, window, cx) {
+                    self.move_selection(0, window, cx);
+                }
                 return;
             }
             self.move_selection(-1, window, cx);
@@ -1543,7 +1571,9 @@ impl LauncherRoot {
             // row around to the last row and look like backwards nav).
             // Below the top result, Up should just move the selection up
             // like normal list navigation.
-            self.recall_history(1, window, cx);
+            if !self.recall_history(1, window, cx) {
+                self.move_selection(0, window, cx);
+            }
             return;
         }
         self.move_selection(-1, window, cx);
@@ -2118,7 +2148,12 @@ impl gpui::Render for LauncherRoot {
                 div().relative().flex_1().min_h_0().w_full().overflow_hidden()
                     .child({
                         let root = cx.entity().downgrade();
-                        gpui::canvas(|_, _, _| (), move |bounds, _, window, _| {
+                        let layout_root = root.clone();
+                        gpui::canvas(move |_, _, cx| {
+                            // Layout has queued List's selected-row scroll. Replace
+                            // it here so the section heading appears in this frame.
+                            let _ = layout_root.update(cx, |root, cx| root.reveal_keyboard_heading(cx));
+                        }, move |bounds, _, window, _| {
                             window.on_mouse_event(move |event: &gpui::ScrollWheelEvent, phase, window, cx| {
                                 if phase == gpui::DispatchPhase::Capture && bounds.contains(&event.position) {
                                     let _ = root.update(cx, |root, cx| root.on_result_wheel(event, window, cx));
@@ -2311,6 +2346,13 @@ fn notification_kind(row: usize, hayai: bool, scry: bool) -> Option<UpdateNotifi
         (0, false, true) | (1, true, true) => Some(UpdateNotification::Scry),
         _ => None,
     }
+}
+
+fn section_header_entry(previous_sections: impl Iterator<Item = usize>) -> usize {
+    previous_sections
+        .filter(|count| *count > 0)
+        .map(|count| count + 2)
+        .sum()
 }
 
 fn result_index_path(flat: usize, main: usize, total: usize) -> IndexPath {
@@ -3935,6 +3977,15 @@ mod tests {
     /// separately: this briefly opens a native window and needs a Windows desktop.
     #[cfg(windows)]
     #[test]
+    fn keyboard_heading_entries_skip_empty_sections_and_include_headers() {
+        assert_eq!(super::section_header_entry([0].into_iter()), 0);
+        assert_eq!(super::section_header_entry([2].into_iter()), 4);
+        assert_eq!(super::section_header_entry([0, 10].into_iter()), 12);
+        assert_eq!(super::section_header_entry([2, 10].into_iter()), 16);
+        assert_eq!(super::section_header_entry([0, 0].into_iter()), 0);
+    }
+
+    #[test]
     #[ignore = "native GUI smoke: cargo test wheel_scroll_gui_smoke -- --ignored --test-threads=1"]
     fn wheel_scroll_gui_smoke() {
         use super::*;
@@ -4035,6 +4086,22 @@ mod tests {
                             );
                         })
                         .unwrap();
+                    window.update(cx, |_, window, cx| {
+                        root.update(cx, |root, cx| {
+                            for _ in 0..20 { root.move_selection(1, window, cx); }
+                        });
+                    }).unwrap();
+                    cx.background_executor().timer(Duration::from_millis(100)).await;
+                    window.update(cx, |_, window, cx| {
+                        assert!(root.read(cx).list.read(cx).scroll_handle().offset().y < px(0.0));
+                        root.update(cx, |root, cx| {
+                            for _ in 0..20 { root.move_selection(-1, window, cx); }
+                        });
+                    }).unwrap();
+                    cx.background_executor().timer(Duration::from_millis(100)).await;
+                    window.update(cx, |_, _, cx| {
+                        assert_eq!(root.read(cx).list.read(cx).scroll_handle().offset().y, px(0.0), "keyboard navigation back to the first row must reveal its section heading");
+                    }).unwrap();
                     window
                         .update(cx, |_, window, cx| {
                             let handle = root.read(cx).list.read(cx).scroll_handle().clone();
