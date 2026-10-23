@@ -1076,10 +1076,10 @@ impl LauncherRoot {
                     format!(
                         "=== Hayai ===\n{}\n=== Scry Search ===\n{}",
                         crate::updates::DIAGNOSTICS.snapshot(),
-                        crate::scry_updates::DIAGNOSTICS.snapshot()
+                        crate::scry_updates::diagnostic_snapshot()
                     )
                 } else if scry {
-                    crate::scry_updates::DIAGNOSTICS.snapshot()
+                    crate::scry_updates::diagnostic_snapshot()
                 } else {
                     crate::updates::DIAGNOSTICS.snapshot()
                 };
