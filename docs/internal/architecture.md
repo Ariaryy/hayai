@@ -26,15 +26,23 @@ Win32 runtime thread ── NativeCommand channel ── GPUI launcher window
   tray icon, shell integration, and the persistent Scry search worker.
 - `src/launcher.rs` owns launcher visibility, the search input, result list,
   keyboard routing, history, and contextual action panel.
-- `src/plugins.rs` routes queries across built-in `CommandProvider`s.
+- `src/commands.rs` defines result/action models and the `CommandProvider`
+  interface; `src/plugins.rs` routes queries across built-in providers.
 - `src/apps.rs` scans installed applications and lazily decodes icons on the
   background pool.
 - `src/files.rs` translates file mode into debounced Scry queries.
 - `src/calc/` classifies calculator intent and shares one bounded numeric
   engine across physical and currency conversions. See [calculator invariants](calculator.md).
+- `src/scroll.rs` contains pure wheel animation and input-handoff logic.
+- `src/updates.rs` and `src/scry_updates.rs` manage release discovery and update
+  state; `src/startup.rs` handles login registration through Velopack lifecycle
+  hooks.
 
 The native thread never accesses GPUI state directly. Expensive shell, icon,
 network, and file-search work must stay outside rendering and input callbacks.
+Native commands reach GPUI through a futures unbounded channel; the receiver
+wakes on messages rather than polling a timer. Background search completion is
+checked against the registry's current query generation before publishing.
 
 ## Window lifetime
 
@@ -43,9 +51,8 @@ the last GPUI window quits the process, which would break tray and hotkey
 behavior. Callers already inside a window update must use the supplied
 `&mut Window`; re-entering the same `WindowHandle::update` fails.
 
-These and other framework-specific constraints are maintained in `AGENTS.md`.
-Treat that file as the authoritative implementation guide for window focus,
-action propagation, `RefCell` borrowing, and native resource cleanup.
+For focus, reset/presentation ordering, action propagation, borrowing, and shell
+resource ownership, read [GPUI and Windows invariants](gpui-windows.md).
 
 ## Scry integration
 
@@ -58,12 +65,20 @@ search engine.
 
 ## Resource budget
 
-Hayai is intended to remain a small background utility. Before accepting a new
-runtime dependency or architectural cache, compare idle and active RSS with a
-release build. Prefer lazy work, bounded collections, existing background
-workers, and OS-maintained indexes. A latency improvement that materially
-increases idle CPU, memory, or background I/O needs measurements and an
-explicitly documented tradeoff.
+The performance contract and measurement requirements live in
+[AGENTS.md](../../AGENTS.md). The measurements below are historical observations,
+not a current memory ceiling or a substitute for measuring a new change.
+
+### GPUI migration (2026-07-03)
+
+The move from crates.io GPUI 0.2.2 to git-sourced GPUI and gpui-component was
+reported at roughly 40 MB before and 45–57 MB afterward in normal idle/active
+use. This was an accepted widget-maintenance tradeoff. The original record
+does not give a reproducible workload or separate idle/active samples, so use
+it as historical context rather than a current benchmark.
+
+Icon cache and DPI follow-up measurements, including their isolated-process
+and GPU limitations, are recorded in [icon cache memory](../icon-cache-memory.md).
 
 ### Calculator engine measurement (2026-08-29)
 
