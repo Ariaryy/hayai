@@ -40,6 +40,19 @@ behavior. Callers already inside a window update must use the supplied
 For focus, reset/presentation ordering, action propagation, borrowing, and shell
 resource ownership, read [GPUI and Windows invariants](gpui-windows.md).
 
+The launcher root owns transient input, navigation, and panel state. Its UI
+components are stateless render builders: they use the root's `Context` so
+keyboard actions and pointer callbacks keep the same focus and event routing.
+Window reuse and focus sequencing belong to `launcher/lifecycle.rs`, outside
+those components. Do not introduce extra entities or retained copies of provider
+results merely to compose a page.
+
+Provider registration remains explicit in startup; dispatch and query generation
+belong to `PluginRegistry`. A future feature toggle must invalidate pending work
+and reset the affected mode, rather than only hiding its UI. Theme application,
+UI copy, and embedded icon definitions live in `theme`, `ui_text`, and `assets`;
+changing a display label must not change navigation or action identity.
+
 ## Scry integration
 
 Hayai depends on `scry-client` through a locked, tagged Git dependency. Scry's

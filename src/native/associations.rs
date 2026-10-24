@@ -1,5 +1,14 @@
-use super::*;
+use super::shell::{com_release, com_vtbl_slot, extract_icon_by_index};
+use super::{open_with, wide_null};
 use crate::native::AssociatedApp;
+use std::ffi::c_void;
+use std::path::Path;
+use std::ptr::{null, null_mut};
+use std::thread;
+use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoTaskMemFree};
+use windows_sys::Win32::UI::Shell::Common::ITEMIDLIST;
+use windows_sys::Win32::UI::Shell::{ILFree, SHParseDisplayName};
+use windows_sys::core::{GUID, HRESULT};
 
 struct ComObject(*mut c_void);
 impl Drop for ComObject {

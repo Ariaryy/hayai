@@ -36,6 +36,9 @@ Fast input, low idle cost, and minimum retained memory are product requirements.
 
 ## Implementation guardrails
 
+- Keep launcher copy in `src/ui_text.rs`, embedded icon definitions in
+  `src/assets.rs`, and palette definitions in `src/theme.rs`. Use typed action
+  identities for behavior so editing display text cannot change navigation.
 - Keep the single launcher window alive in the tray: hide and reuse it.
   Use the supplied `&mut Window` inside window callbacks; use handle updates
   only outside an existing update of that window.
@@ -54,7 +57,7 @@ Fast input, low idle cost, and minimum retained memory are product requirements.
 | Change | Required reference |
 | --- | --- |
 | Window visibility/focus, input/actions, list layout, scrolling, themes, or shell icons | [GPUI and Windows invariants](docs/internal/gpui-windows.md) |
-| Threading, provider dispatch, background search, or Scry integration | [Architecture](docs/internal/architecture.md) |
+| UI composition, feature enable/disable, threading, provider dispatch, background search, or Scry integration | [Architecture](docs/internal/architecture.md) |
 | Calculator detection, parsing, previews, numeric output, FX, or timezones | [Calculator invariants](docs/internal/calculator.md) |
 | Icon cache sizing, prefetch, or DPI rendering | [Icon measurements and limitations](docs/icon-cache-memory.md), plus the GPUI reference above |
 | Version bumps, packaging, tags, or publication | [Release procedure](docs/internal/releasing.md) |

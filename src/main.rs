@@ -1,67 +1,31 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod apps;
+mod assets;
 mod calc;
 mod commands;
 mod files;
 mod launcher;
+mod links;
 mod native;
 mod plugins;
 mod scroll;
 mod scry;
 mod scry_updates;
 mod startup;
+mod theme;
+mod ui_text;
 mod updates;
 
 use apps::{AppsProvider, Catalog, CatalogGlobal};
 use calc::CalcProvider;
 use files::{FileRecentsGlobal, FileSearchProvider};
 use futures::StreamExt;
-use gpui::{App, rgb};
-use gpui_component::{Theme, ThemeMode, ThemeTokens};
+use gpui::App;
+use gpui_component::{Theme, ThemeMode};
 use launcher::{LauncherGlobal, LauncherState};
 use native::{NativeCommand, NativeRuntime};
 use plugins::{PluginRegistry, RegistryGlobal};
-
-struct LauncherAssets;
-
-impl gpui::AssetSource for LauncherAssets {
-    fn load(&self, path: &str) -> anyhow::Result<Option<std::borrow::Cow<'static, [u8]>>> {
-        let bytes: Option<&'static [u8]> = match path {
-            "icons/calculator.svg" => Some(include_bytes!("../assets/icons/calculator.svg")),
-            "icons/enter.svg" => Some(include_bytes!("../assets/icons/enter.svg")),
-            "icons/arrow-right.svg" => Some(include_bytes!("../assets/icons/arrow-right.svg")),
-            "icons/update.svg" => Some(include_bytes!("../assets/icons/update.svg")),
-            "icons/spinner.svg" => Some(include_bytes!("../assets/icons/spinner.svg")),
-            "icons/scry.svg" => Some(include_bytes!("../assets/icons/scry.svg")),
-            "icons/application.svg" => Some(include_bytes!("../assets/icons/application.svg")),
-            "icons/calculator-invalid.svg" => {
-                Some(include_bytes!("../assets/icons/calculator-invalid.svg"))
-            }
-            "icons/search-empty.svg" => Some(include_bytes!("../assets/icons/search-empty.svg")),
-            _ => None,
-        };
-        Ok(bytes.map(std::borrow::Cow::Borrowed))
-    }
-
-    fn list(&self, path: &str) -> anyhow::Result<Vec<gpui::SharedString>> {
-        Ok([
-            "icons/enter.svg",
-            "icons/calculator.svg",
-            "icons/arrow-right.svg",
-            "icons/update.svg",
-            "icons/spinner.svg",
-            "icons/scry.svg",
-            "icons/search-empty.svg",
-            "icons/calculator-invalid.svg",
-            "icons/application.svg",
-        ]
-        .into_iter()
-        .filter(|asset| asset.starts_with(path))
-        .map(Into::into)
-        .collect())
-    }
-}
 
 fn main() {
     // Register/remove the HKCU Run-key startup entry as part of Velopack's
@@ -86,12 +50,12 @@ fn main() {
     let native_runtime = NativeRuntime::start(native_tx);
 
     gpui_platform::application()
-        .with_assets(LauncherAssets)
+        .with_assets(assets::LauncherAssets)
         .run(move |cx: &mut App| {
             // Must be called before using any gpui-component features.
             gpui_component::init(cx);
             Theme::change(ThemeMode::Dark, None, cx);
-            apply_launcher_theme(cx);
+            theme::apply_launcher_theme(cx);
 
             LauncherState::install(cx);
             // Scan runs on the background pool (Catalog::install kicks it off);
@@ -109,30 +73,6 @@ fn main() {
 
             drive_native_commands(cx, native_rx, native_runtime);
         });
-}
-
-/// Override gpui-component's default (blue-accented) dark theme with a
-/// neutral grey palette — in particular, the selected-row highlight and its
-/// border both become the same grey so there's no blue outline on
-/// selection.
-fn apply_launcher_theme(cx: &mut App) {
-    let theme = Theme::global_mut(cx);
-
-    let surface = rgb(0x2f2f34).into();
-    theme.background = rgb(0x1c1c1e).into();
-    theme.foreground = rgb(0xf2f2f2).into();
-    theme.border = rgb(0x343437).into();
-    theme.muted_foreground = rgb(0x9a9a9e).into();
-    theme.accent = surface;
-    theme.list_active = surface;
-    theme.list_active_border = surface;
-    theme.list_hover = rgb(0x27272a).into();
-    theme.list.active_highlight = true;
-
-    // `tokens` is a derived snapshot of `colors` for hot paths (e.g. the
-    // ListItem hover fill reads `tokens.list_hover`, not `colors.list_hover`
-    // directly), so it must be regenerated after mutating colors above.
-    theme.tokens = ThemeTokens::from(&theme.colors);
 }
 
 fn drive_native_commands(
