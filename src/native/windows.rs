@@ -13,7 +13,9 @@ use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows_sys::Win32::Graphics::Dwm::{DWMWA_TRANSITIONS_FORCEDISABLED, DwmSetWindowAttribute};
+use windows_sys::Win32::Graphics::Dwm::{
+    DWMWA_TRANSITIONS_FORCEDISABLED, DwmFlush, DwmSetWindowAttribute,
+};
 use windows_sys::Win32::Graphics::Gdi::{
     BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC, GetDIBits,
     GetMonitorInfoW, GetObjectW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
@@ -274,6 +276,10 @@ pub fn hidden_launcher_frame_flush(window: &gpui::Window) -> impl FnOnce() + use
             // avoids re-entry and finishes the reset surface before SW_SHOW.
             unsafe {
                 SendMessageW(hwnd, 0x0400 + 5, 0, 0);
+                // Present(0) submits asynchronously. Do not expose DWM's old
+                // surface while the reset surface is still queued on the GPU.
+                // This is a compositor fence, not a guessed delay or retry loop.
+                DwmFlush();
             }
         }
     }

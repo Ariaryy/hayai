@@ -385,8 +385,23 @@ impl LauncherState {
                         // the reset frame actually rendered before SW_SHOW, rather
                         // than merely checking state after a later visible frame.
                         let view = state.borrow().view.clone().unwrap();
+                        let root = view.read(cx);
+                        let delegate = root.list.read(cx).delegate();
+                        assert!(!root.file_mode && !root.waiting_for_command);
+                        assert!(root.folder_scope.is_empty() && root.action_menu.is_none());
+                        assert!(root.search_input.read(cx).value().is_empty());
                         assert!(
-                            view.read(cx).keyboard_heading.is_none(),
+                            delegate.last_query.is_empty()
+                                && !delegate.file_search
+                                && delegate.apps_view
+                        );
+                        assert!(
+                            !delegate.show_about
+                                && !delegate.show_updates
+                                && !delegate.show_scry_updates
+                        );
+                        assert!(
+                            root.keyboard_heading.is_none(),
                             "reset prepaint must finish before showing the window"
                         );
                     })
@@ -4046,7 +4061,7 @@ mod tests {
         struct Rows;
         impl crate::commands::CommandProvider for Rows {
             fn namespace(&self) -> &'static str {
-                "smoke"
+                "apps"
             }
             fn search(&self, _: &str) -> Vec<CommandItem> {
                 (0..200)
@@ -4062,6 +4077,27 @@ mod tests {
                     .collect()
             }
         }
+        struct Files;
+        impl crate::commands::CommandProvider for Files {
+            fn namespace(&self) -> &'static str {
+                "files"
+            }
+            fn keyword(&self) -> Option<&'static str> {
+                Some("f")
+            }
+            fn wants_debounce(&self) -> bool {
+                true
+            }
+            fn search(&self, _: &str) -> Vec<CommandItem> {
+                Rows.search("")
+            }
+            fn background_search(&self, _: &str) -> Option<crate::commands::BackgroundSearch> {
+                Some(Box::new(|| {
+                    std::thread::sleep(Duration::from_millis(60));
+                    Rows.search("")
+                }))
+            }
+        }
         gpui_platform::application()
             .with_assets(crate::LauncherAssets)
             .run(move |cx| {
@@ -4072,6 +4108,8 @@ mod tests {
                 Catalog::install_test_catalog(cx);
                 let mut registry = PluginRegistry::new();
                 registry.register(Rows);
+                registry.register(Files);
+                registry.register(crate::calc::CalcProvider::new());
                 crate::plugins::RegistryGlobal::install(cx, registry);
                 launcher.borrow_mut().show(cx);
                 let window = launcher.borrow().window.unwrap();
@@ -4243,6 +4281,58 @@ mod tests {
                         assert_eq!(root.list.read(cx).scroll_handle().offset().y, px(0.0), "reopening must reveal the heading");
                         assert!(root.search_input.read(cx).value().is_empty());
                     }).unwrap();
+                    for (case, mode) in ["apps", "file", "pending_file", "calc", "about", "updates", "scry", "actions", "folder", "command"].into_iter().enumerate() {
+                        window.update(cx, |_, window, cx| {
+                            root.update(cx, |root, cx| {
+                                match mode {
+                                    "file" | "pending_file" | "folder" => {
+                                        root.enter_file_mode(" f report", window, cx);
+                                        if mode == "folder" { root.folder_scope.push(r"C:\Windows".into()); }
+                                    }
+                                    "calc" => {
+                                        let input = root.search_input.clone();
+                                        input.update(cx, |input, cx| input.set_value("2+2", window, cx));
+                                        root.on_search_event(&input, &InputEvent::Change, window, cx);
+                                        assert!(!root.list.read(cx).delegate().apps_view);
+                                    }
+                                    "about" | "updates" | "scry" => root.list.update(cx, |list, cx| {
+                                        let delegate = list.delegate_mut();
+                                        delegate.show_about = mode == "about";
+                                        delegate.show_updates = mode == "updates";
+                                        delegate.show_scry_updates = mode == "scry";
+                                        cx.notify();
+                                    }),
+                                    "actions" => { root.action_menu = root.selected_action_menu(cx); }
+                                    "command" => { root.waiting_for_command = true; }
+                                    _ => {}
+                                }
+                                cx.notify();
+                            });
+                        }).unwrap();
+                        // Include both completed file results and a job that
+                        // finishes after dismissal; no real daemon/IPC needed.
+                        cx.background_executor().timer(Duration::from_millis(if mode == "pending_file" { 15 } else { 100 })).await;
+                        if case % 3 == 0 {
+                            cx.update(|cx| launcher.borrow_mut().hide(cx));
+                        } else if case % 3 == 1 {
+                            window.update(cx, |_, window, cx| LauncherState::dismiss(window, cx)).unwrap();
+                        } else {
+                            window.update(cx, |_, window, cx| {
+                                root.update(cx, |root, cx| {
+                                    for _ in 0..5 { root.on_escape(&Escape, window, cx); }
+                                });
+                            }).unwrap();
+                        }
+                        cx.update(|cx| launcher.borrow_mut().show(cx));
+                        cx.background_executor().timer(Duration::from_millis(100)).await;
+                        window.update(cx, |_, _, cx| {
+                            let root = root.read(cx);
+                            let delegate = root.list.read(cx).delegate();
+                            assert!(delegate.last_query.is_empty(), "{mode}: stale completion changed query");
+                            assert!(!delegate.file_search && !root.file_mode, "{mode}: file mode survived reset");
+                            assert_eq!(root.list.read(cx).scroll_handle().offset().y, px(0.0), "{mode}: stale scroll offset");
+                        }).unwrap();
+                    }
                     eprintln!("{SUCCESS}");
                     cx.update(|cx| cx.quit());
                 })
