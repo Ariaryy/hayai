@@ -6,13 +6,17 @@ source of release artifacts and checksums.
 
 ## Prepare
 
-1. Choose an alpha-compatible semantic version, such as `0.1.0-alpha.1`.
+1. Choose the next semantic version, such as `0.1.1` for fixes after `0.1.0`.
 2. Update `package.version` in `Cargo.toml` and run `cargo check --locked` so
    `Cargo.lock` records the same Hayai version.
 3. If changing Scry, publish its release first, update the `scry-client` Git tag
    deliberately, refresh `Cargo.lock`, and verify file search against that
    released daemon.
-4. Update README status or user documentation for changed behavior.
+4. Keep `CHANGELOG.md`'s Unreleased section current as changes merge. Before
+   releasing, move those entries under `## <version> - YYYY-MM-DD` and leave an
+   empty Unreleased section for the next cycle. Check the entries against the
+   commits since the previous tag. Update README status or user documentation
+   for changed behavior.
 5. Run the contribution checks and the manual launcher checklist in
    `CONTRIBUTING.md`.
 6. Merge through a green pull request.
@@ -22,12 +26,19 @@ source of release artifacts and checksums.
 Tag the exact reviewed merge commit and push the tag:
 
 ```powershell
-git tag -a v0.1.0-alpha.1 -m "Hayai 0.1.0-alpha.1"
-git push origin v0.1.0-alpha.1
+git tag -a v0.1.1 -m "Hayai 0.1.1"
+git push origin v0.1.1
 ```
 
 The tag must equal `v` followed by the `Cargo.toml` version. The release
-workflow rejects a mismatch. It then:
+workflow rejects a mismatch, a missing or duplicate dated changelog entry, or
+an empty entry for that version. Preview the exact release notes locally with:
+
+```powershell
+./scripts/export-release-notes.ps1 -Version 0.1.1 -OutputPath release-notes.md
+```
+
+The workflow then:
 
 1. restores Rust build caches;
 2. installs the pinned Velopack CLI;
@@ -35,7 +46,7 @@ workflow rejects a mismatch. It then:
 4. downloads the independently built Scry package matching the locked tag;
 5. creates the Velopack installer and portable ZIP;
 6. publishes the versioned setup, portable archive, and checksum manifest;
-7. generates the release changelog from merged pull requests and commits.
+7. publishes the matching `CHANGELOG.md` entry as the GitHub release notes.
 
 The public artifacts use the tag in their names:
 

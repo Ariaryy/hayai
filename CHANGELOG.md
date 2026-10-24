@@ -1,6 +1,48 @@
 # Changelog
 
-## 0.1.0-alpha.3
+Changes are grouped by release. Unreleased changes have been merged but are not
+yet included in a published package.
+
+## Unreleased
+
+### Launcher
+
+- Smooth mouse-wheel scrolling follows display frames and stops animating when settled. Mouse input takes over an ongoing touchpad flick without waiting for its inertia to end.
+- Arrow-key navigation stops at the first and last result. Returning to the first row reveals its group heading.
+- Reopening resets the query, scroll position, folder scope, and action panels. The reset frame is rendered and synchronized with the Windows compositor before the window is shown, preventing the old view from flashing on reopen.
+- App and file icons use a bounded 128-entry cache, with evicted images also released from the renderer. Nearby icons are prefetched to reduce loading during scrolling.
+- DPI-aware icon sizing balances detail and sharpness at fractional Windows scaling. Notification icons use cached PNG artwork at the same row size as app icons.
+
+### Calculator
+
+- Shared parsing and evaluation make spacing, parentheses, unit case, and numeric precision consistent. Clipboard values retain precision independently of display rounding.
+- Currency calculations use one rate snapshot per calculation, support more currency codes and aliases, and recover from interrupted or failed rate refreshes.
+- Date and timezone calculations validate calendar dates and offsets, preserve seconds and day rollover, and distinguish calendar arithmetic from elapsed time across daylight-saving changes.
+- Unfinished calculations preview their complete prefix while typing, including partial conversion targets and function arguments. Empty starts show a neutral prompt; invalid completed expressions remain errors.
+- Conversion arrows render consistently as SVG artwork.
+
+### Updates and maintenance
+
+- Scry installation errors remain available after later update checks, including their diagnostic details.
+- CI reuses debug and release build caches from main.
+- Refreshed the README introduction and showcase screenshot.
+
+## 0.1.0 - 2026-10-22
+
+### Updates
+
+- Hayai checks for updates in the background and offers a restart action when an update is ready.
+- Updated Scry Search integration to `v0.1.1`, with compatibility checks and installation/update progress in notifications.
+- Release checks and temporary failures are cached, and update discovery stays out of the search path.
+- Notifications can be dismissed and their diagnostic logs copied through `Ctrl+K`.
+- Check for updates and About Hayai are searchable in the Hayai group.
+
+### File search
+
+- Preserve Scry's relevance ranking instead of reordering results locally.
+- Keep long filenames within their rows and clip scrolling to the results area.
+
+## 0.1.0-alpha.3 - 2026-10-21
 
 ### Launcher
 
@@ -20,4 +62,25 @@
 
 This is an early alpha. Scry installation requires elevation; app search and the calculator work without it.
 
-For earlier releases, see [GitHub Releases](https://github.com/Ariaryy/hayai/releases).
+## 0.1.0-alpha.2 - 2026-08-30
+
+### Calculator
+
+- Expanded arithmetic and unit expressions through `fend-core`.
+- Added relative-time calculations, timezone differences, dated city conversions, and conversion to the Windows system timezone when no destination is given.
+- Named places follow Windows daylight-saving rules; explicit timezone abbreviations retain fixed offsets.
+- Standardized calculator, currency, unit, and timezone presentation with badges and previews while typing.
+
+## 0.1.0-alpha.1 - 2026-08-12
+
+Initial published release.
+
+- Global `Alt+Space` launcher with fuzzy app search, Start Menu and Store app discovery, recent apps, and asynchronously loaded icons.
+- Scry Search file queries through a persistent daemon connection, with live refinement and elevated daemon setup when file search is enabled.
+- Calculator with arithmetic, unit and temperature conversions, live currency conversion, number bases, and time/date calculations.
+- Keyboard navigation and search history, plus contextual actions for apps and files through `Ctrl+K`.
+- Tray toggle and quit controls, focus-loss dismissal, and positioning on the cursor's monitor.
+- Windows installer and portable ZIP, bundled Scry daemon and CLI, launch-at-login registration, and download checksums.
+
+Published packages and their release notes are available on
+[GitHub Releases](https://github.com/Ariaryy/hayai/releases).

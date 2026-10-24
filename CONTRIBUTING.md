@@ -21,6 +21,12 @@ CI runs the same commands. Tests that do not depend on Win32 should remain
 cross-platform where practical, but release behavior must be verified on
 Windows.
 
+Add user-visible changes to the Unreleased section in `CHANGELOG.md` in the
+same pull request. Describe the resulting behavior; reserve implementation
+details and measurements for the PR description. Release preparation moves
+these entries into a dated version section, which supplies the published
+release notes (see [releasing](docs/internal/releasing.md)).
+
 ## Manual launcher checks
 
 For changes affecting the UI, native runtime, search providers, or packaging:

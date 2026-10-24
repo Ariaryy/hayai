@@ -8,6 +8,7 @@
 - [ ] `cargo clippy --locked --all-targets -- -D warnings`
 - [ ] `cargo test --locked`
 - [ ] Relevant manual launcher checks in `CONTRIBUTING.md`
+- [ ] User-visible changes added to `CHANGELOG.md` under Unreleased, or not applicable with a reason
 - [ ] No private filenames, search results, clipboard data, or credentials added
 
 ## Resource-budget impact
