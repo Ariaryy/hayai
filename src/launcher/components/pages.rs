@@ -1,4 +1,5 @@
 use super::*;
+use crate::links;
 
 pub(in crate::launcher) fn updates_page(
     delegate: &ResultListDelegate,
@@ -254,7 +255,7 @@ pub(in crate::launcher) fn about_page(
                     MouseButton::Left,
                     cx.listener(|_, _, window, cx| {
                         LauncherState::dismiss(window, cx);
-                        cx.open_url("https://github.com/Ariaryy/hayai");
+                        cx.open_url(links::PROJECT);
                     }),
                 )
                 .child(text::about::PROJECT_LINK),
@@ -336,9 +337,7 @@ pub(in crate::launcher) fn file_setup_page(
                     cx.listener(|_, _, window, cx| {
                         cx.stop_propagation();
                         LauncherState::dismiss(window, cx);
-                        cx.open_url(
-                            "https://github.com/Ariaryy/hayai/blob/main/docs/users/file-search.md",
-                        );
+                        cx.open_url(links::FILE_SEARCH_GUIDE);
                     }),
                 )
                 .child(text::search::LEARN_MORE),

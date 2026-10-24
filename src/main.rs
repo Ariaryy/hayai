@@ -6,6 +6,7 @@ mod calc;
 mod commands;
 mod files;
 mod launcher;
+mod links;
 mod native;
 mod plugins;
 mod scroll;
