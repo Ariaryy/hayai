@@ -5,6 +5,8 @@ yet included in a published package.
 
 ## Unreleased
 
+## 0.1.1 - 2026-10-24
+
 ### Launcher
 
 - Smooth mouse-wheel scrolling follows display frames and stops animating when settled. Mouse input takes over an ongoing touchpad flick without waiting for its inertia to end.
