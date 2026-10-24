@@ -13,6 +13,7 @@ use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows_sys::Win32::Graphics::Dwm::{DWMWA_TRANSITIONS_FORCEDISABLED, DwmSetWindowAttribute};
 use windows_sys::Win32::Graphics::Gdi::{
     BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC, GetDIBits,
     GetMonitorInfoW, GetObjectW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
@@ -132,8 +133,24 @@ fn hwnd_of(window: &gpui::Window) -> Option<HWND> {
 pub fn hide_launcher_window(window: &gpui::Window) {
     if let Some(hwnd) = hwnd_of(window) {
         unsafe {
+            disable_launcher_transitions(hwnd);
             ShowWindow(hwnd, SW_HIDE);
         }
+    }
+}
+
+unsafe fn disable_launcher_transitions(hwnd: HWND) {
+    // DWM's show/hide fade can retain the previous appearance independently of
+    // GPUI's reset and hidden Present. Disable only this window's transitions,
+    // before either visibility change; no compositor wait or timer is needed.
+    let disabled: i32 = 1;
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TRANSITIONS_FORCEDISABLED as u32,
+            (&disabled as *const i32).cast(),
+            std::mem::size_of_val(&disabled) as u32,
+        );
     }
 }
 
@@ -178,6 +195,7 @@ unsafe fn reposition_on_cursor_monitor(hwnd: HWND) {
 pub fn focus_launcher_window(window: &gpui::Window) {
     if let Some(hwnd) = hwnd_of(window) {
         unsafe {
+            disable_launcher_transitions(hwnd);
             // Strip WS_EX_APPWINDOW (taskbar entry) and add WS_EX_TOOLWINDOW (no taskbar).
             // Must happen before ShowWindow so the taskbar never sees the window.
             let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
