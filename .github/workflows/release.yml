@@ -37,6 +37,7 @@ jobs:
             throw "Tag $env:GITHUB_REF_NAME does not match Cargo.toml version $version"
           }
           "version=$version" >> $env:GITHUB_OUTPUT
+          ./scripts/export-release-notes.ps1 -Version $version -OutputPath release-notes.md
       - name: Install Velopack CLI
         shell: pwsh
         run: dotnet tool install --tool-path .tools vpk --version 0.0.1298
@@ -64,5 +65,5 @@ jobs:
         with:
           name: Hayai ${{ steps.release.outputs.version }}
           files: dist/release/*
-          generate_release_notes: true
+          body_path: release-notes.md
           prerelease: ${{ contains(github.ref_name, '-') }}
