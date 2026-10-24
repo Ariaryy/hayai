@@ -20,29 +20,15 @@ Win32 runtime thread ── NativeCommand channel ── GPUI launcher window
 
 ## Process and thread boundaries
 
-- `src/main.rs` starts GPUI, initializes the theme and global state, and bridges
-  commands from the native runtime into the event loop.
-- `src/native/windows.rs` owns the hidden Win32 message window, global hotkey,
-  tray icon, shell integration, and the persistent Scry search worker.
-- `src/launcher.rs` owns launcher visibility, the search input, result list,
-  keyboard routing, history, and contextual action panel.
-- `src/commands.rs` defines result/action models and the `CommandProvider`
-  interface; `src/plugins.rs` routes queries across built-in providers.
-- `src/apps.rs` scans installed applications and lazily decodes icons on the
-  background pool.
-- `src/files.rs` translates file mode into debounced Scry queries.
-- `src/calc/` classifies calculator intent and shares one bounded numeric
-  engine across physical and currency conversions. See [calculator invariants](calculator.md).
-- `src/scroll.rs` contains pure wheel animation and input-handoff logic.
-- `src/updates.rs` and `src/scry_updates.rs` manage release discovery and update
-  state; `src/startup.rs` handles login registration through Velopack lifecycle
-  hooks.
-
 The native thread never accesses GPUI state directly. Expensive shell, icon,
 network, and file-search work must stay outside rendering and input callbacks.
 Native commands reach GPUI through a futures unbounded channel; the receiver
 wakes on messages rather than polling a timer. Background search completion is
 checked against the registry's current query generation before publishing.
+
+Calculator detection and search share a bounded evaluation pipeline; its
+numeric, preview, and rate-lifecycle constraints are maintained in
+[calculator invariants](calculator.md).
 
 ## Window lifetime
 

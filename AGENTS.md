@@ -3,6 +3,20 @@
 Hayai is a Windows launcher built with Rust, GPUI, and gpui-component.
 Fast input, low idle cost, and minimum retained memory are product requirements.
 
+## Working defaults
+
+- Find the actual constraint, then choose the smallest correct solution.
+  Remove unnecessary complexity; add abstractions when the task needs them.
+- For behavior changes, account for affected entry points, query modes, input
+  devices, and reverse transitions. Verify entering and leaving a state,
+  including background work that can finish after leaving it.
+- Stop only test processes whose PIDs you captured when starting them.
+  Protect existing app instances and user data; isolate test state when needed.
+- Keep local implementation reasons beside the code. Internal docs should
+  explain durable decisions, constraints across components, or traps that
+  reading the source would not reveal. Rewrite stale guidance rather than
+  appending feature inventories or PR histories.
+
 ## Performance contract
 
 - Prefer lazy work, bounded caches, shared data, and OS-maintained indexes.
@@ -53,9 +67,11 @@ may describe a different API.
 ## Completion
 
 - Run the applicable checks in [CONTRIBUTING.md](CONTRIBUTING.md). For behavior
-  changes, cover the affected paths and report automated and manual results
-  separately. Window lifecycle changes need the reopen checks from the GPUI
-  reference; checking view state alone cannot verify the first visible frame.
+  bugs, first reproduce the failure with a focused regression test. For purely
+  visual bugs, use before/after captures instead of implementation-shaped tests;
+  motion and frame timing need video or frame evidence. Report automated and
+  manual results separately. Lifecycle changes also need the reopen checks in
+  the GPUI reference; view state alone cannot verify the first visible frame.
 - Add user-visible changes to `CHANGELOG.md` under Unreleased in the same PR.
 - Include resource measurements when the performance contract applies. If a
   required measurement or manual check is unavailable, state what remains
