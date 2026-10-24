@@ -37,12 +37,13 @@ use windows_sys::Win32::UI::Shell::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, AppendMenuW, BringWindowToTop, CreatePopupMenu, CreateWindowExW,
     DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GWL_EXSTYLE,
-    GetCursorPos, GetIconInfo, GetMessageW, GetWindowLongPtrW, GetWindowRect, HWND_MESSAGE,
-    HWND_TOPMOST, ICONINFO, LoadIconW, MF_STRING, MSG, PostMessageW, PostQuitMessage,
+    GetCursorPos, GetForegroundWindow, GetIconInfo, GetMessageW, GetWindowLongPtrW, GetWindowRect,
+    HWND_MESSAGE, HWND_TOPMOST, ICONINFO, LoadIconW, MF_STRING, MSG, PostMessageW, PostQuitMessage,
     RegisterClassW, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP, WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP,
-    WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
+    SWP_NOSIZE, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP, WM_DESTROY,
+    WM_HOTKEY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    WS_OVERLAPPED,
 };
 use windows_sys::core::{GUID, HRESULT, IUnknown_Vtbl};
 
@@ -237,6 +238,25 @@ pub fn render_hidden_launcher_frame(window: &gpui::Window) {
         const WM_GPUI_FORCE_UPDATE_WINDOW: u32 = 0x0400 + 5;
         unsafe {
             PostMessageW(hwnd, WM_GPUI_FORCE_UPDATE_WINDOW, 0, 0);
+        }
+    }
+}
+
+pub fn launcher_has_foreground(window: &gpui::Window) -> bool {
+    hwnd_of(window).is_some_and(|hwnd| unsafe { GetForegroundWindow() == hwnd })
+}
+
+/// Capture the HWND now, but invoke only after the GPUI window update unwinds.
+pub fn hidden_launcher_frame_flush(window: &gpui::Window) -> impl FnOnce() + use<> {
+    let hwnd = hwnd_of(window);
+    move || {
+        if let Some(hwnd) = hwnd {
+            // The pinned backend forces both drawing and presentation for this
+            // message, even when hidden. Sending outside WindowHandle::update
+            // avoids re-entry and finishes the reset surface before SW_SHOW.
+            unsafe {
+                SendMessageW(hwnd, 0x0400 + 5, 0, 0);
+            }
         }
     }
 }

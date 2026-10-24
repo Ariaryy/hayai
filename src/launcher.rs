@@ -355,38 +355,40 @@ impl LauncherState {
         let reset_view = self.reset_pending.then(|| self.view.clone()).flatten();
         self.reset_pending = false;
         if let (Some(handle), Some(search_input)) = (self.window, self.search_input.clone()) {
-            let shown = handle
-                .update(cx, |_, window, cx| {
-                    // Covers a hide/reopen pair drained in the same native poll
-                    // before the deferred hidden reset has had a chance to run.
+            // Rendering must run after the caller releases LauncherState's
+            // RefCell borrow: the root reads visibility during rendering.
+            self.visible = true;
+            cx.defer(move |cx| {
+                let state = cx.global::<LauncherGlobal>().clone_handle();
+                if !state.borrow().visible {
+                    return;
+                }
+                let flush = handle.update(cx, |_, window, cx| {
                     if let Some(view) = reset_view {
                         view.update(cx, |view, cx| view.reset_to_apps(window, cx));
                     }
                     window.refresh();
-                    // Reopening must be immediate. Never gate SW_SHOW on a
-                    // timer, frame callback, or compositor cloak; hidden-state
-                    // cleanup belongs to reset_after_hide, off the show path.
-                    // Win32 focus first (this re-shows the hidden window via SW_SHOW and
-                    // calls SetForegroundWindow etc.), then GPUI focus. Reversed order
-                    // (GPUI focus before Win32 focus) would have GPUI's WM_SETFOCUS
-                    // handler clobber our focus state.
+                    native::hidden_launcher_frame_flush(window)
+                });
+                let Ok(flush) = flush else {
+                    return;
+                };
+                // Present while hidden, outside the window/entity updates.
+                // Posting a paint alone can lose the race to SW_SHOW.
+                state.borrow_mut().visible = false;
+                flush();
+                let _ = handle.update(cx, |_, window, cx| {
+                    // Win32 focus must precede GPUI focus (WM_SETFOCUS).
                     if after_approval {
                         native::focus_launcher_after_approval(window);
                     } else {
                         native::focus_launcher_window(window);
                     }
                     search_input.update(cx, |input, cx| input.focus(window, cx));
-                })
-                .is_ok();
-            if shown {
-                self.visible = true;
-                return;
-            }
-
-            self.window = None;
-            self.list = None;
-            self.search_input = None;
-            self.view = None;
+                });
+                state.borrow_mut().visible = true;
+            });
+            return;
         }
 
         let bounds = Bounds::centered(None, size(px(LAUNCHER_WIDTH), px(LAUNCHER_HEIGHT)), cx);
@@ -442,7 +444,10 @@ impl LauncherState {
                     // re-enters this observer, so without the guard we'd recurse.
                     view.update(cx, |_view, cx| {
                         cx.observe_window_activation(window, |view, window, cx| {
-                            if window.is_window_active() {
+                            // Windows activation is delivered asynchronously; an old hide
+                            // event must not dismiss a window that already regained focus.
+                            if window.is_window_active() || native::launcher_has_foreground(window)
+                            {
                                 return;
                             }
                             view.action_menu = None;
@@ -1000,7 +1005,7 @@ impl LauncherRoot {
             input.set_value("", window, cx);
             input.set_placeholder("Search apps or calculate...", window, cx);
         });
-        self.list.update(cx, |list, cx| {
+        self.keyboard_heading = self.list.update(cx, |list, cx| {
             perform_search_and_select_first(list, "", window, cx);
             let first = if list.delegate().notification_visible() {
                 IndexPath::default()
@@ -1008,6 +1013,10 @@ impl LauncherRoot {
                 list.delegate().index_path(0)
             };
             list.scroll_to_item(first, gpui::ScrollStrategy::Top, window, cx);
+            let handle = list.scroll_handle();
+            handle.set_offset(gpui::point(px(0.0), px(0.0)));
+            handle.scroll_to_item(0, gpui::ScrollStrategy::Top);
+            Some((first, list.delegate().results_generation))
         });
         cx.notify();
     }
@@ -1473,7 +1482,7 @@ impl LauncherRoot {
                         .unwrap_or(0)
                 };
                 let next =
-                    (current as isize + delta).rem_euclid((count + notices) as isize) as usize;
+                    (current as isize + delta).clamp(0, (count + notices - 1) as isize) as usize;
                 list.set_selected_index(
                     Some(
                         next.checked_sub(notices)
@@ -1502,7 +1511,7 @@ impl LauncherRoot {
                 .selected_index()
                 .map(|ix| list.delegate().flat_index(ix) as isize)
                 .unwrap_or(-1);
-            let next = (current + delta).rem_euclid(count as isize) as usize;
+            let next = (current + delta).clamp(0, count as isize - 1) as usize;
             let ix = list.delegate().index_path(next);
             list.set_selected_index(Some(ix), window, cx);
             list.scroll_to_selected_item(window, cx);
@@ -4102,6 +4111,17 @@ mod tests {
                     window.update(cx, |_, _, cx| {
                         assert_eq!(root.read(cx).list.read(cx).scroll_handle().offset().y, px(0.0), "keyboard navigation back to the first row must reveal its section heading");
                     }).unwrap();
+                    window.update(cx, |_, window, cx| {
+                        root.update(cx, |root, cx| {
+                            root.move_selection(-1, window, cx);
+                            assert_eq!(root.list.read(cx).selected_index().unwrap().row, 0);
+                            for _ in 0..250 { root.move_selection(1, window, cx); }
+                            let last = root.list.read(cx).selected_index();
+                            root.move_selection(1, window, cx);
+                            assert_eq!(root.list.read(cx).selected_index(), last, "Down must stop at the last result");
+                        });
+                    }).unwrap();
+                    cx.background_executor().timer(Duration::from_millis(100)).await;
                     window
                         .update(cx, |_, window, cx| {
                             let handle = root.read(cx).list.read(cx).scroll_handle().clone();
@@ -4164,7 +4184,7 @@ mod tests {
                             let handle = root.read(cx).list.read(cx).scroll_handle().clone();
                             assert!(
                                 handle.offset().y < px(0.0),
-                                "mouse must move before old touchpad gesture ends"
+                                "mouse must move before old touchpad gesture ends: offset={:?}, max={:?}, rows={}, visible={}", handle.offset(), handle.max_offset(), root.read(cx).list.read(cx).delegate().results.len(), cx.global::<LauncherGlobal>().clone_handle().borrow().visible
                             );
                             assert!(
                                 root.read(cx).wheel_animation.is_none(),
@@ -4198,6 +4218,16 @@ mod tests {
                             );
                         })
                         .unwrap();
+                    cx.update(|cx| {
+                        launcher.borrow_mut().hide(cx);
+                        launcher.borrow_mut().show(cx);
+                    });
+                    cx.background_executor().timer(Duration::from_millis(100)).await;
+                    window.update(cx, |_, _, cx| {
+                        let root = root.read(cx);
+                        assert_eq!(root.list.read(cx).scroll_handle().offset().y, px(0.0), "reopening must reveal the heading");
+                        assert!(root.search_input.read(cx).value().is_empty());
+                    }).unwrap();
                     eprintln!("{SUCCESS}");
                     cx.update(|cx| cx.quit());
                 })
