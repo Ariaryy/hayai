@@ -355,11 +355,12 @@ impl LauncherState {
         let reset_view = self.reset_pending.then(|| self.view.clone()).flatten();
         self.reset_pending = false;
         if let (Some(handle), Some(search_input)) = (self.window, self.search_input.clone()) {
-            // Rendering must run after the caller releases LauncherState's
-            // RefCell borrow: the root reads visibility during rendering.
+            // The forced platform paint re-enters GPUI through AsyncApp. Run
+            // outside *all* App updates, not cx.defer (which retains the App
+            // borrow and makes the frame callback silently fail try_borrow_mut).
             self.visible = true;
-            cx.defer(move |cx| {
-                let state = cx.global::<LauncherGlobal>().clone_handle();
+            cx.spawn(async move |cx| {
+                let state = cx.update(|cx| cx.global::<LauncherGlobal>().clone_handle());
                 if !state.borrow().visible {
                     return;
                 }
@@ -373,21 +374,35 @@ impl LauncherState {
                 let Ok(flush) = flush else {
                     return;
                 };
-                // Present while hidden, outside the window/entity updates.
-                // Posting a paint alone can lose the race to SW_SHOW.
                 state.borrow_mut().visible = false;
+                // No App, Window, entity, or LauncherState borrow may cross this
+                // call: SendMessage synchronously invokes GPUI's frame callback.
                 flush();
+                #[cfg(test)]
+                handle
+                    .update(cx, |_, _, cx| {
+                        // The heading request is consumed during prepaint, proving
+                        // the reset frame actually rendered before SW_SHOW, rather
+                        // than merely checking state after a later visible frame.
+                        let view = state.borrow().view.clone().unwrap();
+                        assert!(
+                            view.read(cx).keyboard_heading.is_none(),
+                            "reset prepaint must finish before showing the window"
+                        );
+                    })
+                    .unwrap();
                 let _ = handle.update(cx, |_, window, cx| {
-                    // Win32 focus must precede GPUI focus (WM_SETFOCUS).
                     if after_approval {
                         native::focus_launcher_after_approval(window);
                     } else {
                         native::focus_launcher_window(window);
                     }
+                    // Win32 focus must precede GPUI focus (WM_SETFOCUS).
                     search_input.update(cx, |input, cx| input.focus(window, cx));
                 });
                 state.borrow_mut().visible = true;
-            });
+            })
+            .detach();
             return;
         }
 
