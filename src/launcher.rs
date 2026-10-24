@@ -355,38 +355,70 @@ impl LauncherState {
         let reset_view = self.reset_pending.then(|| self.view.clone()).flatten();
         self.reset_pending = false;
         if let (Some(handle), Some(search_input)) = (self.window, self.search_input.clone()) {
-            let shown = handle
-                .update(cx, |_, window, cx| {
-                    // Covers a hide/reopen pair drained in the same native poll
-                    // before the deferred hidden reset has had a chance to run.
+            // The forced platform paint re-enters GPUI through AsyncApp. Run
+            // outside *all* App updates, not cx.defer (which retains the App
+            // borrow and makes the frame callback silently fail try_borrow_mut).
+            self.visible = true;
+            cx.spawn(async move |cx| {
+                let state = cx.update(|cx| cx.global::<LauncherGlobal>().clone_handle());
+                if !state.borrow().visible {
+                    return;
+                }
+                let flush = handle.update(cx, |_, window, cx| {
                     if let Some(view) = reset_view {
                         view.update(cx, |view, cx| view.reset_to_apps(window, cx));
                     }
                     window.refresh();
-                    // Reopening must be immediate. Never gate SW_SHOW on a
-                    // timer, frame callback, or compositor cloak; hidden-state
-                    // cleanup belongs to reset_after_hide, off the show path.
-                    // Win32 focus first (this re-shows the hidden window via SW_SHOW and
-                    // calls SetForegroundWindow etc.), then GPUI focus. Reversed order
-                    // (GPUI focus before Win32 focus) would have GPUI's WM_SETFOCUS
-                    // handler clobber our focus state.
+                    native::hidden_launcher_frame_flush(window)
+                });
+                let Ok(flush) = flush else {
+                    return;
+                };
+                state.borrow_mut().visible = false;
+                // No App, Window, entity, or LauncherState borrow may cross this
+                // call: SendMessage synchronously invokes GPUI's frame callback.
+                flush();
+                #[cfg(test)]
+                handle
+                    .update(cx, |_, _, cx| {
+                        // The heading request is consumed during prepaint, proving
+                        // the reset frame actually rendered before SW_SHOW, rather
+                        // than merely checking state after a later visible frame.
+                        let view = state.borrow().view.clone().unwrap();
+                        let root = view.read(cx);
+                        let delegate = root.list.read(cx).delegate();
+                        assert!(!root.file_mode && !root.waiting_for_command);
+                        assert!(root.folder_scope.is_empty() && root.action_menu.is_none());
+                        assert!(root.search_input.read(cx).value().is_empty());
+                        assert!(
+                            delegate.last_query.is_empty()
+                                && !delegate.file_search
+                                && delegate.apps_view
+                        );
+                        assert!(
+                            !delegate.show_about
+                                && !delegate.show_updates
+                                && !delegate.show_scry_updates
+                        );
+                        assert!(
+                            root.keyboard_heading.is_none(),
+                            "reset prepaint must finish before showing the window"
+                        );
+                    })
+                    .unwrap();
+                let _ = handle.update(cx, |_, window, cx| {
                     if after_approval {
                         native::focus_launcher_after_approval(window);
                     } else {
                         native::focus_launcher_window(window);
                     }
+                    // Win32 focus must precede GPUI focus (WM_SETFOCUS).
                     search_input.update(cx, |input, cx| input.focus(window, cx));
-                })
-                .is_ok();
-            if shown {
-                self.visible = true;
-                return;
-            }
-
-            self.window = None;
-            self.list = None;
-            self.search_input = None;
-            self.view = None;
+                });
+                state.borrow_mut().visible = true;
+            })
+            .detach();
+            return;
         }
 
         let bounds = Bounds::centered(None, size(px(LAUNCHER_WIDTH), px(LAUNCHER_HEIGHT)), cx);
@@ -442,7 +474,10 @@ impl LauncherState {
                     // re-enters this observer, so without the guard we'd recurse.
                     view.update(cx, |_view, cx| {
                         cx.observe_window_activation(window, |view, window, cx| {
-                            if window.is_window_active() {
+                            // Windows activation is delivered asynchronously; an old hide
+                            // event must not dismiss a window that already regained focus.
+                            if window.is_window_active() || native::launcher_has_foreground(window)
+                            {
                                 return;
                             }
                             view.action_menu = None;
@@ -1000,7 +1035,7 @@ impl LauncherRoot {
             input.set_value("", window, cx);
             input.set_placeholder("Search apps or calculate...", window, cx);
         });
-        self.list.update(cx, |list, cx| {
+        self.keyboard_heading = self.list.update(cx, |list, cx| {
             perform_search_and_select_first(list, "", window, cx);
             let first = if list.delegate().notification_visible() {
                 IndexPath::default()
@@ -1008,6 +1043,10 @@ impl LauncherRoot {
                 list.delegate().index_path(0)
             };
             list.scroll_to_item(first, gpui::ScrollStrategy::Top, window, cx);
+            let handle = list.scroll_handle();
+            handle.set_offset(gpui::point(px(0.0), px(0.0)));
+            handle.scroll_to_item(0, gpui::ScrollStrategy::Top);
+            Some((first, list.delegate().results_generation))
         });
         cx.notify();
     }
@@ -1473,7 +1512,7 @@ impl LauncherRoot {
                         .unwrap_or(0)
                 };
                 let next =
-                    (current as isize + delta).rem_euclid((count + notices) as isize) as usize;
+                    (current as isize + delta).clamp(0, (count + notices - 1) as isize) as usize;
                 list.set_selected_index(
                     Some(
                         next.checked_sub(notices)
@@ -1502,7 +1541,7 @@ impl LauncherRoot {
                 .selected_index()
                 .map(|ix| list.delegate().flat_index(ix) as isize)
                 .unwrap_or(-1);
-            let next = (current + delta).rem_euclid(count as isize) as usize;
+            let next = (current + delta).clamp(0, count as isize - 1) as usize;
             let ix = list.delegate().index_path(next);
             list.set_selected_index(Some(ix), window, cx);
             list.scroll_to_selected_item(window, cx);
@@ -4022,7 +4061,7 @@ mod tests {
         struct Rows;
         impl crate::commands::CommandProvider for Rows {
             fn namespace(&self) -> &'static str {
-                "smoke"
+                "apps"
             }
             fn search(&self, _: &str) -> Vec<CommandItem> {
                 (0..200)
@@ -4038,6 +4077,27 @@ mod tests {
                     .collect()
             }
         }
+        struct Files;
+        impl crate::commands::CommandProvider for Files {
+            fn namespace(&self) -> &'static str {
+                "files"
+            }
+            fn keyword(&self) -> Option<&'static str> {
+                Some("f")
+            }
+            fn wants_debounce(&self) -> bool {
+                true
+            }
+            fn search(&self, _: &str) -> Vec<CommandItem> {
+                Rows.search("")
+            }
+            fn background_search(&self, _: &str) -> Option<crate::commands::BackgroundSearch> {
+                Some(Box::new(|| {
+                    std::thread::sleep(Duration::from_millis(60));
+                    Rows.search("")
+                }))
+            }
+        }
         gpui_platform::application()
             .with_assets(crate::LauncherAssets)
             .run(move |cx| {
@@ -4048,6 +4108,8 @@ mod tests {
                 Catalog::install_test_catalog(cx);
                 let mut registry = PluginRegistry::new();
                 registry.register(Rows);
+                registry.register(Files);
+                registry.register(crate::calc::CalcProvider::new());
                 crate::plugins::RegistryGlobal::install(cx, registry);
                 launcher.borrow_mut().show(cx);
                 let window = launcher.borrow().window.unwrap();
@@ -4102,6 +4164,17 @@ mod tests {
                     window.update(cx, |_, _, cx| {
                         assert_eq!(root.read(cx).list.read(cx).scroll_handle().offset().y, px(0.0), "keyboard navigation back to the first row must reveal its section heading");
                     }).unwrap();
+                    window.update(cx, |_, window, cx| {
+                        root.update(cx, |root, cx| {
+                            root.move_selection(-1, window, cx);
+                            assert_eq!(root.list.read(cx).selected_index().unwrap().row, 0);
+                            for _ in 0..250 { root.move_selection(1, window, cx); }
+                            let last = root.list.read(cx).selected_index();
+                            root.move_selection(1, window, cx);
+                            assert_eq!(root.list.read(cx).selected_index(), last, "Down must stop at the last result");
+                        });
+                    }).unwrap();
+                    cx.background_executor().timer(Duration::from_millis(100)).await;
                     window
                         .update(cx, |_, window, cx| {
                             let handle = root.read(cx).list.read(cx).scroll_handle().clone();
@@ -4164,7 +4237,7 @@ mod tests {
                             let handle = root.read(cx).list.read(cx).scroll_handle().clone();
                             assert!(
                                 handle.offset().y < px(0.0),
-                                "mouse must move before old touchpad gesture ends"
+                                "mouse must move before old touchpad gesture ends: offset={:?}, max={:?}, rows={}, visible={}", handle.offset(), handle.max_offset(), root.read(cx).list.read(cx).delegate().results.len(), cx.global::<LauncherGlobal>().clone_handle().borrow().visible
                             );
                             assert!(
                                 root.read(cx).wheel_animation.is_none(),
@@ -4198,6 +4271,68 @@ mod tests {
                             );
                         })
                         .unwrap();
+                    cx.update(|cx| {
+                        launcher.borrow_mut().hide(cx);
+                        launcher.borrow_mut().show(cx);
+                    });
+                    cx.background_executor().timer(Duration::from_millis(100)).await;
+                    window.update(cx, |_, _, cx| {
+                        let root = root.read(cx);
+                        assert_eq!(root.list.read(cx).scroll_handle().offset().y, px(0.0), "reopening must reveal the heading");
+                        assert!(root.search_input.read(cx).value().is_empty());
+                    }).unwrap();
+                    for (case, mode) in ["apps", "file", "pending_file", "calc", "about", "updates", "scry", "actions", "folder", "command"].into_iter().enumerate() {
+                        window.update(cx, |_, window, cx| {
+                            root.update(cx, |root, cx| {
+                                match mode {
+                                    "file" | "pending_file" | "folder" => {
+                                        root.enter_file_mode(" f report", window, cx);
+                                        if mode == "folder" { root.folder_scope.push(r"C:\Windows".into()); }
+                                    }
+                                    "calc" => {
+                                        let input = root.search_input.clone();
+                                        input.update(cx, |input, cx| input.set_value("2+2", window, cx));
+                                        root.on_search_event(&input, &InputEvent::Change, window, cx);
+                                        assert!(!root.list.read(cx).delegate().apps_view);
+                                    }
+                                    "about" | "updates" | "scry" => root.list.update(cx, |list, cx| {
+                                        let delegate = list.delegate_mut();
+                                        delegate.show_about = mode == "about";
+                                        delegate.show_updates = mode == "updates";
+                                        delegate.show_scry_updates = mode == "scry";
+                                        cx.notify();
+                                    }),
+                                    "actions" => { root.action_menu = root.selected_action_menu(cx); }
+                                    "command" => { root.waiting_for_command = true; }
+                                    _ => {}
+                                }
+                                cx.notify();
+                            });
+                        }).unwrap();
+                        // Include both completed file results and a job that
+                        // finishes after dismissal; no real daemon/IPC needed.
+                        cx.background_executor().timer(Duration::from_millis(if mode == "pending_file" { 15 } else { 100 })).await;
+                        if case % 3 == 0 {
+                            cx.update(|cx| launcher.borrow_mut().hide(cx));
+                        } else if case % 3 == 1 {
+                            window.update(cx, |_, window, cx| LauncherState::dismiss(window, cx)).unwrap();
+                        } else {
+                            window.update(cx, |_, window, cx| {
+                                root.update(cx, |root, cx| {
+                                    for _ in 0..5 { root.on_escape(&Escape, window, cx); }
+                                });
+                            }).unwrap();
+                        }
+                        cx.update(|cx| launcher.borrow_mut().show(cx));
+                        cx.background_executor().timer(Duration::from_millis(100)).await;
+                        window.update(cx, |_, _, cx| {
+                            let root = root.read(cx);
+                            let delegate = root.list.read(cx).delegate();
+                            assert!(delegate.last_query.is_empty(), "{mode}: stale completion changed query");
+                            assert!(!delegate.file_search && !root.file_mode, "{mode}: file mode survived reset");
+                            assert_eq!(root.list.read(cx).scroll_handle().offset().y, px(0.0), "{mode}: stale scroll offset");
+                        }).unwrap();
+                    }
                     eprintln!("{SUCCESS}");
                     cx.update(|cx| cx.quit());
                 })

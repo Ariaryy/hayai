@@ -13,6 +13,9 @@ use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows_sys::Win32::Graphics::Dwm::{
+    DWMWA_TRANSITIONS_FORCEDISABLED, DwmFlush, DwmSetWindowAttribute,
+};
 use windows_sys::Win32::Graphics::Gdi::{
     BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, DeleteObject, GetDC, GetDIBits,
     GetMonitorInfoW, GetObjectW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
@@ -37,12 +40,13 @@ use windows_sys::Win32::UI::Shell::{
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, AppendMenuW, BringWindowToTop, CreatePopupMenu, CreateWindowExW,
     DefWindowProcW, DestroyIcon, DestroyMenu, DestroyWindow, DispatchMessageW, GWL_EXSTYLE,
-    GetCursorPos, GetIconInfo, GetMessageW, GetWindowLongPtrW, GetWindowRect, HWND_MESSAGE,
-    HWND_TOPMOST, ICONINFO, LoadIconW, MF_STRING, MSG, PostMessageW, PostQuitMessage,
+    GetCursorPos, GetForegroundWindow, GetIconInfo, GetMessageW, GetWindowLongPtrW, GetWindowRect,
+    HWND_MESSAGE, HWND_TOPMOST, ICONINFO, LoadIconW, MF_STRING, MSG, PostMessageW, PostQuitMessage,
     RegisterClassW, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
-    SWP_NOSIZE, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP, WM_DESTROY, WM_HOTKEY, WM_LBUTTONUP,
-    WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW, WS_OVERLAPPED,
+    SWP_NOSIZE, SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, TranslateMessage, WM_APP, WM_DESTROY,
+    WM_HOTKEY, WM_LBUTTONUP, WM_NULL, WM_RBUTTONUP, WNDCLASSW, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    WS_OVERLAPPED,
 };
 use windows_sys::core::{GUID, HRESULT, IUnknown_Vtbl};
 
@@ -131,8 +135,24 @@ fn hwnd_of(window: &gpui::Window) -> Option<HWND> {
 pub fn hide_launcher_window(window: &gpui::Window) {
     if let Some(hwnd) = hwnd_of(window) {
         unsafe {
+            disable_launcher_transitions(hwnd);
             ShowWindow(hwnd, SW_HIDE);
         }
+    }
+}
+
+unsafe fn disable_launcher_transitions(hwnd: HWND) {
+    // DWM's show/hide fade can retain the previous appearance independently of
+    // GPUI's reset and hidden Present. Disable only this window's transitions,
+    // before either visibility change; no compositor wait or timer is needed.
+    let disabled: i32 = 1;
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_TRANSITIONS_FORCEDISABLED as u32,
+            (&disabled as *const i32).cast(),
+            std::mem::size_of_val(&disabled) as u32,
+        );
     }
 }
 
@@ -177,6 +197,7 @@ unsafe fn reposition_on_cursor_monitor(hwnd: HWND) {
 pub fn focus_launcher_window(window: &gpui::Window) {
     if let Some(hwnd) = hwnd_of(window) {
         unsafe {
+            disable_launcher_transitions(hwnd);
             // Strip WS_EX_APPWINDOW (taskbar entry) and add WS_EX_TOOLWINDOW (no taskbar).
             // Must happen before ShowWindow so the taskbar never sees the window.
             let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
@@ -237,6 +258,29 @@ pub fn render_hidden_launcher_frame(window: &gpui::Window) {
         const WM_GPUI_FORCE_UPDATE_WINDOW: u32 = 0x0400 + 5;
         unsafe {
             PostMessageW(hwnd, WM_GPUI_FORCE_UPDATE_WINDOW, 0, 0);
+        }
+    }
+}
+
+pub fn launcher_has_foreground(window: &gpui::Window) -> bool {
+    hwnd_of(window).is_some_and(|hwnd| unsafe { GetForegroundWindow() == hwnd })
+}
+
+/// Capture the HWND now, but invoke only after the GPUI window update unwinds.
+pub fn hidden_launcher_frame_flush(window: &gpui::Window) -> impl FnOnce() + use<> {
+    let hwnd = hwnd_of(window);
+    move || {
+        if let Some(hwnd) = hwnd {
+            // The pinned backend forces both drawing and presentation for this
+            // message, even when hidden. Sending outside WindowHandle::update
+            // avoids re-entry and finishes the reset surface before SW_SHOW.
+            unsafe {
+                SendMessageW(hwnd, 0x0400 + 5, 0, 0);
+                // Present(0) submits asynchronously. Do not expose DWM's old
+                // surface while the reset surface is still queued on the GPU.
+                // This is a compositor fence, not a guessed delay or retry loop.
+                DwmFlush();
+            }
         }
     }
 }
