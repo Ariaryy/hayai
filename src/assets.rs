@@ -14,12 +14,24 @@ pub mod icons {
     }
 
     svg_icons! {
+        SUN => "icons/thirdparty/phosphor/sun.svg",
+        MOON => "icons/thirdparty/phosphor/moon.svg",
+        // TitleBar resolves these exact gpui-component IconName paths.
+        WINDOW_CLOSE => "icons/window-close.svg",
+        WINDOW_MINIMIZE => "icons/window-minimize.svg",
+        WINDOW_MAXIMIZE => "icons/window-maximize.svg",
+        WINDOW_RESTORE => "icons/window-restore.svg",
+        SETTINGS_GENERAL => "icons/thirdparty/phosphor/settings-general.svg",
+        SETTINGS_APPEARANCE => "icons/thirdparty/phosphor/settings-appearance.svg",
+        SETTINGS_KEYBOARD => "icons/thirdparty/phosphor/settings-keyboard.svg",
+        SETTINGS_FILES => "icons/thirdparty/phosphor/settings-files.svg",
+        SETTINGS_ABOUT => "icons/thirdparty/phosphor/settings-about.svg",
         ENTER => "icons/enter.svg",
         CALCULATOR => "icons/calculator.svg",
         ARROW_RIGHT => "icons/arrow-right.svg",
         UPDATE => "icons/update.svg",
         SPINNER => "icons/spinner.svg",
-        SCRY => "icons/scry.svg",
+        SCRY => "icons/thirdparty/scry/scry.svg",
         SEARCH_EMPTY => "icons/search-empty.svg",
         CALCULATOR_INVALID => "icons/calculator-invalid.svg",
         APPLICATION => "icons/application.svg",
@@ -27,7 +39,7 @@ pub mod icons {
 
     pub const BRAND_PNG: &[u8] = include_bytes!("../assets/hayai.png");
     pub const UPDATE_PNG: &[u8] = include_bytes!("../assets/icons/update.png");
-    pub const SCRY_PNG: &[u8] = include_bytes!("../assets/icons/scry.png");
+    pub const SCRY_PNG: &[u8] = include_bytes!("../assets/icons/thirdparty/scry/scry.png");
 }
 
 impl gpui::AssetSource for LauncherAssets {
