@@ -189,6 +189,10 @@ pub mod settings {
     pub fn theme_label(family: crate::theme::ThemeFamily) -> &'static str {
         match family {
             crate::theme::ThemeFamily::Hayai => "Hayai",
+            crate::theme::ThemeFamily::OneDark => "One Dark",
+            crate::theme::ThemeFamily::Catppuccin => "Catppuccin",
+            crate::theme::ThemeFamily::TokyoNight => "Tokyo Night",
+            crate::theme::ThemeFamily::Gruvbox => "Gruvbox",
         }
     }
     pub fn shortcut_label(action: crate::settings::Shortcut) -> &'static str {

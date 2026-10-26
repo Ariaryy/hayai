@@ -118,49 +118,93 @@ fn skeleton_key(palette: LauncherPalette) -> impl IntoElement {
         .bg(palette.selected)
 }
 
-/// Show actual palette roles, rather than a gradient that invents colors.
-/// The control's label sits outside this shape so nothing overlaps its corners.
+/// The badge is a sibling of the bordered image, painted afterward and fully
+/// inside a larger hit target. Its opaque backing erases the outline beneath
+/// it; no negative bounds or rectangular hover fill can clip or cross the icon.
 pub(super) fn theme_swatch(
     family: ThemeFamily,
     light: bool,
     selected: bool,
     cx: &App,
 ) -> impl IntoElement {
-    let palette = crate::theme::launcher_palette(family, light);
     let active = crate::theme::settings_palette(cx);
+    let colors = crate::theme::swatch_colors(family, light);
+    let outer_radius = 14.0;
+    let inner_radius = outer_radius - 3.0 - if selected { 2.0 } else { 1.0 };
     div()
-        .size(px(56.0))
-        .p(px(3.0))
-        .rounded(px(17.0))
-        .border_1()
-        .border_color(if selected {
-            active.accent
-        } else {
-            active.border
-        })
+        .relative()
+        .w_full()
+        .h(px(84.0))
+        .px_1()
+        .flex()
+        .items_center()
+        .justify_center()
         .child(
             div()
-                .size_full()
-                .rounded(px(13.0))
+                .id((
+                    if light { "light-swatch" } else { "dark-swatch" },
+                    family as usize,
+                ))
+                .w_full()
+                .h(px(72.0))
+                .p(px(3.0))
+                .rounded(px(outer_radius))
                 .border_1()
-                .border_color(palette.border)
-                .bg(palette.background)
-                .flex()
-                .flex_col()
-                .justify_center()
-                .px(px(6.0))
-                .gap(px(5.0))
-                .child(line(0.8, 3.0, palette.foreground.opacity(0.8)))
+                .when(selected, |image| image.border_2())
+                .border_color(if selected {
+                    active.accent
+                } else {
+                    active.border
+                })
+                .hover(move |image| image.border_color(active.foreground))
                 .child(
                     div()
-                        .h(px(10.0))
-                        .px(px(3.0))
-                        .rounded(px(3.0))
-                        .bg(palette.selected)
+                        .size_full()
+                        .rounded(px(inner_radius))
+                        .bg(gpui::linear_gradient(
+                            135.0,
+                            gpui::linear_color_stop(colors.highlight, 0.0),
+                            gpui::linear_color_stop(colors.shadow, 1.0),
+                        ))
+                        .child(div().size_full().rounded(px(inner_radius)).bg(
+                            gpui::linear_gradient(
+                                20.0,
+                                gpui::linear_color_stop(colors.base.opacity(0.0), 0.0),
+                                gpui::linear_color_stop(colors.base.opacity(0.45), 1.0),
+                            ),
+                        )),
+                ),
+        )
+        .child(
+            div()
+                .absolute()
+                .right(px(1.0))
+                .bottom(px(1.0))
+                .size(px(24.0))
+                .p(px(4.0))
+                .rounded_full()
+                .bg(active.panel)
+                .child(
+                    div()
+                        .size_full()
+                        .rounded_full()
+                        .border_1()
+                        .border_color(if selected {
+                            active.accent
+                        } else {
+                            active.border
+                        })
+                        .bg(active.canvas)
                         .flex()
                         .items_center()
-                        .child(line(0.7, 3.0, palette.accent)),
-                )
-                .child(line(0.6, 3.0, palette.muted)),
+                        .justify_center()
+                        .child(
+                            svg()
+                                .path(if light { icons::SUN } else { icons::MOON })
+                                .size(px(11.0))
+                                .flex_none()
+                                .text_color(active.foreground),
+                        ),
+                ),
         )
 }

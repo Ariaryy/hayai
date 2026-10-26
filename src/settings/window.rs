@@ -210,7 +210,7 @@ impl Render for SettingsView {
                                             .w_full()
                                             .max_w(px(800.0))
                                             .mx_auto()
-                                            .child(self.body(cx)),
+                                            .child(self.body(window, cx)),
                                     ),
                             )
                             .when_some(status, |body, status| {

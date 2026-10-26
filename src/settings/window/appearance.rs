@@ -3,7 +3,7 @@ use super::*;
 use crate::theme::ThemeFamily;
 
 impl SettingsView {
-    pub(super) fn appearance_page(&self, cx: &Context<Self>) -> gpui::AnyElement {
+    pub(super) fn appearance_page(&self, window: &Window, cx: &Context<Self>) -> gpui::AnyElement {
         let palette = crate::theme::settings_palette(cx);
         let mut choices = h_flex().gap_3().w_full();
         for (light, label) in [(true, text::LIGHT), (false, text::DARK)] {
@@ -57,7 +57,11 @@ impl SettingsView {
             .child(
                 div()
                     .grid()
-                    .grid_cols(3)
+                    .grid_cols(if window.viewport_size().width < px(960.0) {
+                        2
+                    } else {
+                        3
+                    })
                     .gap_3()
                     .children(ThemeFamily::ALL.map(|family| self.theme_card(family, cx))),
             )
@@ -75,6 +79,7 @@ impl SettingsView {
             .bg(palette.panel)
             .child(
                 h_flex()
+                    .w_full()
                     .justify_center()
                     .gap_3()
                     .child(self.theme_variant(family, true, cx))
@@ -82,7 +87,8 @@ impl SettingsView {
             )
             .child(
                 div()
-                    .mt_3()
+                    .mt_1()
+                    .text_center()
                     .font_weight(FontWeight::MEDIUM)
                     .child(text::theme_label(family)),
             )
@@ -94,30 +100,14 @@ impl SettingsView {
         light: bool,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        let palette = crate::theme::settings_palette(cx);
         let selected = preferences(cx).theme_for(light) == family;
         div()
             .id((family.id(), usize::from(light)))
-            .p_1()
-            .rounded(px(8.0))
+            .flex_1()
+            .min_w_0()
+            .px_1()
             .cursor_pointer()
-            .hover(move |control| control.bg(palette.hover))
             .child(theme_swatch(family, light, selected, cx))
-            .child(
-                h_flex()
-                    .mt_2()
-                    .justify_center()
-                    .gap_1()
-                    .text_size(px(10.0))
-                    .text_color(palette.muted)
-                    .child(
-                        svg()
-                            .path(if light { icons::SUN } else { icons::MOON })
-                            .size(px(10.0))
-                            .text_color(palette.muted),
-                    )
-                    .child(if light { text::LIGHT } else { text::DARK }),
-            )
             .on_click(cx.listener(move |this, _, _, cx| {
                 if cx.global::<SettingsGlobal>().saving {
                     return;

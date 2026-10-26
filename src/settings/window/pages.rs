@@ -190,10 +190,10 @@ impl SettingsView {
             .into_any_element()
     }
 
-    pub(super) fn body(&self, cx: &Context<Self>) -> gpui::AnyElement {
+    pub(super) fn body(&self, window: &Window, cx: &Context<Self>) -> gpui::AnyElement {
         match self.page {
             Page::General => self.general_page(cx),
-            Page::Appearance => self.appearance_page(cx),
+            Page::Appearance => self.appearance_page(window, cx),
             Page::KeyBindings => self.keybindings_page(cx),
             Page::FileSearch => self.file_search_page(cx),
             Page::About => self.about_page(cx),
