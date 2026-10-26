@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 
 pub struct LauncherAssets;
-pub const THIRD_PARTY_NOTICES: &str = include_str!("../THIRD_PARTY_NOTICES");
 
 pub mod icons {
     // The same catalog defines names, embedded data, and AssetSource listing.
@@ -15,6 +14,9 @@ pub mod icons {
     }
 
     svg_icons! {
+        CARET_RIGHT => "icons/thirdparty/phosphor/caret-right.svg",
+        CARET_DOWN => "icons/thirdparty/phosphor/caret-down.svg",
+        EXTERNAL_LINK => "icons/thirdparty/phosphor/arrow-square-out.svg",
         SUN => "icons/thirdparty/phosphor/sun.svg",
         MOON => "icons/thirdparty/phosphor/moon.svg",
         // TitleBar resolves these exact gpui-component IconName paths.

@@ -65,6 +65,30 @@ pub(super) fn separator(cx: &App) -> impl IntoElement {
         .bg(crate::theme::settings_palette(cx).border.opacity(0.6))
 }
 
+pub(super) fn external_link(
+    id: &'static str,
+    label: &'static str,
+    url: &'static str,
+    cx: &App,
+) -> impl IntoElement + use<> {
+    let palette = crate::theme::settings_palette(cx);
+    h_flex()
+        .id(id)
+        .gap_1()
+        .text_size(px(12.0))
+        .text_color(palette.muted)
+        .cursor_pointer()
+        .hover(move |link| link.text_color(palette.foreground))
+        .child(div().underline().child(label))
+        .child(
+            svg()
+                .path(icons::EXTERNAL_LINK)
+                .size(px(12.0))
+                .text_color(palette.muted),
+        )
+        .on_click(move |_, _, cx| cx.open_url(url))
+}
+
 pub fn key_badges(binding: &str, cx: &App) -> impl IntoElement + use<> {
     let palette = crate::theme::settings_palette(cx);
     h_flex().gap_1().children(

@@ -21,8 +21,22 @@ pub struct SettingsGlobal {
 
 impl Global for SettingsGlobal {}
 
+#[cfg(test)]
+impl SettingsGlobal {
+    pub(crate) fn for_test(path: PathBuf) -> Self {
+        Self {
+            preferences: Preferences::default(),
+            error: None,
+            saving: false,
+            window: None,
+            view: None,
+            path,
+        }
+    }
+}
+
 pub fn preferences(cx: &App) -> &Preferences {
     &cx.global::<SettingsGlobal>().preferences
 }
 
-pub use persistence::save;
+pub use persistence::{open_preferences_folder, save};

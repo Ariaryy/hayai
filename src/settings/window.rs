@@ -10,6 +10,7 @@ use gpui_component::{Root, TitleBar, h_flex};
 mod appearance;
 mod components;
 mod keybindings;
+mod licenses;
 mod lifecycle;
 mod pages;
 mod previews;
@@ -29,7 +30,7 @@ pub(super) struct SettingsView {
     focus: FocusHandle,
     recording: Option<Shortcut>,
     validation: Option<String>,
-    show_licenses: bool,
+    expanded_notice: Option<usize>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -43,14 +44,14 @@ impl SettingsView {
             focus,
             recording: None,
             validation: None,
-            show_licenses: false,
+            expanded_notice: None,
             _subscriptions: subscriptions,
         }
     }
 
     fn navigation(&self, page: Page, cx: &Context<Self>) -> impl IntoElement {
         let palette = crate::theme::settings_palette(cx);
-        let selected = self.page == page;
+        let selected = self.page == page || (page == Page::About && self.page == Page::Licenses);
         h_flex()
             .id(page.label())
             .h(px(36.0))
@@ -97,15 +98,16 @@ impl Focusable for SettingsView {
 }
 
 impl Render for SettingsView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let palette = crate::theme::settings_palette(cx);
         let state = cx.global::<SettingsGlobal>();
-        let status = self
-            .validation
-            .as_ref()
-            .or(state.error.as_ref())
-            .cloned()
-            .or_else(|| state.saving.then(|| text::SAVING.to_owned()));
+        let status = state.error.clone().or_else(|| {
+            if self.recording.is_none() {
+                self.validation.clone()
+            } else {
+                None
+            }
+        });
         div()
             .size_full()
             .flex()
@@ -192,37 +194,31 @@ impl Render for SettingsView {
                             .child(self.navigation(Page::About, cx)),
                     )
                     .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(
-                                div()
-                                    .id("settings-content")
-                                    .flex_1()
-                                    .min_h_0()
-                                    .overflow_y_scroll()
-                                    .px_8()
-                                    .py_8()
-                                    .child(
-                                        div()
-                                            .w_full()
-                                            .max_w(px(800.0))
-                                            .mx_auto()
-                                            .child(self.body(window, cx)),
-                                    ),
-                            )
-                            .when_some(status, |body, status| {
-                                body.child(
+                        div().flex_1().min_w_0().flex().flex_col().child(
+                            div()
+                                .id("settings-content")
+                                .flex_1()
+                                .min_h_0()
+                                .overflow_y_scroll()
+                                .px_8()
+                                .py_8()
+                                .child(
                                     div()
-                                        .px_8()
-                                        .py_3()
-                                        .text_size(px(12.0))
-                                        .text_color(palette.muted)
-                                        .child(status),
-                                )
-                            }),
+                                        .w_full()
+                                        .max_w(px(800.0))
+                                        .mx_auto()
+                                        .when_some(status, |page, error| {
+                                            page.child(
+                                                div()
+                                                    .mb_4()
+                                                    .text_size(px(12.0))
+                                                    .text_color(palette.muted)
+                                                    .child(error),
+                                            )
+                                        })
+                                        .child(self.body(window, cx)),
+                                ),
+                        ),
                     ),
             )
     }

@@ -2,12 +2,14 @@ use super::*;
 
 impl SettingsView {
     pub(super) fn keybindings_page(&self, cx: &Context<Self>) -> gpui::AnyElement {
-        let palette = crate::theme::settings_palette(cx);
         let mut body = page(self.page);
-        for (group, actions) in [
+        for (group_index, (group, actions)) in [
             (text::SYSTEM_GROUP, &Shortcut::ALL[..1]),
             (text::LAUNCHER_GROUP, &Shortcut::ALL[1..]),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let mut rows = card(cx);
             for (index, action) in actions.iter().copied().enumerate() {
                 if index > 0 {
@@ -15,15 +17,15 @@ impl SettingsView {
                 }
                 rows = rows.child(self.shortcut_row(action, cx));
             }
-            body = body.child(div().mt_2().child(section(group))).child(rows);
+            body = body
+                .child(
+                    div()
+                        .when(group_index > 0, |heading| heading.mt_4())
+                        .child(section(group)),
+                )
+                .child(rows);
         }
-        body.child(
-            div()
-                .text_size(px(12.0))
-                .text_color(palette.muted)
-                .child(text::KEYBINDINGS_DESCRIPTION),
-        )
-        .into_any_element()
+        body.into_any_element()
     }
 
     fn shortcut_row(&self, action: Shortcut, cx: &Context<Self>) -> impl IntoElement {

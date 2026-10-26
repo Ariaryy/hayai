@@ -144,6 +144,7 @@ pub mod settings {
     pub const ABOUT: &str = "About";
     pub const LAUNCHER_SHORTCUT: &str = "Open Hayai";
     pub const LAUNCHER_SHORTCUT_HELP: &str = "Show or hide Hayai from any app.";
+    pub const SETTINGS_FILENAME: &str = "settings.json";
     pub const SETTINGS_LOCATION: &str = "Preferences";
     pub const SETTINGS_LOCATION_HELP: &str =
         "Saved in your local Hayai app data folder and restored on startup.";
@@ -159,8 +160,6 @@ pub mod settings {
     pub const LAUNCHER_SCOPE: &str = "When the launcher is focused";
     pub const DARK: &str = "Dark";
     pub const LIGHT: &str = "Light";
-    pub const KEYBINDINGS_DESCRIPTION: &str =
-        "Click a shortcut and press its replacement. Changes save automatically.";
     pub const SYSTEM_GROUP: &str = "System";
     pub const LAUNCHER_GROUP: &str = "Launcher";
     pub const PRESS_SHORTCUT: &str = "Press a shortcut…";
@@ -171,7 +170,6 @@ pub mod settings {
     pub const FILE_SEARCH_HELP: &str =
         "Open file search directly, or type Space then f in the launcher.";
     pub const FILE_GUIDE: &str = "File search setup and search syntax";
-    pub const SAVING: &str = "Saving…";
     pub const MODIFIER_REQUIRED: &str = "Include Ctrl, Alt or Win so typing keeps working.";
     pub const RESERVED_KEY: &str =
         "This key is reserved for editing, navigation or closing windows.";
@@ -180,12 +178,18 @@ pub mod settings {
         "Use a letter, digit, function key or Space for the system shortcut.";
     pub const LOAD_FAILED: &str = "Could not load preferences. Using defaults.";
     pub const SAVE_FAILED: &str = "Could not save preferences.";
+    pub const OPEN_FOLDER_FAILED: &str = "Could not open the preferences folder.";
     pub const HOTKEY_FAILED: &str =
         "Windows could not register that shortcut. It may belong to another app.";
     pub const OPEN_ACTIONS: &str = "Toggle action panel";
     pub const OPEN_SETTINGS: &str = "Open settings";
     pub const SETTINGS_ITEM: &str = "Settings";
     pub const THIRD_PARTY_NOTICES: &str = "Third-party notices";
+    pub const LICENSE_ARTWORK: &str = "Artwork";
+    pub const LICENSE_PALETTE: &str = "Palette";
+    pub fn notice_count(count: usize) -> String {
+        format!("{count} notices")
+    }
     pub fn theme_label(family: crate::theme::ThemeFamily) -> &'static str {
         match family {
             crate::theme::ThemeFamily::Hayai => "Hayai",

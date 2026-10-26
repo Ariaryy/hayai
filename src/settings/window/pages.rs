@@ -7,6 +7,7 @@ pub(super) enum Page {
     KeyBindings,
     FileSearch,
     About,
+    Licenses,
 }
 
 impl Page {
@@ -17,6 +18,7 @@ impl Page {
             Self::KeyBindings => text::KEYBINDINGS,
             Self::FileSearch => text::FILE_SEARCH,
             Self::About => text::ABOUT,
+            Self::Licenses => text::THIRD_PARTY_NOTICES,
         }
     }
     pub(super) fn icon(self) -> &'static str {
@@ -26,6 +28,7 @@ impl Page {
             Self::KeyBindings => icons::SETTINGS_KEYBOARD,
             Self::FileSearch => icons::SETTINGS_FILES,
             Self::About => icons::SETTINGS_ABOUT,
+            Self::Licenses => icons::SETTINGS_ABOUT,
         }
     }
 }
@@ -84,10 +87,24 @@ impl SettingsView {
                 card(cx).child(setting_row(
                     text::PREFERENCES_FILE,
                     text::SETTINGS_LOCATION_HELP,
-                    div()
+                    h_flex()
+                        .id("preferences-folder")
+                        .px_2()
+                        .py_1()
+                        .rounded(px(4.0))
+                        .gap_1()
                         .text_size(px(12.0))
                         .text_color(palette.muted)
-                        .child("settings.json"),
+                        .cursor_pointer()
+                        .hover(move |link| link.bg(palette.hover).text_color(palette.foreground))
+                        .child(div().underline().child(text::SETTINGS_FILENAME))
+                        .child(
+                            svg()
+                                .path(icons::EXTERNAL_LINK)
+                                .size(px(12.0))
+                                .text_color(palette.muted),
+                        )
+                        .on_click(|_, _, cx| crate::settings::open_preferences_folder(cx)),
                     cx,
                 )),
             )
@@ -115,17 +132,12 @@ impl SettingsView {
                 key_badges(preferences(cx).binding(Shortcut::FileSearch), cx),
                 cx,
             )))
-            .child(
-                div()
-                    .id("file-search-guide")
-                    .mt_2()
-                    .text_size(px(12.0))
-                    .cursor_pointer()
-                    .text_color(crate::theme::settings_palette(cx).muted)
-                    .hover(|link| link.underline())
-                    .child(text::FILE_GUIDE)
-                    .on_click(|_, _, cx| cx.open_url(crate::links::FILE_SEARCH_GUIDE)),
-            )
+            .child(components::external_link(
+                "file-search-guide",
+                text::FILE_GUIDE,
+                crate::links::FILE_SEARCH_GUIDE,
+                cx,
+            ))
             .into_any_element()
     }
 
@@ -153,17 +165,12 @@ impl SettingsView {
                             cx,
                         ))
                         .child(description(crate::ui_text::about::DESCRIPTION, cx))
-                        .child(
-                            div()
-                                .id("project")
-                                .mt_3()
-                                .text_size(px(12.0))
-                                .cursor_pointer()
-                                .text_color(crate::theme::settings_palette(cx).muted)
-                                .hover(|link| link.underline())
-                                .child(crate::ui_text::about::PROJECT_LINK)
-                                .on_click(|_, _, cx| cx.open_url(crate::links::PROJECT)),
-                        ),
+                        .child(components::external_link(
+                            "project",
+                            crate::ui_text::about::PROJECT_LINK,
+                            crate::links::PROJECT,
+                            cx,
+                        )),
                 ),
             )
             .child(
@@ -175,18 +182,10 @@ impl SettingsView {
                     .hover(|link| link.underline())
                     .child(text::THIRD_PARTY_NOTICES)
                     .on_click(cx.listener(|this, _, _, cx| {
-                        this.show_licenses = !this.show_licenses;
+                        this.page = Page::Licenses;
                         cx.notify();
                     })),
             )
-            .when(self.show_licenses, |page| {
-                page.child(
-                    card(cx)
-                        .p_4()
-                        .text_size(px(11.0))
-                        .child(crate::assets::THIRD_PARTY_NOTICES),
-                )
-            })
             .into_any_element()
     }
 
@@ -197,6 +196,7 @@ impl SettingsView {
             Page::KeyBindings => self.keybindings_page(cx),
             Page::FileSearch => self.file_search_page(cx),
             Page::About => self.about_page(cx),
+            Page::Licenses => self.licenses_page(cx),
         }
     }
 }

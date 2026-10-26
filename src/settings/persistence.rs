@@ -82,6 +82,35 @@ pub fn save(next: Preferences, cx: &mut App) {
     .detach();
 }
 
+pub fn open_preferences_folder(cx: &mut App) {
+    let folder = cx
+        .global::<SettingsGlobal>()
+        .path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .to_path_buf();
+    cx.spawn(async move |cx| {
+        let result = cx
+            .background_spawn(async move {
+                std::fs::create_dir_all(&folder)?;
+                crate::native::launch_path(&folder);
+                Ok::<_, std::io::Error>(())
+            })
+            .await;
+        if let Err(error) = result {
+            cx.update(|cx| {
+                cx.global_mut::<SettingsGlobal>().error = Some(format!(
+                    "{} {error}",
+                    crate::ui_text::settings::OPEN_FOLDER_FAILED
+                ));
+                cx.refresh_windows();
+            });
+        }
+    })
+    .detach();
+}
+
 fn write_preferences(path: &std::path::Path, preferences: &Preferences) -> anyhow::Result<()> {
     if let Some(parent) = path
         .parent()
