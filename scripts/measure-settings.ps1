@@ -14,6 +14,21 @@ public static class HayaiSettingsProbe {
     public static extern uint GetWindowThreadProcessId(IntPtr handle, out uint process);
     [DllImport("user32.dll")]
     public static extern bool PostMessage(IntPtr handle, uint message, UIntPtr word, IntPtr param);
+    private delegate bool WindowCallback(IntPtr handle, IntPtr data);
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(WindowCallback callback, IntPtr data);
+    [DllImport("user32.dll")]
+    private static extern bool IsWindowVisible(IntPtr handle);
+    public static bool HasVisibleWindow(int process) {
+        bool found = false;
+        EnumWindows((handle, data) => {
+            uint owner;
+            GetWindowThreadProcessId(handle, out owner);
+            if (owner == process && IsWindowVisible(handle)) { found = true; return false; }
+            return true;
+        }, IntPtr.Zero);
+        return found;
+    }
     public static IntPtr MessageWindow(int process) {
         IntPtr after = IntPtr.Zero;
         while ((after = FindWindowEx(new IntPtr(-3), after, "HayaiNativeMessageWindow", null)) != IntPtr.Zero) {
@@ -60,7 +75,10 @@ $measurements = foreach ($executable in @($BaselineExecutable, $CandidateExecuta
             [void][HayaiSettingsProbe]::PostMessage($messageWindow, 0x0312, [UIntPtr]1, [IntPtr]::Zero)
             # Let initial icon/atlas work settle before sampling the open view.
             Start-Sleep -Seconds 3
-            $active = @(Get-MemorySamples $run)
+            if ([HayaiSettingsProbe]::HasVisibleWindow($run.Id)) {
+                $active = @(Get-MemorySamples $run)
+                if (![HayaiSettingsProbe]::HasVisibleWindow($run.Id)) { $active = @() }
+            }
         }
         [pscustomobject]@{
             Executable = $resolved
@@ -68,7 +86,7 @@ $measurements = foreach ($executable in @($BaselineExecutable, $CandidateExecuta
             ExecutableSHA256 = (Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash.ToLowerInvariant()
             Idle = $idle
             Active = $active
-            ActiveUnavailable = if ($active.Count -eq 0) { 'Owned native window unavailable; check for a global-hotkey registration conflict.' } else { $null }
+            ActiveUnavailable = if ($active.Count -eq 0) { 'Owned native window or visible launcher unavailable; check hotkey registration and foreground activation.' } else { $null }
         }
     } finally {
         if (!$run.HasExited) { Stop-Process -Id $run.Id }
