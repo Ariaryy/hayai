@@ -10,6 +10,7 @@ yet included in a published package.
 - Open Settings from the Hayai group in its own resizable window, with a themed titlebar, sidebar navigation, and About pinned at the bottom.
 - Choose light and dark palettes independently from Hayai, One Dark/One Light, Catppuccin, Tokyo Night, and Gruvbox. The selected appearance applies to both windows and persists between launches.
 - Record and reset shortcuts for opening Hayai, the action panel, file search, and settings. Bindings save immediately after recording. Key badges show the current bindings; conflicts keep the previous shortcut working.
+- Scroll settings with the launcher's smooth wheel behavior and a thin right-edge scrollbar that appears only when content overflows.
 - Browse expandable asset and theme notices from About, with full license texts and links to their sources. The notices are also included in packaged releases.
 
 ## 0.1.1 - 2026-10-24

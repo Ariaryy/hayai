@@ -52,9 +52,8 @@ impl SettingsView {
                                 key_badges(preferences(cx).binding(Shortcut::ToggleLauncher), cx),
                                 cx,
                             ))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.page = Page::KeyBindings;
-                                cx.notify();
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.navigate(Page::KeyBindings, window, cx);
                             })),
                     )
                     .child(components::separator(cx))
@@ -76,9 +75,8 @@ impl SettingsView {
                                     }),
                                 cx,
                             ))
-                            .on_click(cx.listener(|this, _, _, cx| {
-                                this.page = Page::Appearance;
-                                cx.notify();
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.navigate(Page::Appearance, window, cx);
                             })),
                     ),
             )
@@ -181,9 +179,8 @@ impl SettingsView {
                     .text_color(crate::theme::settings_palette(cx).muted)
                     .hover(|link| link.underline())
                     .child(text::THIRD_PARTY_NOTICES)
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.page = Page::Licenses;
-                        cx.notify();
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.navigate(Page::Licenses, window, cx);
                     })),
             )
             .into_any_element()

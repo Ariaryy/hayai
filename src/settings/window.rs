@@ -15,6 +15,8 @@ mod lifecycle;
 mod pages;
 mod previews;
 mod recording;
+mod scrollbar;
+mod scrolling;
 #[cfg(test)]
 mod tests;
 
@@ -31,6 +33,7 @@ pub(super) struct SettingsView {
     recording: Option<Shortcut>,
     validation: Option<String>,
     expanded_notice: Option<usize>,
+    scrolling: scrolling::SettingsScroll,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -45,6 +48,7 @@ impl SettingsView {
             recording: None,
             validation: None,
             expanded_notice: None,
+            scrolling: Default::default(),
             _subscriptions: subscriptions,
         }
     }
@@ -83,10 +87,7 @@ impl SettingsView {
             )
             .child(page.label())
             .on_click(cx.listener(move |this, _, window, cx| {
-                this.cancel_recording();
-                this.page = page;
-                window.focus(&this.focus, cx);
-                cx.notify();
+                this.navigate(page, window, cx);
             }))
     }
 }
@@ -99,6 +100,9 @@ impl Focusable for SettingsView {
 
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.scrolling.advance(window.is_window_active()) {
+            window.request_animation_frame();
+        }
         let palette = crate::theme::settings_palette(cx);
         let state = cx.global::<SettingsGlobal>();
         let status = state.error.clone().or_else(|| {
@@ -194,31 +198,39 @@ impl Render for SettingsView {
                             .child(self.navigation(Page::About, cx)),
                     )
                     .child(
-                        div().flex_1().min_w_0().flex().flex_col().child(
-                            div()
-                                .id("settings-content")
-                                .flex_1()
-                                .min_h_0()
-                                .overflow_y_scroll()
-                                .px_8()
-                                .py_8()
-                                .child(
-                                    div()
-                                        .w_full()
-                                        .max_w(px(800.0))
-                                        .mx_auto()
-                                        .when_some(status, |page, error| {
-                                            page.child(
-                                                div()
-                                                    .mb_4()
-                                                    .text_size(px(12.0))
-                                                    .text_color(palette.muted)
-                                                    .child(error),
-                                            )
-                                        })
-                                        .child(self.body(window, cx)),
-                                ),
-                        ),
+                        div()
+                            .relative()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(
+                                div()
+                                    .id("settings-content")
+                                    .track_scroll(&self.scrolling.handle)
+                                    .flex_1()
+                                    .min_h_0()
+                                    .overflow_y_scroll()
+                                    .px_8()
+                                    .py_8()
+                                    .child(
+                                        div()
+                                            .w_full()
+                                            .max_w(px(800.0))
+                                            .mx_auto()
+                                            .when_some(status, |page, error| {
+                                                page.child(
+                                                    div()
+                                                        .mb_4()
+                                                        .text_size(px(12.0))
+                                                        .text_color(palette.muted)
+                                                        .child(error),
+                                                )
+                                            })
+                                            .child(self.body(window, cx)),
+                                    ),
+                            )
+                            .child(scrollbar::overlay(cx, &self.scrolling.handle)),
                     ),
             )
     }

@@ -50,6 +50,18 @@ registration, preserving access when another app owns the requested shortcut.
 `HAYAI_SETTINGS_PATH` isolates preferences for tests. No file watcher or polling
 is retained; external edits take effect at the next launch.
 
+Settings scrolling owns a per-window scroll handle and reuses launcher wheel
+physics and precision-input handoff. Navigation cancels pending motion and
+resets the offset; deactivation cancels motion and dragging. Frames are requested
+only until the wheel motion settles. The scrollbar reads layout after the
+scrollable content, so its thumb appears only when content overflows.
+
+Windows-owned combinations may never enter GPUI's key stream. In particular,
+Win+B focuses the Windows notification area. Preserve the Win modifier on keys
+that reach the recorder, but do not install a global keyboard hook to intercept
+OS shortcuts. Registered Hayai hotkeys take a separate WM_HOTKEY path while
+recording; they must not open the launcher mid-recording.
+
 Appearance mode and palette choices are separate preferences. Light and dark
 each retain their own theme family; changing the inactive mode's palette must
 not switch appearances. Both windows and skeleton previews use the palette

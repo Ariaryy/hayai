@@ -268,6 +268,10 @@ mod tests {
     #[test]
     fn native_encoding_is_layout_independent() {
         assert_eq!(
+            native_hotkey(&Keystroke::parse("ctrl-win-f24").unwrap()),
+            Some((10, 135))
+        );
+        assert_eq!(
             native_hotkey(&Keystroke::parse("alt-space").unwrap()),
             Some((1, 32))
         );

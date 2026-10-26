@@ -91,7 +91,7 @@ fn wheel_scroll_gui_smoke() {
         .with_assets(crate::assets::LauncherAssets)
         .run(move |cx| {
             gpui_component::init(cx);
-            cx.set_global(crate::settings::SettingsGlobal::load());
+            cx.set_global(crate::settings::SettingsGlobal::for_test(std::env::temp_dir().join(format!("hayai-scroll-gui-{}.json", std::process::id()))));
             gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
             crate::theme::apply_launcher_theme(cx);
             let launcher = LauncherState::install(cx);

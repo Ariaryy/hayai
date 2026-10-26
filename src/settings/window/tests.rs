@@ -43,14 +43,7 @@ fn settings_window_gui_smoke() {
         .with_assets(crate::assets::LauncherAssets)
         .run(move |cx| {
             gpui_component::init(cx);
-            cx.set_global(SettingsGlobal {
-                preferences: crate::settings::Preferences::default(),
-                error: None,
-                saving: false,
-                window: None,
-                view: None,
-                path: path.clone(),
-            });
+            cx.set_global(SettingsGlobal::for_test(path.clone()));
             crate::theme::set_mode(false, cx);
             // The real app has a hidden launcher. This hidden sentinel gives the
             // same last-window lifetime without launching or indexing user apps.
@@ -113,6 +106,65 @@ fn settings_window_gui_smoke() {
                         view.update(cx, |view, _| assert!(view.recording.is_none()))
                             .unwrap();
                         assert_eq!(preferences(cx).binding(Shortcut::Settings), "ctrl-,");
+                    })
+                    .unwrap();
+                handle
+                    .update(cx, |_, window, cx| {
+                        view.update(cx, |view, cx| {
+                            view.start_recording(Shortcut::Settings, window, cx)
+                        })
+                        .unwrap();
+                        key(window, "ctrl-win-f24", cx);
+                    })
+                    .unwrap();
+                cx.background_executor()
+                    .timer(Duration::from_millis(250))
+                    .await;
+                cx.update(|cx| {
+                    assert_eq!(preferences(cx).binding(Shortcut::Settings), "ctrl-win-f24");
+                    assert!(view.upgrade().unwrap().read(cx).recording.is_none());
+                    assert!(!cx.global::<SettingsGlobal>().saving);
+                });
+                handle
+                    .update(cx, |_, window, cx| {
+                        view.update(cx, |view, cx| {
+                            view.navigate(Page::Licenses, window, cx);
+                            view.expanded_notice = Some(0);
+                        })
+                        .unwrap();
+                    })
+                    .unwrap();
+                cx.background_executor()
+                    .timer(Duration::from_millis(200))
+                    .await;
+                handle
+                    .update(cx, |_, window, cx| {
+                        let scroll = view.upgrade().unwrap().read(cx).scrolling.handle.clone();
+                        assert!(scroll.max_offset().y > px(0.0));
+                        window.dispatch_event(
+                            gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+                                position: scroll.bounds().origin + gpui::point(px(30.0), px(30.0)),
+                                delta: gpui::ScrollDelta::Lines(gpui::point(0.0, -5.0)),
+                                ..Default::default()
+                            }),
+                            cx,
+                        );
+                        assert!(view.upgrade().unwrap().read(cx).scrolling.animating());
+                    })
+                    .unwrap();
+                cx.background_executor()
+                    .timer(Duration::from_millis(600))
+                    .await;
+                handle
+                    .update(cx, |_, window, cx| {
+                        view.update(cx, |view, cx| {
+                            assert!(view.scrolling.handle.offset().y < px(0.0));
+                            assert!(!view.scrolling.animating(), "wheel animation must settle");
+                            view.navigate(Page::General, window, cx);
+                            assert_eq!(view.scrolling.handle.offset().y, px(0.0));
+                            assert!(!view.scrolling.animating());
+                        })
+                        .unwrap();
                     })
                     .unwrap();
                 for family in crate::theme::ThemeFamily::ALL {

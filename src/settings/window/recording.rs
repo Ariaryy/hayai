@@ -44,6 +44,7 @@ impl SettingsView {
         let activation = cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
                 this.cancel_recording();
+                this.scrolling.cancel();
                 cx.notify();
             }
         });

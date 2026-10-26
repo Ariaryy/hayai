@@ -79,7 +79,7 @@ impl SettingsView {
                         div()
                             .text_size(px(11.0))
                             .text_color(palette.muted)
-                            .child(format!("{} Â· {}", notice.license_id, notice.category)),
+                            .child(format!("{} · {}", notice.license_id, notice.category)),
                     )
                     .child(
                         div()
@@ -100,6 +100,7 @@ impl SettingsView {
                             }),
                     )
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        this.scrolling.cancel();
                         this.expanded_notice = if expanded { None } else { Some(index) };
                         cx.notify();
                     })),
