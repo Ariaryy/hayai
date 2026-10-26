@@ -25,6 +25,41 @@ pub struct LauncherState {
 }
 
 impl LauncherState {
+    pub fn clear_recent_history(cx: &mut App) {
+        let Some(state) = cx
+            .try_global::<LauncherGlobal>()
+            .map(LauncherGlobal::clone_handle)
+        else {
+            return;
+        };
+        let (handle, view) = {
+            let state = state.borrow();
+            (state.window, state.view.clone())
+        };
+        if let (Some(handle), Some(view)) = (handle, view) {
+            let _ = handle.update(cx, |_, window, cx| {
+                view.update(cx, |view, cx| {
+                    view.cancel_wheel_animation();
+                    view.action_menu = None;
+                    view.history.clear();
+                    view.history_cursor = None;
+                    let raw = view.search_input.read(cx).value().to_string();
+                    let query = if view.file_mode {
+                        view.build_query(&raw)
+                    } else if view.waiting_for_command {
+                        format!(" {raw}")
+                    } else {
+                        raw
+                    };
+                    view.list.update(cx, |list, cx| {
+                        perform_search_and_select_first(list, &query, window, cx)
+                    });
+                    cx.notify();
+                })
+            });
+        }
+    }
+
     pub fn refresh_update(&self, cx: &mut App) {
         if let Some(view) = &self.view {
             // Notification arrival must not reset the query or steal selection.
@@ -52,6 +87,7 @@ impl LauncherState {
     }
 
     pub(super) fn show_with_focus(&mut self, after_approval: bool, cx: &mut App) {
+        let monitor = native::launcher_monitor(crate::settings::preferences(cx).general.display);
         let reset_view = self.reset_pending.then(|| self.view.clone()).flatten();
         self.reset_pending = false;
         if let (Some(handle), Some(search_input)) = (self.window, self.search_input.clone()) {
@@ -108,9 +144,9 @@ impl LauncherState {
                     .unwrap();
                 let _ = handle.update(cx, |_, window, cx| {
                     if after_approval {
-                        native::focus_launcher_after_approval(window);
+                        native::focus_launcher_after_approval(window, monitor);
                     } else {
-                        native::focus_launcher_window(window);
+                        native::focus_launcher_window(window, monitor);
                     }
                     // Win32 focus must precede GPUI focus (WM_SETFOCUS).
                     search_input.update(cx, |input, cx| input.focus(window, cx));
@@ -206,7 +242,7 @@ impl LauncherState {
 
         // Win32 focus first, then GPUI focus (same ordering as the re-show path above).
         let _ = handle.update(cx, |_, window, cx| {
-            native::focus_launcher_window(window);
+            native::focus_launcher_window(window, monitor);
             search_input.update(cx, |input, cx| input.focus(window, cx));
         });
 

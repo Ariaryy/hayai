@@ -104,7 +104,9 @@ impl Catalog {
             icon_recency: VecDeque::new(),
             recents: Vec::new(),
         };
-        catalog.load_recents();
+        if crate::history::enabled() {
+            catalog.load_recents();
+        }
         let handle = Rc::new(RefCell::new(catalog));
         cx.set_global(CatalogGlobal {
             catalog: handle.clone(),
@@ -304,6 +306,10 @@ impl Catalog {
             .join("\n")
     }
 
+    pub fn clear_recents(&mut self) {
+        self.recents.clear();
+    }
+
     fn load_recents(&mut self) {
         let Some(file) = recents_file() else {
             return;
@@ -317,18 +323,6 @@ impl Catalog {
                 .collect();
         }
     }
-}
-
-/// Write pre-serialized recents contents to disk. Free function on purpose:
-/// runs on the background pool, must not touch the (non-Send) catalog.
-pub fn write_recents_file(contents: &str) {
-    let Some(file) = recents_file() else {
-        return;
-    };
-    if let Some(parent) = file.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::write(&file, contents);
 }
 
 /// Scan Start Menu shortcuts + `shell:AppsFolder` into a fresh app list.

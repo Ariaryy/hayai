@@ -34,81 +34,6 @@ impl Page {
 }
 
 impl SettingsView {
-    pub(super) fn general_page(&self, cx: &Context<Self>) -> gpui::AnyElement {
-        let palette = crate::theme::settings_palette(cx);
-        page(self.page)
-            .child(section(text::LAUNCHER_GROUP))
-            .child(
-                card(cx)
-                    .child(
-                        div()
-                            .id("general-shortcut")
-                            .rounded_t(px(11.0))
-                            .cursor_pointer()
-                            .hover(move |row| row.bg(palette.hover))
-                            .child(setting_row(
-                                text::LAUNCHER_SHORTCUT,
-                                text::LAUNCHER_SHORTCUT_HELP,
-                                key_badges(preferences(cx).binding(Shortcut::ToggleLauncher), cx),
-                                cx,
-                            ))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.navigate(Page::KeyBindings, window, cx);
-                            })),
-                    )
-                    .child(components::separator(cx))
-                    .child(
-                        div()
-                            .id("general-appearance")
-                            .rounded_b(px(11.0))
-                            .cursor_pointer()
-                            .hover(move |row| row.bg(palette.hover))
-                            .child(setting_row(
-                                text::APPEARANCE,
-                                text::APPEARANCE_DESCRIPTION,
-                                div()
-                                    .text_color(palette.muted)
-                                    .child(if preferences(cx).light {
-                                        text::LIGHT
-                                    } else {
-                                        text::DARK
-                                    }),
-                                cx,
-                            ))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.navigate(Page::Appearance, window, cx);
-                            })),
-                    ),
-            )
-            .child(div().mt_4().child(section(text::SETTINGS_LOCATION)))
-            .child(
-                card(cx).child(setting_row(
-                    text::PREFERENCES_FILE,
-                    text::SETTINGS_LOCATION_HELP,
-                    h_flex()
-                        .id("preferences-folder")
-                        .px_2()
-                        .py_1()
-                        .rounded(px(4.0))
-                        .gap_1()
-                        .text_size(px(12.0))
-                        .text_color(palette.muted)
-                        .cursor_pointer()
-                        .hover(move |link| link.bg(palette.hover).text_color(palette.foreground))
-                        .child(div().underline().child(text::SETTINGS_FILENAME))
-                        .child(
-                            svg()
-                                .path(icons::EXTERNAL_LINK)
-                                .size(px(12.0))
-                                .text_color(palette.muted),
-                        )
-                        .on_click(|_, _, cx| crate::settings::open_preferences_folder(cx)),
-                    cx,
-                )),
-            )
-            .into_any_element()
-    }
-
     pub(super) fn file_search_page(&self, cx: &Context<Self>) -> gpui::AnyElement {
         page(self.page)
             .child(section(text::SEARCH_ENGINE))
@@ -171,6 +96,7 @@ impl SettingsView {
                         )),
                 ),
             )
+            .child(self.preferences_location(cx))
             .child(
                 div()
                     .id("third-party-notices")

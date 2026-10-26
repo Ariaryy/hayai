@@ -1,6 +1,7 @@
 // User-facing launcher copy. Keep identifiers, queries, and asset paths out of this module.
 
 pub mod actions {
+    pub const DOWNLOAD_UPDATE: &str = "Download update";
     pub const UPDATING: &str = "Updating…";
     pub const CHECKING: &str = "Checking…";
     pub const BACK_TO_SEARCH: &str = "Back to search";
@@ -58,6 +59,8 @@ pub mod search {
 }
 
 pub mod updates {
+    pub const AVAILABLE_TO_DOWNLOAD: &str =
+        "An update is available. Select Download update to download it.";
     pub const HAYAI_PROMPT: &str = "Check for a new Hayai release.";
     pub const SCRY_CHECKING: &str = "Checking Scry Search…";
     pub const SCRY_AVAILABLE: &str = "Scry Search update available";
@@ -136,6 +139,28 @@ pub mod keys {
     pub const BACKSPACE: &str = "Backspace";
 }
 pub mod settings {
+    pub const LOGIN: &str = "Launch at login";
+    pub const LOGIN_HELP: &str = "Start Hayai in the tray when you sign in to Windows.";
+    pub const DISPLAY: &str = "Open on display";
+    pub const DISPLAY_HELP: &str = "Choose which display the launcher opens on.";
+    pub const DISPLAY_POINTER: &str = "Pointer";
+    pub const DISPLAY_ACTIVE: &str = "Active window";
+    pub const DISPLAY_PRIMARY: &str = "Primary";
+    pub const HISTORY: &str = "History";
+    pub const REMEMBER_RECENTS: &str = "Remember recently opened items";
+    pub const REMEMBER_RECENTS_HELP: &str =
+        "Keep recent apps and files. Turning this off clears saved history.";
+    pub const CLEAR_HISTORY: &str = "Clear history";
+    pub const CLEAR_HISTORY_HELP: &str =
+        "Remove recent apps, files and this session's query history.";
+    pub const UPDATES_GROUP: &str = "Updates";
+    pub const AUTO_CHECK: &str = "Check for updates on startup";
+    pub const AUTO_CHECK_HELP: &str =
+        "Look for new Hayai releases when the app starts. Installed releases only.";
+    pub const AUTO_DOWNLOAD: &str = "Download updates automatically";
+    pub const AUTO_DOWNLOAD_HELP: &str =
+        "Stage updates in the background. Restart only when you choose.";
+
     pub const WINDOW_TITLE: &str = "Hayai Settings";
     pub const GENERAL: &str = "General";
     pub const APPEARANCE: &str = "Appearance";
@@ -143,13 +168,9 @@ pub mod settings {
     pub const FILE_SEARCH: &str = "File search";
     pub const ABOUT: &str = "About";
     pub const LAUNCHER_SHORTCUT: &str = "Open Hayai";
-    pub const LAUNCHER_SHORTCUT_HELP: &str = "Show or hide Hayai from any app.";
     pub const SETTINGS_FILENAME: &str = "settings.json";
-    pub const SETTINGS_LOCATION: &str = "Preferences";
     pub const SETTINGS_LOCATION_HELP: &str =
         "Saved in your local Hayai app data folder and restored on startup.";
-    pub const APPEARANCE_DESCRIPTION: &str =
-        "Choose how Hayai looks. Applies to the launcher and settings.";
     pub const PREFERENCES_FILE: &str = "Preferences file";
     pub const COLOR_SCHEME: &str = "Color scheme";
     pub const THEMES: &str = "Themes";

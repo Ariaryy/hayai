@@ -5,6 +5,7 @@ mod assets;
 mod calc;
 mod commands;
 mod files;
+mod history;
 mod launcher;
 mod licenses;
 mod links;
@@ -47,8 +48,10 @@ fn main() {
         .run();
 
     let (native_tx, native_rx) = futures::channel::mpsc::unbounded();
-    updates::start(native_tx.clone());
     let settings = settings::SettingsGlobal::load();
+    history::configure(settings.preferences.general.remember_recents);
+    updates::configure(&settings.preferences.general);
+    updates::start(native_tx.clone());
     let native_runtime = NativeRuntime::start(native_tx, settings.preferences.launcher_hotkey());
 
     gpui_platform::application()

@@ -11,7 +11,9 @@ pub fn capture_registered_shortcut(cx: &mut App) -> bool {
         if view.recording.is_none() {
             return false;
         }
-        let key = preferences(cx).binding(Shortcut::ToggleLauncher).to_owned();
+        let key = crate::settings::preferences(cx)
+            .binding(Shortcut::ToggleLauncher)
+            .to_owned();
         view.record_binding(&key, cx);
         true
     })

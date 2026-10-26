@@ -42,13 +42,29 @@ and recording subscriptions; the hidden launcher keeps the tray process alive.
 App-wide keystroke interceptors must check their owning window before handling
 input. Otherwise the hidden launcher's interceptor can consume settings keys.
 
-Preferences are loaded once before the native runtime starts. Saves run on the
-background pool and publish only after hotkey registration and atomic file
-replacement succeed. Only one save may run at a time. The native thread owns
-global hotkey registration and acquires a replacement before releasing the old
-registration, preserving access when another app owns the requested shortcut.
+Preferences are loaded once before the native runtime starts. Settings controls
+show the latest requested draft while a single background save runs. Rapid edits
+replace the queued draft; failures restore the committed values and report the
+error. Runtime routing uses committed preferences. Only a change to the active
+appearance reapplies the theme, so ordinary saves do not reset widget state.
+The native thread acquires a replacement hotkey before releasing the old one;
+startup registration is restored if persistence fails. Startup reads the actual
+Windows Run entry instead of rewriting it on unrelated saves.
 `HAYAI_SETTINGS_PATH` isolates preferences for tests. No file watcher or polling
 is retained; external edits take effect at the next launch.
+
+Recent-item persistence captures a generation before queueing background writes.
+Disabling or clearing history advances that generation and pauses recording;
+a worker-only disk lock orders deletion against writes already in progress.
+Re-enabling cannot admit snapshots from before the clear. A queued clear request
+survives rapid off/on edits until its disk work completes. Clearing memory also
+invalidates launcher search generations so old recent results cannot reappear.
+
+Automatic Hayai update discovery and downloads are separate preferences. Startup
+loads them before creating the updater. An in-flight discovery rechecks policy
+before downloading or announcing availability. Discovery without downloading
+exposes a Download update action; only staged updates expose Restart to update.
+Manual checks remain available with automatic checks off. No timer is added.
 
 Settings scrolling owns a per-window scroll handle and reuses launcher wheel
 physics and precision-input handoff. Navigation cancels pending motion and

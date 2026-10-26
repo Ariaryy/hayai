@@ -107,7 +107,7 @@ impl ResultListDelegate {
                 text::updates::HAYAI_CHECKING
             } else if self.restarting_update {
                 text::updates::RESTARTING
-            } else if crate::updates::ready_version().is_some() {
+            } else if crate::updates::available_version().is_some() {
                 text::updates::HAYAI_AVAILABLE
             } else if self.update_result == Some(crate::updates::CheckResult::Current) {
                 text::updates::HAYAI_CURRENT
@@ -131,7 +131,7 @@ impl ResultListDelegate {
             } else if self.update_failed {
                 text::updates::START_UPDATE_FAILED.into()
             } else {
-                crate::updates::ready_version()
+                crate::updates::available_version()
                     .map(|version| text::updates::hayai_version(&version))
                     .unwrap_or_else(|| {
                         self.update_message

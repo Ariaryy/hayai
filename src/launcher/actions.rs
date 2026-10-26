@@ -18,6 +18,7 @@ pub(super) enum PrimaryAction {
     Starting,
     Unavailable,
     CheckForUpdates,
+    DownloadUpdate,
     UpdateHayai,
     UpdateRequired,
     Copy,
@@ -49,6 +50,7 @@ impl PrimaryAction {
             Self::ViewUpdate => text::actions::VIEW_UPDATE,
             Self::Starting => text::actions::STARTING,
             Self::Unavailable => text::actions::UNAVAILABLE,
+            Self::DownloadUpdate => text::actions::DOWNLOAD_UPDATE,
             Self::CheckForUpdates => text::actions::CHECK_FOR_UPDATES,
             Self::UpdateHayai => text::actions::UPDATE_HAYAI,
             Self::UpdateRequired => text::actions::UPDATE_REQUIRED,
@@ -294,7 +296,8 @@ impl LauncherRoot {
                 | CommandAction::CheckFileSearchUpdates
                 | CommandAction::AboutHayai
                 | CommandAction::OpenSettings
-                | CommandAction::RestartToUpdate => None,
+                | CommandAction::RestartToUpdate
+                | CommandAction::DownloadHayaiUpdate => None,
             })
     }
 

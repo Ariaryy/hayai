@@ -9,7 +9,8 @@ use windows_sys::Win32::Graphics::Dwm::{
     DWMWA_TRANSITIONS_FORCEDISABLED, DwmFlush, DwmSetWindowAttribute,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY, MONITORINFO,
+    MonitorFromPoint, MonitorFromWindow,
 };
 use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -141,22 +142,40 @@ unsafe fn disable_launcher_transitions(hwnd: HWND) {
     }
 }
 
-/// Move the (still-hidden) launcher onto the monitor under the cursor,
-/// centered in the work area. Runs before ShowWindow so the window never
-/// paints at its previous monitor's position. Keeps the window's current
-/// pixel size (GPUI sized it at creation for the then-current DPI).
-unsafe fn reposition_on_cursor_monitor(hwnd: HWND) {
-    unsafe {
-        let mut cursor = POINT { x: 0, y: 0 };
-        if GetCursorPos(&mut cursor) == 0 {
-            return; // leave the window where it was
+/// Capture the destination before GPUI can activate the launcher and change
+/// GetForegroundWindow. Pass this snapshot through reset painting and UAC return.
+#[derive(Clone, Copy)]
+pub struct LauncherMonitor(usize);
+pub fn launcher_monitor(target: crate::settings::DisplayTarget) -> LauncherMonitor {
+    use crate::settings::DisplayTarget;
+    let monitor = unsafe {
+        match target {
+            DisplayTarget::Pointer => {
+                let mut cursor = POINT { x: 0, y: 0 };
+                if GetCursorPos(&mut cursor) != 0 {
+                    MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST)
+                } else {
+                    MonitorFromWindow(null_mut(), MONITOR_DEFAULTTOPRIMARY)
+                }
+            }
+            DisplayTarget::ActiveWindow => {
+                MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTONEAREST)
+            }
+            DisplayTarget::Primary => MonitorFromWindow(null_mut(), MONITOR_DEFAULTTOPRIMARY),
         }
-        let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+    };
+    LauncherMonitor(monitor as usize)
+}
+
+/// Position while hidden, before ShowWindow, preserving the current pixel size.
+/// GPUI sized the window for its creation DPI; cross-DPI resizing is unchanged.
+unsafe fn reposition_on_monitor(hwnd: HWND, monitor: LauncherMonitor) {
+    unsafe {
         let mut info = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
             ..std::mem::zeroed()
         };
-        if GetMonitorInfoW(monitor, &mut info) == 0 {
+        if GetMonitorInfoW(monitor.0 as _, &mut info) == 0 {
             return;
         }
         let mut rect = RECT {
@@ -179,7 +198,7 @@ unsafe fn reposition_on_cursor_monitor(hwnd: HWND) {
     }
 }
 
-pub fn focus_launcher_window(window: &gpui::Window) {
+pub fn focus_launcher_window(window: &gpui::Window, monitor: LauncherMonitor) {
     if let Some(hwnd) = hwnd_of(window) {
         unsafe {
             disable_launcher_transitions(hwnd);
@@ -192,7 +211,7 @@ pub fn focus_launcher_window(window: &gpui::Window) {
                 (ex | WS_EX_TOOLWINDOW as isize) & !(WS_EX_APPWINDOW as isize),
             );
 
-            reposition_on_cursor_monitor(hwnd);
+            reposition_on_monitor(hwnd, monitor);
             ShowWindow(hwnd, SW_SHOW);
             // Apply the exstyle change and push to top of Z-order in one call.
             SetWindowPos(
@@ -212,7 +231,7 @@ pub fn focus_launcher_window(window: &gpui::Window) {
     }
 }
 
-pub fn focus_launcher_after_approval(window: &gpui::Window) {
+pub fn focus_launcher_after_approval(window: &gpui::Window, monitor: LauncherMonitor) {
     use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetWindowThreadProcessId,
@@ -226,7 +245,7 @@ pub fn focus_launcher_after_approval(window: &gpui::Window) {
         let attached = foreground != 0
             && foreground != current
             && AttachThreadInput(current, foreground, 1) != 0;
-        focus_launcher_window(window);
+        focus_launcher_window(window, monitor);
         if attached {
             AttachThreadInput(current, foreground, 0);
         }

@@ -47,6 +47,7 @@ $measurements = foreach ($executable in @($BaselineExecutable, $CandidateExecuta
     $resolved = (Resolve-Path -LiteralPath $executable).Path
     $run = Start-Process -FilePath $resolved -WindowStyle Hidden -PassThru -Environment @{
         LOCALAPPDATA = $scratch
+        APPDATA = (Join-Path $scratch 'roaming')
         HAYAI_SETTINGS_PATH = $preferences
     }
     try {
@@ -57,7 +58,8 @@ $measurements = foreach ($executable in @($BaselineExecutable, $CandidateExecuta
         if ($messageWindow -ne [IntPtr]::Zero) {
             # The native thread validates the ID. Deliver only to this process.
             [void][HayaiSettingsProbe]::PostMessage($messageWindow, 0x0312, [UIntPtr]1, [IntPtr]::Zero)
-            Start-Sleep -Seconds 1
+            # Let initial icon/atlas work settle before sampling the open view.
+            Start-Sleep -Seconds 3
             $active = @(Get-MemorySamples $run)
         }
         [pscustomobject]@{

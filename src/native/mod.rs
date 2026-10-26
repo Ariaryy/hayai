@@ -51,7 +51,7 @@ pub use windows::{
     NativeRuntime, associated_apps, extract_icon_rgba, focus_launcher_after_approval,
     focus_launcher_window, hidden_launcher_frame_flush, hide_launcher_window, https_get,
     install_scry_daemon, launch_path, launch_path_as_admin, launcher_has_foreground,
-    list_apps_folder, local_now, local_now_seconds, open_with, open_with_app,
+    launcher_monitor, list_apps_folder, local_now, local_now_seconds, open_with, open_with_app,
     render_hidden_launcher_frame, reset_scry_search, scry_is_installed, scry_query,
     set_launcher_hotkey, start_scry_daemon, suspend_scry_search, system_currency_code,
     system_timezone_name, timezone_local_to_utc, timezone_utc_to_local,
@@ -79,10 +79,18 @@ pub fn set_launcher_hotkey(_hotkey: (u32, u32)) -> anyhow::Result<()> {
 }
 
 #[cfg(not(windows))]
-pub fn focus_launcher_window(_window: &gpui::Window) {}
+#[derive(Clone, Copy)]
+pub struct LauncherMonitor;
+#[cfg(not(windows))]
+pub fn launcher_monitor(_: crate::settings::DisplayTarget) -> LauncherMonitor {
+    LauncherMonitor
+}
 
 #[cfg(not(windows))]
-pub fn focus_launcher_after_approval(_window: &gpui::Window) {}
+pub fn focus_launcher_window(_window: &gpui::Window, _: LauncherMonitor) {}
+
+#[cfg(not(windows))]
+pub fn focus_launcher_after_approval(_window: &gpui::Window, _: LauncherMonitor) {}
 
 #[cfg(not(windows))]
 pub fn hide_launcher_window(_window: &gpui::Window) {}

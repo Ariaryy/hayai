@@ -188,6 +188,12 @@ pub fn apply_launcher_theme(cx: &mut App) {
     theme.muted_foreground = palette.muted;
     theme.accent = palette.selected;
     theme.primary = palette.accent;
+    theme.popover = palette.background;
+    theme.popover_foreground = palette.foreground;
+    theme.accent_foreground = palette.foreground;
+    theme.input = palette.border;
+    theme.switch = palette.selected;
+    theme.switch_thumb = palette.background;
     theme.list_active = palette.selected;
     theme.list_active_border = palette.selected;
     theme.list_hover = palette.hover;

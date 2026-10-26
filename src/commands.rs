@@ -35,6 +35,7 @@ pub enum CommandAction {
     CheckFileSearchUpdates,
     RestartToUpdate,
     CheckForUpdates,
+    DownloadHayaiUpdate,
     AboutHayai,
     OpenSettings,
 }

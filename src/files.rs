@@ -54,7 +54,8 @@ impl gpui::Global for FileRecentsGlobal {}
 impl FileRecents {
     fn load() -> Self {
         let mut recents = Vec::new();
-        if let Some(file) = recents_file()
+        if crate::history::enabled()
+            && let Some(file) = recents_file()
             && let Ok(contents) = std::fs::read_to_string(&file)
         {
             recents = contents
@@ -65,6 +66,10 @@ impl FileRecents {
                 .collect();
         }
         Self { recents }
+    }
+
+    pub fn clear(&mut self) {
+        self.recents.clear();
     }
 
     pub fn recents(&self) -> &[PathBuf] {
@@ -84,18 +89,6 @@ impl FileRecents {
             .collect::<Vec<_>>()
             .join("\n")
     }
-}
-
-/// Write pre-serialized recents contents to disk. Free function on purpose:
-/// runs on the background pool, must not touch the (non-Send) `FileRecents`.
-pub fn write_file_recents_file(contents: &str) {
-    let Some(file) = recents_file() else {
-        return;
-    };
-    if let Some(parent) = file.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::write(&file, contents);
 }
 
 fn recents_file() -> Option<PathBuf> {

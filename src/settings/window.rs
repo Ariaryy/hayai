@@ -1,4 +1,4 @@
-use super::{SettingsGlobal, Shortcut, preferences, save};
+use super::{SettingsGlobal, Shortcut, display_preferences as preferences, save};
 use crate::{assets::icons, ui_text::settings as text};
 use gpui::prelude::*;
 use gpui::{
@@ -9,6 +9,7 @@ use gpui_component::{Root, TitleBar, h_flex};
 
 mod appearance;
 mod components;
+mod general;
 mod keybindings;
 mod licenses;
 mod lifecycle;

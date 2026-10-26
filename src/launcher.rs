@@ -308,6 +308,8 @@ impl LauncherRoot {
                 PrimaryAction::Checking
             } else if delegate.update_result == Some(crate::updates::CheckResult::Ready) {
                 PrimaryAction::RestartToUpdate
+            } else if delegate.update_result == Some(crate::updates::CheckResult::Available) {
+                PrimaryAction::DownloadUpdate
             } else {
                 PrimaryAction::CheckAgain
             };
@@ -385,6 +387,7 @@ impl LauncherRoot {
             Some(CommandAction::CheckFileSearchUpdates) => PrimaryAction::CheckForUpdates,
             Some(CommandAction::RestartToUpdate) => PrimaryAction::RestartToUpdate,
             Some(CommandAction::CheckForUpdates) => PrimaryAction::CheckForUpdates,
+            Some(CommandAction::DownloadHayaiUpdate) => PrimaryAction::DownloadUpdate,
             Some(CommandAction::AboutHayai) => PrimaryAction::AboutHayai,
             Some(CommandAction::OpenSettings) => PrimaryAction::OpenSettings,
             Some(CommandAction::LaunchApplication(_)) | None => PrimaryAction::OpenApplication,

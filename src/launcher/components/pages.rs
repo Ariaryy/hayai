@@ -180,6 +180,9 @@ pub(in crate::launcher) fn updates_page(
                         }
                     } else if update_ready {
                         text::actions::RESTART_TO_UPDATE
+                    } else if delegate.update_result == Some(crate::updates::CheckResult::Available)
+                    {
+                        text::actions::DOWNLOAD_UPDATE
                     } else {
                         text::actions::CHECK_AGAIN
                     }),

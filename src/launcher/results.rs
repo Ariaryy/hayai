@@ -204,7 +204,7 @@ impl ResultListDelegate {
             && !self.show_about
             && !self.update_dismissed
             && (self.checking_update
-                || crate::updates::ready_version().is_some()
+                || crate::updates::available_version().is_some()
                 || (self.update_notice
                     && self.update_result == Some(crate::updates::CheckResult::Current)))
     }
@@ -292,7 +292,7 @@ impl ResultListDelegate {
             scry_discovery: None,
             scry_message: String::new(),
             main_results,
-            notification_selected: crate::updates::ready_version().is_some(),
+            notification_selected: crate::updates::available_version().is_some(),
             update_dismissed: false,
             checking_update: false,
             update_message: None,

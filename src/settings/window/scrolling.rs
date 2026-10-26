@@ -15,6 +15,8 @@ pub(super) struct SettingsScroll {
     handoff: ScrollHandoff,
     pub drag_anchor: Option<f32>,
     pub hovered: bool,
+    #[cfg(test)]
+    pub frame_samples: Vec<Instant>,
 }
 
 impl SettingsScroll {
@@ -62,6 +64,10 @@ impl SettingsScroll {
             self.cancel();
         }
         let start = self.motion.is_none();
+        #[cfg(test)]
+        if start {
+            self.frame_samples.clear();
+        }
         let animation = self.motion.get_or_insert_with(|| WheelMotion {
             motion: SmoothScroll::new(current),
             last_frame: Instant::now(),
@@ -88,6 +94,8 @@ impl SettingsScroll {
             return false;
         }
         let now = Instant::now();
+        #[cfg(test)]
+        self.frame_samples.push(now);
         let active = animation.motion.advance(
             now.duration_since(animation.last_frame).as_secs_f32(),
             f32::from(self.handle.max_offset().y),

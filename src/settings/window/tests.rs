@@ -1,6 +1,9 @@
 use super::*;
 use std::time::Duration;
 
+mod general;
+mod scrolling;
+
 /// Tests real pre-dispatch recording and asynchronous persistence. Run in a
 /// child because the pinned Windows event loop exits the process on quit.
 #[test]
@@ -17,6 +20,10 @@ fn settings_window_gui_smoke() {
                 "--test-threads=1",
             ])
             .env("HAYAI_SETTINGS_GUI_CHILD", "1")
+            .env(
+                "APPDATA",
+                std::env::temp_dir().join(format!("hayai-general-gui-{}", std::process::id())),
+            )
             .output()
             .unwrap();
         assert!(
@@ -26,6 +33,12 @@ fn settings_window_gui_smoke() {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+        for line in String::from_utf8_lossy(&output.stderr)
+            .lines()
+            .filter(|line| line.starts_with("SCROLL_FRAME_MS"))
+        {
+            eprintln!("{line}");
+        }
         return;
     }
 
@@ -125,48 +138,8 @@ fn settings_window_gui_smoke() {
                     assert!(view.upgrade().unwrap().read(cx).recording.is_none());
                     assert!(!cx.global::<SettingsGlobal>().saving);
                 });
-                handle
-                    .update(cx, |_, window, cx| {
-                        view.update(cx, |view, cx| {
-                            view.navigate(Page::Licenses, window, cx);
-                            view.expanded_notice = Some(0);
-                        })
-                        .unwrap();
-                    })
-                    .unwrap();
-                cx.background_executor()
-                    .timer(Duration::from_millis(200))
-                    .await;
-                handle
-                    .update(cx, |_, window, cx| {
-                        let scroll = view.upgrade().unwrap().read(cx).scrolling.handle.clone();
-                        assert!(scroll.max_offset().y > px(0.0));
-                        window.dispatch_event(
-                            gpui::PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
-                                position: scroll.bounds().origin + gpui::point(px(30.0), px(30.0)),
-                                delta: gpui::ScrollDelta::Lines(gpui::point(0.0, -5.0)),
-                                ..Default::default()
-                            }),
-                            cx,
-                        );
-                        assert!(view.upgrade().unwrap().read(cx).scrolling.animating());
-                    })
-                    .unwrap();
-                cx.background_executor()
-                    .timer(Duration::from_millis(600))
-                    .await;
-                handle
-                    .update(cx, |_, window, cx| {
-                        view.update(cx, |view, cx| {
-                            assert!(view.scrolling.handle.offset().y < px(0.0));
-                            assert!(!view.scrolling.animating(), "wheel animation must settle");
-                            view.navigate(Page::General, window, cx);
-                            assert_eq!(view.scrolling.handle.offset().y, px(0.0));
-                            assert!(!view.scrolling.animating());
-                        })
-                        .unwrap();
-                    })
-                    .unwrap();
+                general::check(&path, cx).await;
+                scrolling::check(handle, &view, cx).await;
                 for family in crate::theme::ThemeFamily::ALL {
                     for light in [false, true] {
                         cx.update(|cx| {

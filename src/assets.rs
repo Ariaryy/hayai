@@ -14,6 +14,7 @@ pub mod icons {
     }
 
     svg_icons! {
+        CHEVRON_DOWN => "icons/chevron-down.svg",
         CARET_RIGHT => "icons/thirdparty/phosphor/caret-right.svg",
         CARET_DOWN => "icons/thirdparty/phosphor/caret-down.svg",
         EXTERNAL_LINK => "icons/thirdparty/phosphor/arrow-square-out.svg",

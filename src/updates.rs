@@ -1,5 +1,33 @@
 //! Silent update staging, applied only when the user chooses Restart to update.
 
+use std::sync::atomic::{AtomicU8, Ordering};
+// One snapshot keeps the two options consistent across native/background work.
+static POLICY: AtomicU8 = AtomicU8::new(3);
+static DISCOVERED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+#[cfg(debug_assertions)]
+static PREVIEW_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn configure(general: &crate::settings::General) {
+    POLICY.store(
+        u8::from(general.check_updates) | (u8::from(general.download_updates) << 1),
+        Ordering::Release,
+    );
+}
+fn automatic_policy() -> (bool, bool) {
+    let policy = POLICY.load(Ordering::Acquire);
+    (policy & 1 != 0, policy & 2 != 0)
+}
+pub fn available_version() -> Option<String> {
+    ready_version().or_else(|| DISCOVERED.get().cloned())
+}
+pub fn available_result() -> Option<CheckResult> {
+    if ready_version().is_some() {
+        Some(CheckResult::Ready)
+    } else {
+        DISCOVERED.get().map(|_| CheckResult::Available)
+    }
+}
+
 /// Latest operation only, bounded and retained in memory for explicit copying.
 pub struct DiagnosticLog(std::sync::Mutex<String>);
 impl DiagnosticLog {
@@ -42,7 +70,9 @@ static READY: std::sync::OnceLock<(velopack::UpdateManager, velopack::VelopackAs
 
 pub fn ready_version() -> Option<String> {
     #[cfg(debug_assertions)]
-    return Some(format!("{} (preview)", env!("CARGO_PKG_VERSION")));
+    return PREVIEW_READY
+        .load(Ordering::Acquire)
+        .then(|| format!("{} (preview)", env!("CARGO_PKG_VERSION")));
     #[cfg(all(windows, not(debug_assertions)))]
     return READY.get().map(|(_, asset)| asset.Version.clone());
     #[cfg(all(not(windows), not(debug_assertions)))]
@@ -65,6 +95,7 @@ pub fn prepare_restart() -> bool {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CheckResult {
     Ready,
+    Available,
     Current,
     Unavailable,
     Failed,
@@ -74,6 +105,7 @@ pub enum CheckResult {
 impl CheckResult {
     pub fn message(self) -> &'static str {
         match self {
+            Self::Available => crate::ui_text::updates::AVAILABLE_TO_DOWNLOAD,
             Self::Ready => "Update ready. Select the notification to restart.",
             Self::Current => "You're up to date.",
             Self::Unavailable => "Automatic updates require an installed Windows release.",
@@ -84,7 +116,24 @@ impl CheckResult {
 }
 
 pub fn check() -> CheckResult {
+    check_with_policy(false, false)
+}
+
+pub fn download() -> CheckResult {
+    check_with_policy(false, true)
+}
+
+fn check_with_policy(automatic: bool, force_download: bool) -> CheckResult {
+    if automatic && !automatic_policy().0 {
+        return CheckResult::Unavailable;
+    }
     if cfg!(debug_assertions) {
+        if !force_download && !automatic_policy().1 && ready_version().is_none() {
+            let _ = DISCOVERED.set(format!("{} (preview)", env!("CARGO_PKG_VERSION")));
+            return CheckResult::Available;
+        }
+        #[cfg(debug_assertions)]
+        PREVIEW_READY.store(true, Ordering::Release);
         DIAGNOSTICS.reset("Hayai update check: debug preview\nNo network check or installation was performed.\nResult: update ready (simulated)\n");
         return CheckResult::Ready;
     }
@@ -128,6 +177,17 @@ pub fn check() -> CheckResult {
         }
         match manager.check_for_updates() {
             Ok(UpdateCheck::UpdateAvailable(update)) => {
+                // Re-read after network discovery: disabling startup checks or
+                // downloads must also govern work already in flight.
+                let (checks, downloads) = automatic_policy();
+                if automatic && !checks {
+                    return CheckResult::Unavailable;
+                }
+                if !force_download && !downloads {
+                    let _ = DISCOVERED.set(update.TargetFullRelease.Version.clone());
+                    DIAGNOSTICS.append("Result: update available; automatic download disabled\n");
+                    return CheckResult::Available;
+                }
                 if let Err(error) = manager.download_updates(&update, None) {
                     DIAGNOSTICS.append(&format!("Download failed:\n{error:#?}\n"));
                     return CheckResult::Failed;
@@ -154,16 +214,23 @@ pub fn check() -> CheckResult {
 }
 
 pub fn start(notifications: futures::channel::mpsc::UnboundedSender<crate::native::NativeCommand>) {
+    if !automatic_policy().0 {
+        return;
+    }
     #[cfg(debug_assertions)]
     {
-        let _ = check();
+        let _ = check_with_policy(true, false);
         let _ = notifications.unbounded_send(crate::native::NativeCommand::UpdateReady);
     }
     #[cfg(all(windows, not(debug_assertions)))]
     let _ = std::thread::Builder::new()
         .name("hayai-update".into())
         .spawn(move || {
-            if check() == CheckResult::Ready {
+            if matches!(
+                check_with_policy(true, false),
+                CheckResult::Ready | CheckResult::Available
+            ) && automatic_policy().0
+            {
                 let _ = notifications.unbounded_send(crate::native::NativeCommand::UpdateReady);
             }
         });

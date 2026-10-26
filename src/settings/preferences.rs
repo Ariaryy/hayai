@@ -54,6 +54,7 @@ impl Binding {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Preferences {
     pub light: bool,
+    pub general: super::General,
     light_theme: crate::theme::ThemeFamily,
     dark_theme: crate::theme::ThemeFamily,
     bindings: [Binding; 4],
@@ -63,6 +64,7 @@ impl Default for Preferences {
     fn default() -> Self {
         Self {
             light: false,
+            general: super::General::default(),
             light_theme: crate::theme::ThemeFamily::default(),
             dark_theme: crate::theme::ThemeFamily::default(),
             bindings: Shortcut::ALL.map(|action| Binding::parse(action.default_key()).unwrap()),
@@ -177,6 +179,7 @@ impl Preferences {
         };
         let mut result = Self {
             light,
+            general: super::General::parse(&json["general"])?,
             light_theme: theme_for("light")?,
             dark_theme: theme_for("dark")?,
             ..Self::default()
@@ -199,7 +202,7 @@ impl Preferences {
             .into_iter()
             .map(|action| (action.id().into(), self.binding(action).into()))
             .collect();
-        serde_json::json!({"version": 1, "appearance": if self.light { "light" } else { "dark" }, "themes": {"light": self.light_theme.id(), "dark": self.dark_theme.id()}, "keybindings": bindings}).to_string()
+        serde_json::json!({"version": 1, "appearance": if self.light { "light" } else { "dark" }, "themes": {"light": self.light_theme.id(), "dark": self.dark_theme.id()}, "general": self.general.encode(), "keybindings": bindings}).to_string()
     }
 }
 
@@ -262,6 +265,30 @@ mod tests {
         assert!(Preferences::parse("{\"version\":2}").is_err());
         assert!(
             Preferences::parse("{\"version\":1,\"keybindings\":{\"actions\":\"ctrl-f\"}}").is_err()
+        );
+    }
+
+    #[test]
+    fn general_preferences_roundtrip_without_resetting_other_pages() {
+        let legacy = Preferences::parse(r#"{"version":1}"#).unwrap();
+        assert_eq!(legacy.general, super::super::General::default());
+        for display in super::super::DisplayTarget::ALL {
+            for enabled in [false, true] {
+                let mut prefs = Preferences::default();
+                prefs.general.display = display;
+                prefs.general.launch_at_login = enabled;
+                prefs.general.remember_recents = enabled;
+                prefs.general.check_updates = enabled;
+                prefs.general.download_updates = !enabled;
+                prefs
+                    .set_binding(Shortcut::Settings, "ctrl-shift-s")
+                    .unwrap();
+                assert_eq!(Preferences::parse(&prefs.encode()).unwrap(), prefs);
+            }
+        }
+        assert!(Preferences::parse(r#"{"version":1,"general":{"display":"unknown"}}"#).is_err());
+        assert!(
+            Preferences::parse(r#"{"version":1,"general":{"remember_recents":"false"}}"#).is_err()
         );
     }
 

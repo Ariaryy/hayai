@@ -60,10 +60,10 @@ impl ResultListDelegate {
                     return;
                 }
                 UpdateNotification::Hayai
-                    if !self.checking_update && crate::updates::ready_version().is_some() =>
+                    if !self.checking_update && crate::updates::available_version().is_some() =>
                 {
                     self.show_updates = true;
-                    self.update_result = Some(crate::updates::CheckResult::Ready);
+                    self.update_result = crate::updates::available_result();
                     cx.notify();
                     return;
                 }
@@ -86,6 +86,8 @@ impl ResultListDelegate {
             Some(
                 if self.update_result == Some(crate::updates::CheckResult::Ready) {
                     CommandAction::RestartToUpdate
+                } else if self.update_result == Some(crate::updates::CheckResult::Available) {
+                    CommandAction::DownloadHayaiUpdate
                 } else {
                     CommandAction::CheckForUpdates
                 },
@@ -121,16 +123,20 @@ impl ResultListDelegate {
             Some(CommandAction::UpdateFileSearch) => {
                 self.update_scry(cx);
             }
-            Some(CommandAction::CheckForUpdates) => {
-                if self.file_search
+            Some(
+                action @ (CommandAction::CheckForUpdates | CommandAction::DownloadHayaiUpdate),
+            ) => {
+                let download = matches!(action, CommandAction::DownloadHayaiUpdate);
+                if !download
+                    && self.file_search
                     && self
                         .results
                         .iter()
                         .any(|item| item.id == "files:compatibility:newer")
-                    && crate::updates::ready_version().is_some()
+                    && crate::updates::available_version().is_some()
                 {
                     self.show_updates = true;
-                    self.update_result = Some(crate::updates::CheckResult::Ready);
+                    self.update_result = crate::updates::available_result();
                     cx.notify();
                     return;
                 }
@@ -149,7 +155,15 @@ impl ResultListDelegate {
                 self.update_message = Some(text::updates::CHECKING);
                 cx.notify();
                 cx.spawn_in(window, async move |list, cx| {
-                    let result = cx.background_spawn(async { crate::updates::check() }).await;
+                    let result = cx
+                        .background_spawn(async move {
+                            if download {
+                                crate::updates::download()
+                            } else {
+                                crate::updates::check()
+                            }
+                        })
+                        .await;
                     let _ = cx.update(|window, cx| {
                         list.update(cx, |list, cx| {
                             let previous = list.delegate().selected_notification();
@@ -195,11 +209,18 @@ impl ResultListDelegate {
                 .detach();
             }
             Some(CommandAction::LaunchApplication(path)) => {
-                let recents = self.catalog.borrow_mut().mark_launched_path(path.clone());
+                let recents = crate::history::enabled()
+                    .then(|| {
+                        let contents = self.catalog.borrow_mut().mark_launched_path(path.clone());
+                        crate::history::prepare(contents)
+                    })
+                    .flatten();
                 LauncherState::dismiss(window, cx);
                 cx.background_spawn(async move {
                     native::launch_path(&path);
-                    crate::apps::write_recents_file(&recents);
+                    if let Some(write) = recents {
+                        write.save(crate::history::Kind::Apps);
+                    }
                 })
                 .detach();
             }
@@ -207,11 +228,18 @@ impl ResultListDelegate {
                 let recents = cx
                     .global::<crate::files::FileRecentsGlobal>()
                     .clone_handle();
-                let contents = recents.borrow_mut().mark_opened(path.clone());
+                let contents = crate::history::enabled()
+                    .then(|| {
+                        let contents = recents.borrow_mut().mark_opened(path.clone());
+                        crate::history::prepare(contents)
+                    })
+                    .flatten();
                 LauncherState::dismiss(window, cx);
                 cx.background_spawn(async move {
                     native::launch_path(&path);
-                    crate::files::write_file_recents_file(&contents);
+                    if let Some(write) = contents {
+                        write.save(crate::history::Kind::Files);
+                    }
                 })
                 .detach();
             }
