@@ -91,6 +91,7 @@ fn wheel_scroll_gui_smoke() {
         .with_assets(crate::assets::LauncherAssets)
         .run(move |cx| {
             gpui_component::init(cx);
+            cx.set_global(crate::settings::SettingsGlobal::load());
             gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
             crate::theme::apply_launcher_theme(cx);
             let launcher = LauncherState::install(cx);

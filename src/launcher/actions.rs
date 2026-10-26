@@ -27,6 +27,7 @@ pub(super) enum PrimaryAction {
     Install,
     Start,
     AboutHayai,
+    OpenSettings,
     OpenApplication,
     None,
 }
@@ -58,6 +59,7 @@ impl PrimaryAction {
             Self::Install => text::actions::INSTALL,
             Self::Start => text::actions::START,
             Self::AboutHayai => text::actions::ABOUT_HAYAI,
+            Self::OpenSettings => text::settings::OPEN_SETTINGS,
             Self::OpenApplication => text::actions::OPEN_APPLICATION,
             Self::None => "",
         }
@@ -291,6 +293,7 @@ impl LauncherRoot {
                 | CommandAction::UpdateFileSearch
                 | CommandAction::CheckFileSearchUpdates
                 | CommandAction::AboutHayai
+                | CommandAction::OpenSettings
                 | CommandAction::RestartToUpdate => None,
             })
     }

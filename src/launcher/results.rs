@@ -97,7 +97,8 @@ pub(super) struct ResultListDelegate {
     pub(super) starting_scry: bool,
     pub(super) last_query: String,
     pub(super) scry_icon: Option<Arc<RenderImage>>,
-    pub(super) builtin_row_icons: [Option<Arc<RenderImage>>; 3],
+    pub(super) builtin_row_icons: [Option<Arc<RenderImage>>; 4],
+    settings_icon: Option<Arc<RenderImage>>,
     pub(super) builtin_row_pixels: u32,
     pub(super) file_search: bool,
     pub(super) registry: Rc<RefCell<PluginRegistry>>,
@@ -127,6 +128,7 @@ impl ResultListDelegate {
             builtin_row_icon(&self.brand_icon, pixels),
             builtin_row_icon(&self.update_icon, pixels),
             builtin_row_icon(&self.scry_icon, pixels),
+            builtin_row_icon(&self.settings_icon, pixels),
         ];
         self.builtin_row_pixels = pixels;
     }
@@ -305,6 +307,7 @@ impl ResultListDelegate {
             starting_scry: false,
             last_query: String::new(),
             scry_icon,
+            settings_icon: load_builtin_icon(icon_assets::SETTINGS_PNG),
             builtin_row_icons: Default::default(),
             builtin_row_pixels: 0,
             file_search: false,
@@ -396,7 +399,7 @@ pub(super) fn section_heading(label: &'static str, cx: &App) -> impl IntoElement
 fn is_hayai_action(action: &CommandAction) -> bool {
     matches!(
         action,
-        CommandAction::CheckForUpdates | CommandAction::AboutHayai
+        CommandAction::CheckForUpdates | CommandAction::AboutHayai | CommandAction::OpenSettings
     )
 }
 

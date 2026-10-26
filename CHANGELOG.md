@@ -5,6 +5,12 @@ yet included in a published package.
 
 ## Unreleased
 
+### Settings
+
+- Open Settings from the Hayai group in its own resizable window, with a themed titlebar, sidebar navigation, and About pinned at the bottom.
+- Choose Hayai's dark or light appearance for both windows. Preferences persist between launches.
+- Record and reset shortcuts for opening Hayai, the action panel, file search, and settings. Bindings save immediately after recording. Key badges show the current bindings; conflicts keep the previous shortcut working.
+
 ## 0.1.1 - 2026-10-24
 
 ### Launcher

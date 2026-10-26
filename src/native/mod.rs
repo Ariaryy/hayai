@@ -2,6 +2,8 @@
 pub enum NativeCommand {
     UpdateReady,
     ToggleLauncher,
+    ShortcutPressed,
+    ShortcutUnavailable,
     Quit,
 }
 
@@ -51,8 +53,8 @@ pub use windows::{
     install_scry_daemon, launch_path, launch_path_as_admin, launcher_has_foreground,
     list_apps_folder, local_now, local_now_seconds, open_with, open_with_app,
     render_hidden_launcher_frame, reset_scry_search, scry_is_installed, scry_query,
-    start_scry_daemon, suspend_scry_search, system_currency_code, system_timezone_name,
-    timezone_local_to_utc, timezone_utc_to_local,
+    set_launcher_hotkey, start_scry_daemon, suspend_scry_search, system_currency_code,
+    system_timezone_name, timezone_local_to_utc, timezone_utc_to_local,
 };
 
 #[cfg(not(windows))]
@@ -60,12 +62,20 @@ pub struct NativeRuntime;
 
 #[cfg(not(windows))]
 impl NativeRuntime {
-    pub fn start(_sender: futures::channel::mpsc::UnboundedSender<NativeCommand>) -> Self {
+    pub fn start(
+        _sender: futures::channel::mpsc::UnboundedSender<NativeCommand>,
+        _hotkey: (u32, u32),
+    ) -> Self {
         eprintln!(
             "Hayai native tray and global hotkey support is currently implemented on Windows."
         );
         Self
     }
+}
+
+#[cfg(not(windows))]
+pub fn set_launcher_hotkey(_hotkey: (u32, u32)) -> anyhow::Result<()> {
+    Ok(())
 }
 
 #[cfg(not(windows))]

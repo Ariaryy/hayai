@@ -7,7 +7,7 @@ revision selected by `Cargo.lock`.
 
 ## Window lifecycle and focus
 
-- Preserve the single GPUI window. Closing the last window quits the Windows
+- Preserve the launcher GPUI window. Closing the last window quits the Windows
   event loop; hiding keeps hotkey and tray behavior alive.
 - `LauncherState::hide` is for callers outside a window update.
   Actions, delegates, and activation observers already have `&mut Window`:

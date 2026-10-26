@@ -36,6 +36,7 @@ pub enum CommandAction {
     RestartToUpdate,
     CheckForUpdates,
     AboutHayai,
+    OpenSettings,
 }
 
 #[derive(Clone, Debug)]

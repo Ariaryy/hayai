@@ -514,6 +514,11 @@ pub(crate) fn hayai_commands(query: &str) -> Vec<CommandItem> {
     let query = query.to_ascii_lowercase();
     [
         (
+            crate::ui_text::settings::SETTINGS_ITEM,
+            "hayai settings preferences appearance theme key bindings shortcuts",
+            CommandAction::OpenSettings,
+        ),
+        (
             "Check for updates",
             "hayai check for updates update upgrade",
             CommandAction::CheckForUpdates,
@@ -782,8 +787,8 @@ mod tests {
     fn hayai_commands_are_searchable_and_follow_app_results() {
         use crate::commands::CommandAction;
         let all = super::hayai_commands("");
-        assert_eq!(all.len(), 2);
-        assert_eq!(super::hayai_commands("HAYAI").len(), 2);
+        assert_eq!(all.len(), 3);
+        assert_eq!(super::hayai_commands("HAYAI").len(), 3);
         let updates = super::hayai_commands("check updates");
         assert_eq!(updates.len(), 1);
         assert!(matches!(updates[0].action, CommandAction::CheckForUpdates));
@@ -807,8 +812,9 @@ mod tests {
             items[0].action,
             CommandAction::LaunchApplication(_)
         ));
-        assert!(matches!(items[1].action, CommandAction::CheckForUpdates));
-        assert!(matches!(items[2].action, CommandAction::AboutHayai));
+        assert!(matches!(items[1].action, CommandAction::OpenSettings));
+        assert!(matches!(items[2].action, CommandAction::CheckForUpdates));
+        assert!(matches!(items[3].action, CommandAction::AboutHayai));
     }
 
     #[test]

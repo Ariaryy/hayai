@@ -134,6 +134,69 @@ pub mod keys {
     pub const SPACE: &str = "Space";
     pub const TAB: &str = "Tab";
     pub const BACKSPACE: &str = "Backspace";
-    pub const CTRL: &str = "Ctrl";
-    pub const K: &str = "K";
+}
+pub mod settings {
+    pub const WINDOW_TITLE: &str = "Hayai Settings";
+    pub const GENERAL: &str = "General";
+    pub const APPEARANCE: &str = "Appearance";
+    pub const KEYBINDINGS: &str = "Key bindings";
+    pub const FILE_SEARCH: &str = "File search";
+    pub const ABOUT: &str = "About";
+    pub const LAUNCHER_SHORTCUT: &str = "Open Hayai";
+    pub const LAUNCHER_SHORTCUT_HELP: &str = "Show or hide Hayai from any app.";
+    pub const SETTINGS_LOCATION: &str = "Preferences";
+    pub const SETTINGS_LOCATION_HELP: &str =
+        "Saved in your local Hayai app data folder and restored on startup.";
+    pub const APPEARANCE_DESCRIPTION: &str =
+        "Choose how Hayai looks. Applies to the launcher and settings.";
+    pub const PREFERENCES_FILE: &str = "Preferences file";
+    pub const COLOR_SCHEME: &str = "Color scheme";
+    pub const THEMES: &str = "Themes";
+    pub const SEARCH_ENGINE: &str = "Search engine";
+    pub const SCRY_NAME: &str = "Scry Search";
+    pub const WINDOWS_INDEX: &str = "Windows index";
+    pub const SYSTEM_SCOPE: &str = "Available system-wide";
+    pub const LAUNCHER_SCOPE: &str = "When the launcher is focused";
+    pub const DARK: &str = "Dark";
+    pub const LIGHT: &str = "Light";
+    pub const KEYBINDINGS_DESCRIPTION: &str =
+        "Click a shortcut and press its replacement. Changes save automatically.";
+    pub const SYSTEM_GROUP: &str = "System";
+    pub const LAUNCHER_GROUP: &str = "Launcher";
+    pub const PRESS_SHORTCUT: &str = "Press a shortcut…";
+    pub const RESET: &str = "Reset";
+    pub const RECORDING_HELP: &str = "Press a key combination. Esc cancels.";
+    pub const FILE_DESCRIPTION: &str =
+        "File search is powered by Scry Search, using its Windows index.";
+    pub const FILE_SEARCH_HELP: &str =
+        "Open file search directly, or type Space then f in the launcher.";
+    pub const FILE_GUIDE: &str = "File search setup and search syntax";
+    pub const SAVING: &str = "Saving…";
+    pub const MODIFIER_REQUIRED: &str = "Include Ctrl, Alt or Win so typing keeps working.";
+    pub const RESERVED_KEY: &str =
+        "This key is reserved for editing, navigation or closing windows.";
+    pub const CONFLICT: &str = "Another action already uses this shortcut.";
+    pub const GLOBAL_SUPPORTED: &str =
+        "Use a letter, digit, function key or Space for the system shortcut.";
+    pub const LOAD_FAILED: &str = "Could not load preferences. Using defaults.";
+    pub const SAVE_FAILED: &str = "Could not save preferences.";
+    pub const HOTKEY_FAILED: &str =
+        "Windows could not register that shortcut. It may belong to another app.";
+    pub const OPEN_ACTIONS: &str = "Toggle action panel";
+    pub const OPEN_SETTINGS: &str = "Open settings";
+    pub const SETTINGS_ITEM: &str = "Settings";
+    pub const THIRD_PARTY_NOTICES: &str = "Third-party notices";
+    pub fn theme_label(family: crate::theme::ThemeFamily) -> &'static str {
+        match family {
+            crate::theme::ThemeFamily::Hayai => "Hayai",
+        }
+    }
+    pub fn shortcut_label(action: crate::settings::Shortcut) -> &'static str {
+        match action {
+            crate::settings::Shortcut::ToggleLauncher => LAUNCHER_SHORTCUT,
+            crate::settings::Shortcut::Actions => OPEN_ACTIONS,
+            crate::settings::Shortcut::FileSearch => FILE_SEARCH,
+            crate::settings::Shortcut::Settings => OPEN_SETTINGS,
+        }
+    }
 }

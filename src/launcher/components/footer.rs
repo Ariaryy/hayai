@@ -2,13 +2,13 @@ use super::*;
 
 /// Fixed-height keycaps keep shortcut labels centered independently of the
 /// input widget's text sizing. Each physical key gets its own cap.
-pub(super) fn shortcut_keycap(content: impl IntoElement, _cx: &App) -> impl IntoElement {
+pub(super) fn shortcut_keycap(content: impl IntoElement, cx: &App) -> impl IntoElement {
     div()
         .flex()
         .items_center()
         .justify_center()
-        .text_color(gpui::rgb(crate::theme::KEYCAP_FOREGROUND))
-        .bg(gpui::rgb(crate::theme::KEYCAP_BACKGROUND))
+        .text_color(cx.theme().foreground)
+        .bg(cx.theme().list_active)
         .h(px(20.0))
         .min_w(px(20.0))
         .px(px(5.0))
@@ -105,7 +105,7 @@ pub(in crate::launcher) fn footer(
                             // Svg::paint requires its own style color;
                             // inheriting the keycap's text color does
                             // not populate that field on this GPUI rev.
-                            .text_color(gpui::rgb(crate::theme::KEYCAP_FOREGROUND))
+                            .text_color(cx.theme().foreground)
                             .size(px(14.0))
                             .flex_none(),
                         cx,
@@ -126,16 +126,15 @@ pub(in crate::launcher) fn footer(
                         .when(actions_disabled, |group| group.opacity(0.4))
                         .when(root.action_menu.is_some(), |group| {
                             group
-                                .bg(gpui::rgb(crate::theme::OPEN_ACTIONS_BACKGROUND))
+                                .bg(cx.theme().list_hover)
                                 .text_color(cx.theme().foreground)
                         })
                         .child(div().pl(px(3.0)).child(text::search::ACTIONS))
-                        .child(
-                            h_flex()
-                                .gap_1()
-                                .child(shortcut_keycap(text::keys::CTRL, cx))
-                                .child(shortcut_keycap(text::keys::K, cx)),
-                        ),
+                        .child(crate::settings::key_badges(
+                            crate::settings::preferences(cx)
+                                .binding(crate::settings::Shortcut::Actions),
+                            cx,
+                        )),
                 )
         })
 }

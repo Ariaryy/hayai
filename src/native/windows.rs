@@ -14,7 +14,7 @@ use windows_sys::Win32::Graphics::Gdi::{
 use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    MOD_ALT, MOD_NOREPEAT, RegisterHotKey, SetActiveWindow, SetFocus, UnregisterHotKey, VK_SPACE,
+    MOD_NOREPEAT, RegisterHotKey, SetActiveWindow, SetFocus, UnregisterHotKey,
 };
 use windows_sys::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
@@ -35,9 +35,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 mod associations;
 pub use associations::{associated_apps, open_with_app};
 
-const HOTKEY_ID: i32 = 1;
 const TRAY_ICON_ID: u32 = 1;
 const WM_TRAY_ICON: u32 = WM_APP + 1;
+mod hotkeys;
+use hotkeys::WM_SET_HOTKEY;
+pub use hotkeys::set_launcher_hotkey;
 
 // `UnboundedSender` is `Sync` for `Send` payloads and `unbounded_send` takes
 // `&self` and never blocks, so no `Mutex` is needed — the send must not block
@@ -78,9 +80,9 @@ pub struct NativeRuntime {
 }
 
 impl NativeRuntime {
-    pub fn start(sender: UnboundedSender<NativeCommand>) -> Self {
+    pub fn start(sender: UnboundedSender<NativeCommand>, hotkey: (u32, u32)) -> Self {
         let thread = thread::spawn(move || {
-            if let Err(error) = run_message_window(sender) {
+            if let Err(error) = run_message_window(sender, hotkey) {
                 eprintln!("Failed to start native Windows runtime: {error}");
             }
         });
@@ -593,7 +595,10 @@ fn entries_to_hits(entries: Vec<scry_client::ResultEntry>) -> Vec<FileHit> {
         .collect()
 }
 
-fn run_message_window(sender: UnboundedSender<NativeCommand>) -> io::Result<()> {
+fn run_message_window(
+    sender: UnboundedSender<NativeCommand>,
+    hotkey: (u32, u32),
+) -> io::Result<()> {
     let _ = COMMAND_SENDER.set(sender);
 
     let class_name = wide_null("HayaiNativeMessageWindow");
@@ -636,7 +641,8 @@ fn run_message_window(sender: UnboundedSender<NativeCommand>) -> io::Result<()> 
         return Err(io::Error::last_os_error());
     }
     add_tray_icon(hwnd)?;
-    register_hotkey(hwnd)?;
+    // A registration conflict must not take down tray access to Settings.
+    hotkeys::install(hwnd, hotkey);
 
     let mut message = MSG::default();
     loop {
@@ -667,7 +673,7 @@ fn add_tray_icon(hwnd: HWND) -> io::Result<()> {
     if data.hIcon.is_null() {
         return Err(io::Error::last_os_error());
     }
-    copy_wide_fixed(&mut data.szTip, "Hayai - Alt+Space");
+    copy_wide_fixed(&mut data.szTip, "Hayai");
 
     if unsafe { Shell_NotifyIconW(NIM_ADD, &data) } == 0 {
         return Err(io::Error::last_os_error());
@@ -683,15 +689,6 @@ fn remove_tray_icon(hwnd: HWND) {
     }
 }
 
-fn register_hotkey(hwnd: HWND) -> io::Result<()> {
-    let modifiers = MOD_ALT | MOD_NOREPEAT;
-    if unsafe { RegisterHotKey(hwnd, HOTKEY_ID, modifiers, VK_SPACE as u32) } == 0 {
-        return Err(io::Error::last_os_error());
-    }
-
-    Ok(())
-}
-
 fn send(command: NativeCommand) {
     if let Some(sender) = COMMAND_SENDER.get() {
         let _ = sender.unbounded_send(command);
@@ -705,12 +702,13 @@ unsafe extern "system" fn window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match message {
-        WM_HOTKEY if wparam as i32 == HOTKEY_ID => {
+        WM_SET_HOTKEY => hotkeys::replace(hwnd, wparam as u32, lparam as u32),
+        WM_HOTKEY if hotkeys::is_active(wparam as i32) => {
             // Grant our process permission to call SetForegroundWindow from any thread.
             // Must be called here (on the thread that received WM_HOTKEY) while we hold
             // foreground permission. ASFW_ANY (u32::MAX) grants it to the whole process.
             unsafe { AllowSetForegroundWindow(u32::MAX) };
-            send(NativeCommand::ToggleLauncher);
+            send(NativeCommand::ShortcutPressed);
             0
         }
         WM_TRAY_ICON => {
@@ -732,9 +730,7 @@ unsafe extern "system" fn window_proc(
         }
 
         WM_DESTROY => {
-            unsafe {
-                UnregisterHotKey(hwnd, HOTKEY_ID);
-            }
+            hotkeys::unregister(hwnd);
             remove_tray_icon(hwnd);
             unsafe {
                 PostQuitMessage(0);

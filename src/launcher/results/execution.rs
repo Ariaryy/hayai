@@ -104,6 +104,12 @@ impl ResultListDelegate {
                 .map(|item| item.action.clone())
         };
         match action {
+            Some(CommandAction::OpenSettings) => {
+                LauncherState::dismiss(window, cx);
+                // Opening can deactivate the launcher. Defer until its entity
+                // updates unwind so the observer can safely re-enter.
+                cx.defer(crate::settings::open);
+            }
             Some(CommandAction::CheckFileSearchUpdates) => {
                 // Only unavailable/incompatible file search needs a blocking
                 // setup page. Optional discovery never replaces search results.

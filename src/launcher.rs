@@ -38,6 +38,7 @@ mod view;
 
 use actions::*;
 use formatting::*;
+pub(crate) use icons::load_builtin_icon;
 use icons::*;
 pub use lifecycle::{LauncherGlobal, LauncherState};
 use results::*;
@@ -148,7 +149,7 @@ impl LauncherRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let intercept = Self::intercept_keys(cx);
+        let intercept = Self::intercept_keys(window, cx);
         let _subscriptions = vec![
             cx.subscribe_in(&search_input, window, Self::on_search_event),
             cx.observe_in(&list, window, |this, list, window, cx| {
@@ -385,6 +386,7 @@ impl LauncherRoot {
             Some(CommandAction::RestartToUpdate) => PrimaryAction::RestartToUpdate,
             Some(CommandAction::CheckForUpdates) => PrimaryAction::CheckForUpdates,
             Some(CommandAction::AboutHayai) => PrimaryAction::AboutHayai,
+            Some(CommandAction::OpenSettings) => PrimaryAction::OpenSettings,
             Some(CommandAction::LaunchApplication(_)) | None => PrimaryAction::OpenApplication,
         }
     }

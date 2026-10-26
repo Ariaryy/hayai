@@ -32,10 +32,28 @@ numeric, preview, and rate-lifecycle constraints are maintained in
 
 ## Window lifetime
 
-Hayai hides its only GPUI window instead of destroying it. On Windows, closing
+Hayai hides its launcher GPUI window instead of destroying it. On Windows, closing
 the last GPUI window quits the process, which would break tray and hotkey
 behavior. Callers already inside a window update must use the supplied
 `&mut Window`; re-entering the same `WindowHandle::update` fails.
+
+Settings opens a separate, ordinary window lazily. Closing it releases its view
+and recording subscriptions; the hidden launcher keeps the tray process alive.
+App-wide keystroke interceptors must check their owning window before handling
+input. Otherwise the hidden launcher's interceptor can consume settings keys.
+
+Preferences are loaded once before the native runtime starts. Saves run on the
+background pool and publish only after hotkey registration and atomic file
+replacement succeed. Only one save may run at a time. The native thread owns
+global hotkey registration and acquires a replacement before releasing the old
+registration, preserving access when another app owns the requested shortcut.
+`HAYAI_SETTINGS_PATH` isolates preferences for tests. No file watcher or polling
+is retained; external edits take effect at the next launch.
+
+Appearance mode and palette choices are separate preferences. Light and dark
+each retain their own theme family; changing the inactive mode's palette must
+not switch appearances. Both windows and skeleton previews use the palette
+definitions in `theme.rs`, with derived widget tokens refreshed after applying.
 
 For focus, reset/presentation ordering, action propagation, borrowing, and shell
 resource ownership, read [GPUI and Windows invariants](gpui-windows.md).

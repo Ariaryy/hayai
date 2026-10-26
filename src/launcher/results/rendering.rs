@@ -166,7 +166,9 @@ impl ResultListDelegate {
                     .into(),
             );
         }
-        let icon = if matches!(item.action, CommandAction::CheckForUpdates) {
+        let icon = if matches!(item.action, CommandAction::OpenSettings) {
+            self.builtin_row_icons[3].clone()
+        } else if matches!(item.action, CommandAction::CheckForUpdates) {
             self.builtin_row_icons[1].clone()
         } else if is_hayai_action(&item.action) {
             self.builtin_row_icons[0].clone()

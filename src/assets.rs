@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 pub struct LauncherAssets;
+pub const THIRD_PARTY_NOTICES: &str = include_str!("../THIRD_PARTY_NOTICES");
 
 pub mod icons {
     // The same catalog defines names, embedded data, and AssetSource listing.
@@ -40,6 +41,7 @@ pub mod icons {
     pub const BRAND_PNG: &[u8] = include_bytes!("../assets/hayai.png");
     pub const UPDATE_PNG: &[u8] = include_bytes!("../assets/icons/update.png");
     pub const SCRY_PNG: &[u8] = include_bytes!("../assets/icons/thirdparty/scry/scry.png");
+    pub const SETTINGS_PNG: &[u8] = include_bytes!("../assets/icons/settings.png");
 }
 
 impl gpui::AssetSource for LauncherAssets {

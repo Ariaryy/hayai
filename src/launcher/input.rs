@@ -99,11 +99,11 @@ impl LauncherRoot {
     fn on_intercepted_key(
         &mut self,
         key: &str,
-        control_k: bool,
+        toggle_actions: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if control_k {
+        if toggle_actions {
             cx.stop_propagation();
             self.action_menu = if self.action_menu.is_some() {
                 None
@@ -401,8 +401,9 @@ impl LauncherRoot {
         });
     }
 
-    pub(super) fn intercept_keys(cx: &mut Context<Self>) -> Subscription {
+    pub(super) fn intercept_keys(window: &Window, cx: &mut Context<Self>) -> Subscription {
         let this = cx.entity();
+        let owner = window.window_handle();
         // `InputState` owns Backspace and Tab as key *bindings* (its "Input"
         // key context is more specific than any context we could put on an
         // ancestor div), so a normal `on_key_down`/`on_action` listener up
@@ -411,8 +412,32 @@ impl LauncherRoot {
         // its doc comment), so it's the only hook that can steal these two
         // keys away from the input while it still holds focus.
         cx.intercept_keystrokes(move |event, window, cx| {
+            if window.window_handle() != owner {
+                return;
+            }
             let key = event.keystroke.key.as_str();
-            let control_k = event.keystroke.modifiers.control && key == "k";
+            let preferences = crate::settings::preferences(cx);
+            let toggle_actions =
+                preferences.matches(crate::settings::Shortcut::Actions, &event.keystroke);
+            let files =
+                preferences.matches(crate::settings::Shortcut::FileSearch, &event.keystroke);
+            let settings =
+                preferences.matches(crate::settings::Shortcut::Settings, &event.keystroke);
+            if files || settings {
+                cx.stop_propagation();
+                this.update(cx, |this, cx| {
+                    if files {
+                        this.cancel_wheel_animation();
+                        this.action_menu = None;
+                        this.enter_file_mode(" f", window, cx);
+                        cx.notify();
+                    } else {
+                        LauncherState::dismiss(window, cx);
+                        cx.defer(crate::settings::open);
+                    }
+                });
+                return;
+            }
             let action_number = if event.keystroke.modifiers == gpui::Modifiers::default() {
                 match key {
                     "1" => Some(0),
@@ -427,7 +452,7 @@ impl LauncherRoot {
             } else {
                 None
             };
-            if key != "backspace" && key != "tab" && !control_k && action_number.is_none() {
+            if key != "backspace" && key != "tab" && !toggle_actions && action_number.is_none() {
                 return;
             }
             this.update(cx, |this, cx| {
@@ -445,7 +470,7 @@ impl LauncherRoot {
                     }
                     return;
                 }
-                this.on_intercepted_key(key, control_k, window, cx);
+                this.on_intercepted_key(key, toggle_actions, window, cx);
             });
         })
     }
