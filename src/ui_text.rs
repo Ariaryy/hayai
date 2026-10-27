@@ -46,7 +46,7 @@ pub mod search {
     pub const APPS_PLACEHOLDER: &str = "Search apps or calculate...";
     pub const FOLDER_PLACEHOLDER: &str = "Search this folder...";
     pub const COMMAND_PLACEHOLDER: &str = "Type a command…";
-    pub const NO_COMMANDS: &str = "No matching commands";
+    pub const NO_COMMANDS: &str = "No commands found. Try another search.";
     pub const UP_ONE_LEVEL: &str = "Up one level";
     pub const EXIT_FILE_SEARCH: &str = "Exit file search";
     pub const CANCEL_COMMAND: &str = "Cancel command";

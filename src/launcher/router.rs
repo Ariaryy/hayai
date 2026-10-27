@@ -175,7 +175,6 @@ impl LauncherRoot {
                     .px_3()
                     .gap_3()
                     .rounded(cx.theme().radius)
-                    .cursor_pointer()
                     .when(index == selected, |row| row.bg(cx.theme().list_active))
                     .hover(|row| row.bg(cx.theme().list_hover))
                     .child(
@@ -196,12 +195,12 @@ impl LauncherRoot {
             );
         }
         if count == 0 {
-            body = body.child(
-                div()
-                    .p_3()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(text::search::NO_COMMANDS),
-            );
+            return super::components::empty_screen(
+                icon_assets::SEARCH_EMPTY,
+                text::search::NO_COMMANDS,
+                cx,
+            )
+            .into_any_element();
         }
         body.into_any_element()
     }

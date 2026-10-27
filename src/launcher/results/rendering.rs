@@ -36,41 +36,28 @@ impl ResultListDelegate {
         _window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_3()
-            .text_xs()
-            .text_color(cx.theme().muted_foreground)
-            .when(!self.search_pending, |view| {
-                view.child(
-                    gpui::svg()
-                        .path(
-                            if self.empty_state.as_ref().is_some_and(|notice| {
-                                matches!(notice.action, CommandAction::PendingState)
-                            }) {
-                                icon_assets::CALCULATOR
-                            } else if self.empty_state.is_some() {
-                                icon_assets::CALCULATOR_INVALID
-                            } else {
-                                icon_assets::SEARCH_EMPTY
-                            },
-                        )
-                        .size(px(40.0))
-                        .flex_none()
-                        .text_color(cx.theme().muted_foreground.opacity(0.65)),
-                )
-                .child(if let Some(notice) = self.empty_state.as_ref() {
-                    notice.title.clone()
-                } else if self.file_search {
-                    text::search::NO_FILES.to_string()
-                } else {
-                    text::search::NO_APPS.to_string()
-                })
-            })
+        if self.search_pending {
+            return div().size_full();
+        }
+        let icon = if self
+            .empty_state
+            .as_ref()
+            .is_some_and(|notice| matches!(notice.action, CommandAction::PendingState))
+        {
+            icon_assets::CALCULATOR
+        } else if self.empty_state.is_some() {
+            icon_assets::CALCULATOR_INVALID
+        } else {
+            icon_assets::SEARCH_EMPTY
+        };
+        let message = if let Some(notice) = self.empty_state.as_ref() {
+            notice.title.clone()
+        } else if self.file_search {
+            text::search::NO_FILES.to_string()
+        } else {
+            text::search::NO_APPS.to_string()
+        };
+        super::super::components::empty_screen(icon, message, cx)
     }
 
     pub(super) fn result_row(
