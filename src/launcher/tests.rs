@@ -1,6 +1,8 @@
 use super::{format_expression_for_display, format_result_for_display};
 use crate::assets::icons as icon_assets;
 
+mod routing;
+
 #[cfg(windows)]
 #[test]
 fn keyboard_heading_entries_skip_empty_sections_and_include_headers() {
@@ -110,6 +112,10 @@ fn wheel_scroll_gui_smoke() {
                 cx.background_executor()
                     .timer(Duration::from_millis(200))
                     .await;
+                routing::check(window, &root, cx).await;
+                // The routing checks rebuild the result list after the picker.
+                // Let it lay out before using its measured scroll bounds.
+                cx.background_executor().timer(Duration::from_millis(200)).await;
                 window
                     .update(cx, |_, window, cx| {
                         let bounds = root.read(cx).list.read(cx).scroll_handle().bounds();
@@ -271,7 +277,7 @@ fn wheel_scroll_gui_smoke() {
                     assert_eq!(root.list.read(cx).scroll_handle().offset().y, px(0.0), "reopening must reveal the heading");
                     assert!(root.search_input.read(cx).value().is_empty());
                 }).unwrap();
-                for (case, mode) in ["apps", "file", "pending_file", "calc", "about", "updates", "scry", "actions", "folder", "command"].into_iter().enumerate() {
+                for (case, mode) in ["apps", "file", "pending_file", "calc", "explicit_calc", "about", "updates", "scry", "actions", "folder", "command"].into_iter().enumerate() {
                     window.update(cx, |_, window, cx| {
                         root.update(cx, |root, cx| {
                             match mode {
@@ -285,6 +291,7 @@ fn wheel_scroll_gui_smoke() {
                                     root.on_search_event(&input, &InputEvent::Change, window, cx);
                                     assert!(!root.list.read(cx).delegate().apps_view);
                                 }
+                                "explicit_calc" => { root.route_command(" = 2+2", window, cx); }
                                 "about" | "updates" | "scry" => root.list.update(cx, |list, cx| {
                                     let delegate = list.delegate_mut();
                                     delegate.show_about = mode == "about";
@@ -323,6 +330,7 @@ fn wheel_scroll_gui_smoke() {
                         assert_eq!(root.list.read(cx).scroll_handle().offset().y, px(0.0), "{mode}: stale scroll offset");
                     }).unwrap();
                 }
+                routing::settings(window, &root, cx).await;
                 eprintln!("{SUCCESS}");
                 cx.update(|cx| cx.quit());
             })

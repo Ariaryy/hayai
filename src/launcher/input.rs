@@ -18,30 +18,17 @@ impl LauncherRoot {
                 // recall in progress.
                 self.history_cursor = None;
                 let raw = input.read(cx).value().to_string();
-                if !self.file_mode && !self.waiting_for_command && raw == " " {
-                    self.waiting_for_command = true;
-                    // set_value does not emit Change. Remove the trigger before
-                    // paint while retaining command routing in our own state.
-                    input.update(cx, |input, cx| {
-                        input.set_value("", window, cx);
-                        input.set_placeholder(text::search::COMMAND_PLACEHOLDER, window, cx);
-                    });
-                    self.action_menu = None;
-                    cx.notify();
-                    return;
-                }
-                if self.waiting_for_command && (raw == "f" || raw.starts_with("f ")) {
-                    self.enter_file_mode(&format!(" {raw}"), window, cx);
-                    return;
-                }
-                if !self.file_mode && (raw == " f" || raw.starts_with(" f ")) {
-                    self.enter_file_mode(&raw, window, cx);
+                if !self.file_mode
+                    && !self.calculator_mode
+                    && (self.waiting_for_command || raw.starts_with(' '))
+                {
+                    self.route_command(&raw, window, cx);
                     return;
                 }
                 let query = if self.file_mode {
                     self.build_query(&raw)
-                } else if self.waiting_for_command {
-                    format!(" {raw}")
+                } else if self.calculator_mode {
+                    format!(" = {raw}")
                 } else {
                     raw
                 };
@@ -50,6 +37,10 @@ impl LauncherRoot {
                 });
             }
             InputEvent::PressEnter { .. } => {
+                // Partial/unknown aliases must never confirm old app results.
+                if self.waiting_for_command {
+                    return;
+                }
                 if self.list.read(cx).delegate().empty_state.is_some() {
                     return;
                 }
@@ -67,9 +58,6 @@ impl LauncherRoot {
                     return;
                 }
                 let text = input.read(cx).value().to_string();
-                if self.waiting_for_command && text.is_empty() {
-                    return;
-                }
                 if !text.is_empty()
                     && self.history.first().map(String::as_str) != Some(text.as_str())
                 {
@@ -96,13 +84,16 @@ impl LauncherRoot {
     /// listener on an ancestor div never sees them while the input holds
     /// focus. Interception runs before action/keymap dispatch entirely, so
     /// it's the only hook that can steal these two keys away first.
-    fn on_intercepted_key(
+    pub(super) fn on_intercepted_key(
         &mut self,
         key: &str,
         toggle_actions: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.waiting_for_command && toggle_actions {
+            return;
+        }
         if toggle_actions {
             cx.stop_propagation();
             self.action_menu = if self.action_menu.is_some() {
@@ -114,6 +105,14 @@ impl LauncherRoot {
             return;
         }
         if self.waiting_for_command
+            && key == "backspace"
+            && self.search_input.read(cx).value().is_empty()
+        {
+            cx.stop_propagation();
+            self.reset_to_apps(window, cx);
+            return;
+        }
+        if self.calculator_mode
             && key == "backspace"
             && self.search_input.read(cx).value().is_empty()
         {
@@ -239,6 +238,9 @@ impl LauncherRoot {
     }
 
     pub(super) fn on_move_up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
+        if self.waiting_for_command {
+            return;
+        }
         self.cancel_wheel_animation();
         if self.list.read(cx).delegate().show_about
             || self.list.read(cx).delegate().show_updates
@@ -294,6 +296,9 @@ impl LauncherRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.waiting_for_command {
+            return;
+        }
         self.cancel_wheel_animation();
         if self.list.read(cx).delegate().show_about
             || self.list.read(cx).delegate().show_updates
@@ -325,6 +330,9 @@ impl LauncherRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.waiting_for_command {
+            return false;
+        }
         let next = match (self.history_cursor, delta) {
             (None, 1) if !self.history.is_empty() => Some(0),
             (Some(i), 1) if i + 1 < self.history.len() => Some(i + 1),
@@ -341,8 +349,8 @@ impl LauncherRoot {
             .update(cx, |input, cx| input.set_value(&text, window, cx));
         let query = if self.file_mode {
             self.build_query(&text)
-        } else if self.waiting_for_command {
-            format!(" {text}")
+        } else if self.calculator_mode {
+            format!(" = {text}")
         } else {
             text
         };
@@ -383,7 +391,7 @@ impl LauncherRoot {
             self.pop_folder_scope(window, cx);
             return;
         }
-        if self.file_mode || self.waiting_for_command {
+        if self.file_mode || self.calculator_mode || self.waiting_for_command {
             self.exit_file_mode(window, cx);
             return;
         }

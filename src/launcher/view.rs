@@ -83,7 +83,9 @@ impl gpui::Render for LauncherRoot {
                     cx,
                 )))
             })
-            .child(if showing_updates {
+            .child(if self.waiting_for_command {
+                self.command_picker(cx)
+            } else if showing_updates {
                 updates_page(self.list.read(cx).delegate(), cx)
             } else if about {
                 about_page(delegate.brand_icon.clone(), cx)
@@ -97,7 +99,7 @@ impl gpui::Render for LauncherRoot {
                 setup_screen,
                 showing_updates,
                 actions_disabled,
-                empty_notice,
+                empty_notice || self.waiting_for_command,
                 cx,
             ))
             // Keep the panel last so it paints above the list and footer.

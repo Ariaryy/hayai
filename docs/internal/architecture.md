@@ -72,6 +72,19 @@ resets the offset; deactivation cancels motion and dragging. Frames are requeste
 only until the wheel motion settles. The scrollbar reads layout after the
 scrollable content, so its thumb appears only when content overflows.
 
+Command aliases resolve in `command_router`, before provider dispatch. They
+identify typed destinations; internal ` f ` and ` = ` prefixes remain stable.
+Typing Space enters a picker, invalidates pending provider generations and
+removes selectable results. Partial or unknown aliases cannot confirm old apps.
+Each alias activates at the shortest prefix distinguishing its destination;
+aliases for the same destination may share a trigger. Complete aliases cannot
+prefix another destination's alias: instant activation would make it unreachable.
+Full aliases pasted with queries consume the complete token. Ordinary typing
+consumes the displayed trigger immediately and leaves subsequent text as a query.
+The alias editor is created only while its settings page is open. Validation
+and persistence share the normal settings draft/save path; routing reads only
+committed aliases. No timer, file watcher, or additional provider is involved.
+
 Windows-owned combinations may never enter GPUI's key stream. In particular,
 Win+B focuses the Windows notification area. Preserve the Win modifier on keys
 that reach the recorder, but do not install a global keyboard hook to intercept

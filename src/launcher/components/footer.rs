@@ -33,16 +33,19 @@ pub(in crate::launcher) fn footer(
     let can_enter_folder = root.file_mode && primary_action == PrimaryAction::OpenFolder;
     // Backspace edits non-empty queries; advertise navigation only when
     // the empty-input handler can actually leave the current scope/mode.
-    let can_go_back = (root.file_mode || root.waiting_for_command)
+    let can_go_back = (root.file_mode || root.calculator_mode || root.waiting_for_command)
         && root.search_input.read(cx).value().is_empty();
     let show_commands_hint = !setup_screen
         && !root.file_mode
+        && !root.calculator_mode
         && !root.waiting_for_command
         && root.search_input.read(cx).value().is_empty();
     let backspace_label = if !root.folder_scope.is_empty() {
         text::search::UP_ONE_LEVEL
     } else if root.file_mode {
         text::search::EXIT_FILE_SEARCH
+    } else if root.calculator_mode {
+        text::search::EXIT_CALCULATOR
     } else {
         text::search::CANCEL_COMMAND
     };

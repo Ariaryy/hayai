@@ -32,6 +32,7 @@ mod icons;
 mod input;
 mod lifecycle;
 mod results;
+mod router;
 mod row;
 mod scrolling;
 mod view;
@@ -124,6 +125,7 @@ struct LauncherRoot {
     waiting_for_command: bool,
     /// File mode reconstructs its provider prefix outside the visible input.
     file_mode: bool,
+    calculator_mode: bool,
     /// Stack of folders entered via Tab-on-a-folder-result, outermost first.
     /// Empty means file mode is searching everywhere; the last entry scopes
     /// the query under it using the file provider's scoped-search form
@@ -172,6 +174,7 @@ impl LauncherRoot {
             search_input,
             waiting_for_command: false,
             file_mode: false,
+            calculator_mode: false,
             folder_scope: Vec::new(),
             history: Vec::new(),
             history_cursor: None,
@@ -199,6 +202,7 @@ impl LauncherRoot {
 
     fn enter_file_mode(&mut self, raw: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.waiting_for_command = false;
+        self.calculator_mode = false;
         self.file_mode = true;
         self.folder_scope.clear();
         let remainder = raw
@@ -229,6 +233,7 @@ impl LauncherRoot {
         self.history_cursor = None;
         self.waiting_for_command = false;
         self.file_mode = false;
+        self.calculator_mode = false;
         self.folder_scope.clear();
         self.search_input.update(cx, |input, cx| {
             input.set_value("", window, cx);

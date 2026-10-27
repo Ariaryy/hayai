@@ -44,10 +44,20 @@ impl LauncherState {
                     view.history.clear();
                     view.history_cursor = None;
                     let raw = view.search_input.read(cx).value().to_string();
+                    if view.waiting_for_command {
+                        view.list
+                            .read(cx)
+                            .delegate()
+                            .registry
+                            .borrow_mut()
+                            .invalidate();
+                        cx.notify();
+                        return;
+                    }
                     let query = if view.file_mode {
                         view.build_query(&raw)
-                    } else if view.waiting_for_command {
-                        format!(" {raw}")
+                    } else if view.calculator_mode {
+                        format!(" = {raw}")
                     } else {
                         raw
                     };
@@ -123,7 +133,9 @@ impl LauncherState {
                         let view = state.borrow().view.clone().unwrap();
                         let root = view.read(cx);
                         let delegate = root.list.read(cx).delegate();
-                        assert!(!root.file_mode && !root.waiting_for_command);
+                        assert!(
+                            !root.file_mode && !root.calculator_mode && !root.waiting_for_command
+                        );
                         assert!(root.folder_scope.is_empty() && root.action_menu.is_none());
                         assert!(root.search_input.read(cx).value().is_empty());
                         assert!(

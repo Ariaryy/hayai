@@ -58,6 +58,10 @@ impl PluginRegistry {
         self.generation
     }
 
+    pub fn invalidate(&mut self) {
+        self.generation += 1;
+    }
+
     /// Route `raw_query` (untrimmed — the leading space is the mode sentinel)
     /// to exactly one provider and return the effective query to run. Pure
     /// routing; the caller runs the search so it can choose sync vs.
