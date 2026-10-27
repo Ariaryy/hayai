@@ -98,6 +98,8 @@ fn readable(color: Hsla, surfaces: &[Hsla], toward: Hsla, minimum: f32) -> Hsla 
 struct Surfaces {
     sidebar: Hsla,
     panel: Hsla,
+    /// Menus and tooltips float above cards, so they sit one step higher.
+    popover: Hsla,
 }
 
 fn surfaces(background: Hsla, foreground: Hsla, light: bool) -> Surfaces {
@@ -105,11 +107,13 @@ fn surfaces(background: Hsla, foreground: Hsla, light: bool) -> Surfaces {
         Surfaces {
             sidebar: blend(background, foreground, 0.035),
             panel: blend(background, rgb(0xffffff).into(), 0.5),
+            popover: blend(background, rgb(0xffffff).into(), 0.8),
         }
     } else {
         Surfaces {
             sidebar: blend(background, rgb(0x000000).into(), 0.2),
             panel: blend(background, foreground, 0.03),
+            popover: blend(background, foreground, 0.06),
         }
     }
 }
@@ -170,8 +174,12 @@ pub fn launcher_palette(family: ThemeFamily, light: bool) -> LauncherPalette {
         ],
     }
     .map(|color| rgb(color).into());
-    let Surfaces { sidebar, panel } = surfaces(background, foreground, light);
-    let all = [background, sidebar, panel];
+    let Surfaces {
+        sidebar,
+        panel,
+        popover,
+    } = surfaces(background, foreground, light);
+    let all = [background, sidebar, panel, popover];
     let extreme = rgb(if light { 0x000000 } else { 0xffffff }).into();
     let foreground = readable(foreground, &all, extreme, 4.5);
     LauncherPalette {
@@ -192,14 +200,29 @@ pub struct SettingsPalette {
     pub sidebar: Hsla,
     pub panel: Hsla,
     pub border: Hsla,
+    /// Hover and selection fills for rows that sit on a card.
     pub hover: Hsla,
     pub selected: Hsla,
+    /// The same states for rows on the recessed sidebar.
+    pub sidebar_hover: Hsla,
+    pub sidebar_selected: Hsla,
     pub foreground: Hsla,
     pub muted: Hsla,
     pub accent: Hsla,
     pub keycap: Hsla,
     pub warning: Hsla,
     pub danger: Hsla,
+}
+
+/// Hover and selection fills for a row on `surface`. They are offsets from
+/// that surface, not fixed colors, so a row stays distinguishable whichever
+/// layer it sits on (upstream palettes only tuned them for the page background).
+fn interaction(surface: Hsla, foreground: Hsla, light: bool) -> (Hsla, Hsla) {
+    let (hover, selected) = if light { (0.05, 0.10) } else { (0.06, 0.12) };
+    (
+        blend(surface, foreground, hover),
+        blend(surface, foreground, selected),
+    )
 }
 
 pub fn settings_palette(cx: &App) -> SettingsPalette {
@@ -211,19 +234,25 @@ pub fn settings_palette(cx: &App) -> SettingsPalette {
             .unwrap_or_default(),
         light,
     );
-    let Surfaces { sidebar, panel } =
+    let Surfaces { sidebar, panel, .. } =
         surfaces(theme.background, theme.foreground, !theme.mode.is_dark());
+    let (hover, selected) = interaction(panel, theme.foreground, light);
+    let (sidebar_hover, sidebar_selected) = interaction(sidebar, theme.foreground, light);
     SettingsPalette {
         canvas: theme.background,
         sidebar,
         panel,
         border: theme.border,
-        hover: theme.list_hover,
-        selected: theme.list_active,
+        hover,
+        selected,
+        sidebar_hover,
+        sidebar_selected,
         foreground: theme.foreground,
         muted: theme.muted_foreground,
         accent: theme.primary,
-        keycap: theme.list_active,
+        // One step off the selection fill, so keycaps stay visible on selected
+        // and hovered rows as well as on cards.
+        keycap: blend(theme.list_active, theme.foreground, 0.1),
         warning: roles.warning,
         danger: roles.danger,
     }
@@ -283,13 +312,13 @@ pub fn apply_launcher_theme(cx: &mut App) {
     theme.muted_foreground = palette.muted;
     theme.accent = palette.selected;
     theme.primary = palette.accent;
-    theme.popover = palette.background;
+    theme.popover = surfaces(palette.background, palette.foreground, light).popover;
     theme.popover_foreground = palette.foreground;
     theme.accent_foreground = palette.foreground;
     theme.input = palette.border;
     // The off track is a control, not a surface: keep it 3:1 clear of both the
     // card it sits on and the thumb.
-    let Surfaces { sidebar, panel } = surfaces(palette.background, palette.foreground, light);
+    let Surfaces { sidebar, panel, .. } = surfaces(palette.background, palette.foreground, light);
     theme.switch = readable(
         palette.selected,
         &[palette.background, sidebar, panel],
@@ -322,9 +351,12 @@ mod tests {
             for light in [false, true] {
                 let name = format!("{} {}", family.id(), if light { "light" } else { "dark" });
                 let palette = launcher_palette(family, light);
-                let Surfaces { sidebar, panel } =
-                    surfaces(palette.background, palette.foreground, light);
-                for surface in [palette.background, sidebar, panel] {
+                let Surfaces {
+                    sidebar,
+                    panel,
+                    popover,
+                } = surfaces(palette.background, palette.foreground, light);
+                for surface in [palette.background, sidebar, panel, popover] {
                     assert!(contrast(palette.foreground, surface) >= 4.5, "{name} text");
                     assert!(contrast(palette.muted, surface) >= 4.5, "{name} muted");
                     assert!(contrast(palette.danger, surface) >= 4.5, "{name} danger");

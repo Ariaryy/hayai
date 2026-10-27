@@ -11,6 +11,7 @@ mod launcher;
 mod licenses;
 mod links;
 mod native;
+mod pixels;
 mod plugins;
 mod scroll;
 mod scry;

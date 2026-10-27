@@ -3,6 +3,7 @@ use super::*;
 
 impl gpui::Render for LauncherRoot {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::pixels::sync(_window, cx);
         if self.wheel_animation.is_some() && self.advance_wheel_frame(cx) {
             // current_view exists here during layout. Calling this from wheel
             // events or on_next_frame callbacks panics on the pinned GPUI rev.
