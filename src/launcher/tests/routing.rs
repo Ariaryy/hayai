@@ -23,7 +23,15 @@ pub(super) async fn check(
                 .unwrap();
             root.update(cx, |root, cx| {
                 edit(root, " ", window, cx);
+                // The picker opens with its first row highlighted; Up/Down wrap.
+                assert_eq!(root.picker_selected, 0);
+                root.on_move_down(&MoveDown, window, cx);
+                assert_eq!(root.picker_selected, 1);
+                root.on_move_up(&MoveUp, window, cx);
+                root.on_move_up(&MoveUp, window, cx);
+                assert_eq!(root.picker_selected, root.picker_commands(cx).len() - 1);
                 edit(root, "f", window, cx);
+                assert_eq!(root.picker_selected, 0);
                 assert!(root.waiting_for_command && !root.file_mode);
                 assert!(root.list.read(cx).delegate().results.is_empty());
                 let input = root.search_input.clone();

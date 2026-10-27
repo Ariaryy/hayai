@@ -123,6 +123,8 @@ struct LauncherRoot {
     /// The leading command space is state, not text, so the caret stays at
     /// the start while the placeholder explains which command to enter.
     waiting_for_command: bool,
+    /// Highlighted row of the command picker; reset whenever the typed text changes.
+    picker_selected: usize,
     /// File mode reconstructs its provider prefix outside the visible input.
     file_mode: bool,
     calculator_mode: bool,
@@ -173,6 +175,7 @@ impl LauncherRoot {
             list,
             search_input,
             waiting_for_command: false,
+            picker_selected: 0,
             file_mode: false,
             calculator_mode: false,
             folder_scope: Vec::new(),

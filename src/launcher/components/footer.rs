@@ -1,23 +1,8 @@
 use super::*;
 
-/// Fixed-height keycaps keep shortcut labels centered independently of the
-/// input widget's text sizing. Each physical key gets its own cap.
-pub(super) fn shortcut_keycap(content: impl IntoElement, cx: &App) -> impl IntoElement {
-    div()
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_color(cx.theme().foreground)
-        .bg(cx.theme().list_active)
-        .h(px(20.0))
-        .min_w(px(20.0))
-        .px(px(5.0))
-        .rounded(px(4.0))
-        .line_height(relative(1.0))
-        .text_size(px(11.0))
-        .font_weight(FontWeight::MEDIUM)
-        .flex_shrink_0()
-        .child(content)
+/// The launcher footer uses a slightly shorter cap than settings.
+pub(super) fn shortcut_keycap(label: impl Into<SharedString>, cx: &App) -> impl IntoElement {
+    crate::settings::keycap_label(label, 20.0, cx)
 }
 
 pub(in crate::launcher) fn footer(
@@ -102,15 +87,10 @@ pub(in crate::launcher) fn footer(
                     .text_color(cx.theme().foreground)
                     .font_weight(FontWeight::MEDIUM)
                     .child(primary_label)
-                    .child(shortcut_keycap(
-                        gpui::svg()
-                            .path(icon_assets::ENTER)
-                            // Svg::paint requires its own style color;
-                            // inheriting the keycap's text color does
-                            // not populate that field on this GPUI rev.
-                            .text_color(cx.theme().foreground)
-                            .size(px(14.0))
-                            .flex_none(),
+                    .child(crate::settings::keycap_icon(
+                        icon_assets::ENTER,
+                        16.0,
+                        20.0,
                         cx,
                     )),
             )
@@ -122,9 +102,9 @@ pub(in crate::launcher) fn footer(
                     h_flex()
                         .items_center()
                         .gap_2()
-                        .h(px(26.0))
-                        .px(px(2.5))
-                        // The 20px caps retain 3px of vertical breathing room.
+                        .h(px(28.0))
+                        .px(px(4.0))
+                        // The 20px caps retain 4px of vertical breathing room.
                         .rounded(px(7.0))
                         .when(actions_disabled, |group| group.opacity(0.4))
                         .when(root.action_menu.is_some(), |group| {
@@ -132,7 +112,7 @@ pub(in crate::launcher) fn footer(
                                 .bg(cx.theme().list_hover)
                                 .text_color(cx.theme().foreground)
                         })
-                        .child(div().pl(px(3.0)).child(text::search::ACTIONS))
+                        .child(div().child(text::search::ACTIONS))
                         .child(crate::settings::key_badges(
                             crate::settings::preferences(cx)
                                 .binding(crate::settings::Shortcut::Actions),

@@ -39,6 +39,7 @@ impl LauncherRoot {
             InputEvent::PressEnter { .. } => {
                 // Partial/unknown aliases must never confirm old app results.
                 if self.waiting_for_command {
+                    self.confirm_picker(window, cx);
                     return;
                 }
                 if self.list.read(cx).delegate().empty_state.is_some() {
@@ -239,6 +240,7 @@ impl LauncherRoot {
 
     pub(super) fn on_move_up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
         if self.waiting_for_command {
+            self.move_picker_selection(-1, cx);
             return;
         }
         self.cancel_wheel_animation();
@@ -297,6 +299,7 @@ impl LauncherRoot {
         cx: &mut Context<Self>,
     ) {
         if self.waiting_for_command {
+            self.move_picker_selection(1, cx);
             return;
         }
         self.cancel_wheel_animation();

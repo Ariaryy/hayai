@@ -11,11 +11,11 @@ pub(in crate::launcher) fn action_panel(
         // Occlude the entire panel, including padding, so pointer
         // movement and scrolling cannot reach rows underneath.
         .occlude()
-        .right(px(6.0))
+        .right(px(8.0))
         .bottom(px(44.0))
         .w(px(224.0))
         .p_1()
-        .bg(cx.theme().background)
+        .bg(cx.theme().popover)
         .border_1()
         .border_color(cx.theme().border)
         .rounded(px(8.0))

@@ -3,6 +3,8 @@ use crate::command_router::Command;
 
 impl LauncherRoot {
     pub(super) fn route_command(&mut self, raw: &str, window: &mut Window, cx: &mut Context<Self>) {
+        // Filtering changes which rows exist, so selection restarts on the first.
+        self.picker_selected = 0;
         let typed = if self.waiting_for_command {
             raw
         } else {
@@ -77,7 +79,7 @@ impl LauncherRoot {
         cx.notify();
     }
 
-    fn activate_command(
+    pub(super) fn activate_command(
         &mut self,
         command: Command,
         remainder: &str,
@@ -110,37 +112,76 @@ impl LauncherRoot {
         }
     }
 
-    pub(super) fn command_picker(&self, cx: &Context<Self>) -> AnyElement {
+    /// Commands the picker lists for the text typed so far.
+    pub(super) fn picker_commands(&self, cx: &App) -> Vec<Command> {
         let aliases = &crate::settings::preferences(cx).commands;
         let typed = self.search_input.read(cx).value().to_ascii_lowercase();
-        let mut body = div().flex_1().min_h_0().p_2().flex().flex_col().gap_1();
+        Command::ALL
+            .into_iter()
+            .filter(|command| {
+                aliases
+                    .entries(*command)
+                    .any(|name| name.starts_with(&typed))
+            })
+            .collect()
+    }
+
+    /// Up/Down inside the picker, wrapping at both ends.
+    pub(super) fn move_picker_selection(&mut self, delta: isize, cx: &mut Context<Self>) {
+        if !crate::settings::preferences(cx).show_command_picker {
+            return;
+        }
+        let count = self.picker_commands(cx).len() as isize;
+        if count > 0 {
+            self.picker_selected =
+                (self.picker_selected as isize + delta).rem_euclid(count) as usize;
+            cx.notify();
+        }
+    }
+
+    /// Enter inside the picker opens the highlighted command.
+    pub(super) fn confirm_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !crate::settings::preferences(cx).show_command_picker {
+            return;
+        }
+        if let Some(command) = self.picker_commands(cx).get(self.picker_selected).copied() {
+            self.activate_command(command, "", window, cx);
+            cx.notify();
+        }
+    }
+
+    pub(super) fn command_picker(&self, cx: &Context<Self>) -> AnyElement {
+        let aliases = &crate::settings::preferences(cx).commands;
+        let mut body = div().flex_1().min_h_0().p_2().flex().flex_col();
+        body = body.child(
+            div()
+                .h(px(24.0))
+                .flex_none()
+                .flex()
+                .items_center()
+                .px_1()
+                .child(section_heading(text::search::COMMANDS, cx)),
+        );
+        let visible = self.picker_commands(cx);
+        let selected = self.picker_selected.min(visible.len().saturating_sub(1));
         let mut count = 0;
-        for command in Command::ALL {
-            if !aliases
-                .entries(command)
-                .any(|name| name.starts_with(&typed))
-            {
-                continue;
-            }
+        for (index, command) in visible.into_iter().enumerate() {
             count += 1;
             body = body.child(
                 h_flex()
                     .id(command.id())
-                    .min_h(px(44.0))
-                    .py_2()
+                    // Same height and radius as an app result row.
+                    .h(px(36.0))
                     .px_3()
                     .gap_3()
-                    .rounded(px(6.0))
+                    .rounded(cx.theme().radius)
                     .cursor_pointer()
+                    .when(index == selected, |row| row.bg(cx.theme().list_active))
                     .hover(|row| row.bg(cx.theme().list_hover))
                     .child(
                         gpui::svg()
-                            .path(match command {
-                                Command::Files => icon_assets::SETTINGS_FILES,
-                                Command::Settings => icon_assets::SETTINGS_GENERAL,
-                                Command::Calculator => icon_assets::CALCULATOR,
-                            })
-                            .size(px(18.0))
+                            .path(command.icon())
+                            .size(px(20.0))
                             .text_color(cx.theme().muted_foreground),
                     )
                     .child(div().flex_1().child(text::settings::command_label(command)))
