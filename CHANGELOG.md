@@ -5,26 +5,24 @@ yet included in a published package.
 
 ## Unreleased
 
-### Launcher
-
-- The command picker has a Commands heading and a highlighted first row; Up and Down move through it and Enter opens the highlighted command.
-- Keycaps, the action panel and the footer share one keycap style with a faint outline, and text, icons and switches are centered on whole device pixels at every Windows scale.
-
 ### Settings
 
-- Settings pages use one spacing, radius and type scale, with grouped headings, a table layout for Commands, a redesigned About page, breadcrumb navigation and a larger switch that animates and is centered at every scale.
-- Hover and selected rows are derived from the surface they sit on, so they stay visible in light themes. Warnings and errors use per-theme colors and every theme is checked for legible contrast.
+- Open Settings from the Hayai group in a separate resizable window, with a themed titlebar, sidebar navigation and About pinned at the bottom.
+- Configure Windows login startup, launcher display placement, recent-item history and automatic update checking/downloading. Preferences save automatically and persist between launches.
+- Record and reset shortcuts for opening Hayai, the action panel, file search and settings. Conflicts appear beside the affected bindings with an explanation.
+- Browse third-party artwork and theme notices in About, with full license texts and source links. Packaged releases include these notices.
 
-- Shortcuts that share a key are no longer refused. Both are flagged with a warning icon and tooltip on the Key bindings page, and the launcher action is inactive until one changes.
-- Hide command suggestions with the Show command picker toggle in Commands. Triggers and aliases work either way, and with the picker hidden, text after Space that cannot become a command is searched normally.
-- Configure each command's trigger key and aliases in Settings → Commands. Space opens a command picker; the trigger (for example Space F) activates a command without Enter, and aliases select it by full name. Overlapping triggers or aliases are kept but flagged with a warning and a tooltip, and stay inactive until changed.
-- Keep settings scrolling responsive in development builds by optimizing the rendering and layout dependencies.
-- General settings control Windows login startup, launcher display, recent-item history, and automatic update checking/downloading. Turning history off clears saved recents; queued writes cannot restore them. Display placement uses a dropdown and on/off settings use themed toggles. Controls retain their state while changes save.
-- Open Settings from the Hayai group in its own resizable window, with a themed titlebar, sidebar navigation, and About pinned at the bottom.
-- Choose light and dark palettes independently from Hayai, One Dark/One Light, Catppuccin, Tokyo Night, and Gruvbox. The selected appearance applies to both windows and persists between launches.
-- Record and reset shortcuts for opening Hayai, the action panel, file search, and settings. Bindings save immediately after recording. Key badges show the current bindings; conflicts keep the previous shortcut working.
-- Scroll settings with the launcher's smooth wheel behavior and a thin right-edge scrollbar that appears only when content overflows.
-- Browse expandable asset and theme notices from About, with full license texts and links to their sources. The notices are also included in packaged releases.
+### Commands and appearance
+
+- Configure command triggers and aliases for file search, calculator and settings. The optional command picker supports keyboard navigation and confirmation; triggers activate without Enter. Overlapping entries are saved and flagged, and remain inactive until resolved.
+- Choose light and dark palettes independently from Hayai, One Dark/One Light, Catppuccin, Tokyo Night and Gruvbox. Appearance applies to both windows, with launcher previews in Settings.
+- Settings uses grouped controls, shared spacing and typography, smooth scrolling and a scrollbar that appears when content overflows.
+
+### Launcher
+
+- Actions is available at the bottom right in every launcher view, dimmed when unavailable. Menus and keycaps use the active theme.
+- Fix footer flicker when navigating between folders, and ignore repeated Tab presses while folder results load.
+- Exclude non-interactive update progress labels from action menus; dismissal and diagnostics remain available.
 
 ## 0.1.1 - 2026-10-24
 
