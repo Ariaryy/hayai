@@ -83,17 +83,20 @@ impl gpui::Render for LauncherRoot {
                     cx,
                 )))
             })
-            .child(if self.waiting_for_command {
-                self.command_picker(cx)
-            } else if showing_updates {
-                updates_page(self.list.read(cx).delegate(), cx)
-            } else if about {
-                about_page(delegate.brand_icon.clone(), cx)
-            } else if let Some((title, description, icon)) = file_setup {
-                file_setup_page(title, description, icon, starting_scry, updating_scry, cx)
-            } else {
-                results_view(&self.list, cx)
-            })
+            .child(
+                if self.waiting_for_command && crate::settings::preferences(cx).show_command_picker
+                {
+                    self.command_picker(cx)
+                } else if showing_updates {
+                    updates_page(self.list.read(cx).delegate(), cx)
+                } else if about {
+                    about_page(delegate.brand_icon.clone(), cx)
+                } else if let Some((title, description, icon)) = file_setup {
+                    file_setup_page(title, description, icon, starting_scry, updating_scry, cx)
+                } else {
+                    results_view(&self.list, cx)
+                },
+            )
             .child(footer(
                 self,
                 setup_screen,

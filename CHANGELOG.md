@@ -7,6 +7,7 @@ yet included in a published package.
 
 ### Settings
 
+- Hide command suggestions with the Show command picker toggle in Commands. Aliases continue working while the normal launcher results remain visible.
 - Configure command aliases in Settings → Commands, using the same layout as other settings pages. Space opens a command picker; file search, calculator and settings activate at their shortest distinguishing prefix without Enter. Conflicting aliases are rejected, and triggers are shown beside each command.
 - Keep settings scrolling responsive in development builds by optimizing the rendering and layout dependencies.
 - General settings control Windows login startup, launcher display, recent-item history, and automatic update checking/downloading. Turning history off clears saved recents; queued writes cannot restore them. Display placement uses a dropdown and on/off settings use themed toggles. Controls retain their state while changes save.

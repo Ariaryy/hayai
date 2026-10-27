@@ -76,6 +76,11 @@ Command aliases resolve in `command_router`, before provider dispatch. They
 identify typed destinations; internal ` f ` and ` = ` prefixes remain stable.
 Typing Space enters a picker, invalidates pending provider generations and
 removes selectable results. Partial or unknown aliases cannot confirm old apps.
+The optional picker controls suggestions only. With it disabled, the launcher
+shows a fresh default app query while collecting the same command prefix.
+Saving a visibility change refreshes an active command session without editing
+its input; both directions invalidate older provider generations. No partial
+alias is dispatched as an app or calculator query, and Enter stays guarded.
 Each alias activates at the shortest prefix distinguishing its destination;
 aliases for the same destination may share a trigger. Complete aliases cannot
 prefix another destination's alias: instant activation would make it unreachable.

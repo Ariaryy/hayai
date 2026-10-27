@@ -80,6 +80,65 @@ pub(super) async fn check(
                 assert!(!root.waiting_for_command);
                 root.reset_to_apps(window, cx);
             });
+            root.update(cx, |root, cx| edit(root, " f", window, cx));
+        })
+        .unwrap();
+    // Commit both directions while a partial alias is already visible. This
+    // exercises the save completion path, not just freshly opened sessions.
+    for show in [false, true] {
+        cx.update(|cx| {
+            let mut next = crate::settings::preferences(cx).clone();
+            next.show_command_picker = show;
+            crate::settings::save(next, cx);
+        });
+        cx.background_executor()
+            .timer(Duration::from_millis(200))
+            .await;
+        if !show {
+            // Clearing recents must also refresh the apps beneath hidden
+            // suggestions without losing the partially typed alias.
+            cx.update(LauncherState::clear_recent_history);
+        }
+        handle
+            .update(cx, |_, window, cx| {
+                assert_eq!(crate::settings::preferences(cx).show_command_picker, show);
+                assert!(!cx.global::<crate::settings::SettingsGlobal>().saving);
+                root.update(cx, |root, cx| {
+                    assert!(root.waiting_for_command);
+                    assert_eq!(root.search_input.read(cx).value().as_str(), "f");
+                    let list = root.list.read(cx);
+                    assert_eq!(list.delegate().apps_view, !show);
+                    assert_eq!(list.delegate().results.is_empty(), show);
+                    assert!(list.selected_index().is_none());
+                    let input = root.search_input.clone();
+                    root.on_search_event(
+                        &input,
+                        &InputEvent::PressEnter {
+                            secondary: false,
+                            shift: false,
+                        },
+                        window,
+                        cx,
+                    );
+                    assert!(root.waiting_for_command && root.history.is_empty());
+                    edit(root, "fi", window, cx);
+                    assert!(root.file_mode && !root.waiting_for_command);
+                    root.on_escape(&gpui_component::input::Escape, window, cx);
+                    // Leave file work pending while returning to command mode;
+                    // obsolete completions must not replace either presentation.
+                    root.enter_file_mode(" f report", window, cx);
+                    root.reset_to_apps(window, cx);
+                    edit(root, " f", window, cx);
+                });
+            })
+            .unwrap();
+    }
+    handle
+        .update(cx, |_, window, cx| {
+            root.update(cx, |root, cx| {
+                root.on_escape(&gpui_component::input::Escape, window, cx);
+                root.reset_to_apps(window, cx);
+            });
             cx.global_mut::<crate::settings::SettingsGlobal>()
                 .preferences
                 .commands = Default::default();

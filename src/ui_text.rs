@@ -144,6 +144,9 @@ pub mod keys {
 pub mod settings {
     pub const COMMANDS: &str = "Commands";
     pub const ALIASES: &str = "Aliases";
+    pub const SHOW_COMMAND_PICKER: &str = "Show command picker";
+    pub const SHOW_COMMAND_PICKER_HELP: &str =
+        "Show matching commands after pressing Space. Aliases still work when hidden.";
     pub const ALIAS_LIMIT: &str = "Use between one and eight aliases per command.";
     pub const ALIAS_FORMAT: &str =
         "Use letters, numbers or hyphens, starting with a letter (up to 32 characters), or =.";

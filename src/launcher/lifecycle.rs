@@ -25,6 +25,29 @@ pub struct LauncherState {
 }
 
 impl LauncherState {
+    pub fn refresh_command_picker(cx: &mut App) {
+        let Some(state) = cx
+            .try_global::<LauncherGlobal>()
+            .map(LauncherGlobal::clone_handle)
+        else {
+            return;
+        };
+        // Release the shared borrow before window/entity updates can re-enter.
+        let (handle, view) = {
+            let state = state.borrow();
+            (state.window, state.view.clone())
+        };
+        if let (Some(handle), Some(view)) = (handle, view) {
+            let _ = handle.update(cx, |_, window, cx| {
+                view.update(cx, |view, cx| {
+                    if view.waiting_for_command {
+                        view.refresh_command_results(window, cx);
+                    }
+                })
+            });
+        }
+    }
+
     pub fn clear_recent_history(cx: &mut App) {
         let Some(state) = cx
             .try_global::<LauncherGlobal>()
@@ -45,13 +68,7 @@ impl LauncherState {
                     view.history_cursor = None;
                     let raw = view.search_input.read(cx).value().to_string();
                     if view.waiting_for_command {
-                        view.list
-                            .read(cx)
-                            .delegate()
-                            .registry
-                            .borrow_mut()
-                            .invalidate();
-                        cx.notify();
+                        view.refresh_command_results(window, cx);
                         return;
                     }
                     let query = if view.file_mode {

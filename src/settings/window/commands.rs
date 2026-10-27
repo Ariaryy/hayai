@@ -4,6 +4,7 @@ use gpui::Entity;
 use gpui_component::{
     Sizable,
     input::{Input, InputEvent, InputState},
+    switch::Switch,
 };
 
 pub(super) struct AliasEditor {
@@ -72,7 +73,22 @@ impl SettingsView {
     }
 
     pub(super) fn commands_page(&self, cx: &Context<Self>) -> gpui::AnyElement {
-        let mut body = page(self.page).child(section(text::COMMANDS));
+        let mut body = page(self.page).child(section(text::COMMANDS)).child(
+            card(cx).child(setting_row(
+                text::SHOW_COMMAND_PICKER,
+                text::SHOW_COMMAND_PICKER_HELP,
+                Switch::new("show-command-picker")
+                    .checked(preferences(cx).show_command_picker)
+                    .color(crate::theme::settings_palette(cx).accent)
+                    .cursor_pointer()
+                    .on_click(|checked, _, cx| {
+                        let mut next = preferences(cx).clone();
+                        next.show_command_picker = *checked;
+                        save(next, cx);
+                    }),
+                cx,
+            )),
+        );
         let Some(editor) = &self.alias_editor else {
             return body.into_any_element();
         };

@@ -106,6 +106,7 @@ fn start_save(cx: &mut App) {
     state.saving = true;
     let path = state.path.clone();
     let previous = state.preferences.clone();
+    let picker_changed = previous.show_command_picker != next.show_command_picker;
     let theme_changed = previous.light != next.light
         || previous.theme_for(next.light) != next.theme_for(next.light);
     cx.spawn(async move |cx| {
@@ -134,6 +135,9 @@ fn start_save(cx: &mut App) {
                     let light = state.preferences.light;
                     if theme_changed {
                         crate::theme::set_mode(light, cx);
+                    }
+                    if picker_changed {
+                        crate::launcher::LauncherState::refresh_command_picker(cx);
                     }
                 }
                 Err(error) => {

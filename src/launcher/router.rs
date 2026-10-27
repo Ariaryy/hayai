@@ -13,9 +13,23 @@ impl LauncherRoot {
                 input.set_value(&raw[1..], window, cx);
                 input.set_placeholder(text::search::COMMAND_PLACEHOLDER, window, cx);
             });
-            // Invalidate pending work without dispatching a partial alias to
-            // providers or retaining selectable app rows behind the picker.
-            self.list.update(cx, |list, cx| {
+            self.refresh_command_results(window, cx);
+            &raw[1..]
+        };
+        if let Some((command, remainder)) = crate::settings::preferences(cx).commands.resolve(typed)
+        {
+            let remainder = remainder.to_owned();
+            self.activate_command(command, &remainder, window, cx);
+        }
+        cx.notify();
+    }
+
+    pub(super) fn refresh_command_results(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let show_picker = crate::settings::preferences(cx).show_command_picker;
+        self.list.update(cx, |list, cx| {
+            if show_picker {
+                // Invalidate pending work without dispatching a partial alias
+                // to providers or retaining app rows behind the picker.
                 let delegate = list.delegate_mut();
                 delegate.registry.borrow_mut().invalidate();
                 delegate.search_pending = false;
@@ -28,16 +42,15 @@ impl LauncherRoot {
                 delegate.show_about = false;
                 delegate.show_updates = false;
                 delegate.show_scry_updates = false;
-                list.set_selected_index(None, window, cx);
-                cx.notify();
-            });
-            &raw[1..]
-        };
-        if let Some((command, remainder)) = crate::settings::preferences(cx).commands.resolve(typed)
-        {
-            let remainder = remainder.to_owned();
-            self.activate_command(command, &remainder, window, cx);
-        }
+            } else {
+                // Keep the normal launcher view when suggestions are hidden.
+                // Dispatch only the empty apps query, never a partial alias.
+                perform_search_and_select_first(list, "", window, cx);
+            }
+            list.set_selected_index(None, window, cx);
+            list.delegate_mut().notification_selected = false;
+            cx.notify();
+        });
         cx.notify();
     }
 

@@ -56,6 +56,7 @@ pub struct Preferences {
     pub light: bool,
     pub general: super::General,
     pub commands: crate::command_router::Aliases,
+    pub show_command_picker: bool,
     light_theme: crate::theme::ThemeFamily,
     dark_theme: crate::theme::ThemeFamily,
     bindings: [Binding; 4],
@@ -67,6 +68,7 @@ impl Default for Preferences {
             light: false,
             general: super::General::default(),
             commands: crate::command_router::Aliases::default(),
+            show_command_picker: true,
             light_theme: crate::theme::ThemeFamily::default(),
             dark_theme: crate::theme::ThemeFamily::default(),
             bindings: Shortcut::ALL.map(|action| Binding::parse(action.default_key()).unwrap()),
@@ -183,6 +185,11 @@ impl Preferences {
             light,
             general: super::General::parse(&json["general"])?,
             commands: crate::command_router::Aliases::parse(&json["commands"])?,
+            show_command_picker: match json["show_command_picker"] {
+                serde_json::Value::Null => true,
+                serde_json::Value::Bool(show) => show,
+                _ => anyhow::bail!("Invalid command picker visibility"),
+            },
             light_theme: theme_for("light")?,
             dark_theme: theme_for("dark")?,
             ..Self::default()
@@ -205,7 +212,7 @@ impl Preferences {
             .into_iter()
             .map(|action| (action.id().into(), self.binding(action).into()))
             .collect();
-        serde_json::json!({"version": 1, "appearance": if self.light { "light" } else { "dark" }, "themes": {"light": self.light_theme.id(), "dark": self.dark_theme.id()}, "general": self.general.encode(), "commands": self.commands.encode(), "keybindings": bindings}).to_string()
+        serde_json::json!({"version": 1, "appearance": if self.light { "light" } else { "dark" }, "themes": {"light": self.light_theme.id(), "dark": self.dark_theme.id()}, "general": self.general.encode(), "commands": self.commands.encode(), "show_command_picker": self.show_command_picker, "keybindings": bindings}).to_string()
     }
 }
 
@@ -313,6 +320,19 @@ mod tests {
             Preferences::parse(r#"{"version":1,"commands":{"files":["f"],"settings":["files"]}}"#)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn command_picker_visibility_is_persisted() {
+        assert!(
+            Preferences::parse(r#"{"version":1}"#)
+                .unwrap()
+                .show_command_picker
+        );
+        let prefs = Preferences::parse(r#"{"version":1,"show_command_picker":false}"#).unwrap();
+        let saved: serde_json::Value = serde_json::from_str(&prefs.encode()).unwrap();
+        assert_eq!(saved["show_command_picker"], false);
+        assert!(Preferences::parse(r#"{"version":1,"show_command_picker":"false"}"#).is_err());
     }
 
     #[test]
