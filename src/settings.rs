@@ -10,7 +10,9 @@ use std::path::PathBuf;
 
 pub use general::{DisplayTarget, General};
 pub use preferences::{Preferences, Shortcut};
-pub use window::{capture_registered_shortcut, key_badges, open, trigger_badge};
+pub use window::{
+    capture_registered_shortcut, key_badges, keycap_icon, keycap_label, open, trigger_badge,
+};
 
 pub struct SettingsGlobal {
     pub preferences: Preferences,

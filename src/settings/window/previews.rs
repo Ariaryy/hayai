@@ -13,7 +13,7 @@ pub(super) fn launcher_preview(family: ThemeFamily, light: bool) -> impl IntoEle
             .child(line(0.2, 3.0, palette.muted.opacity(0.6)))
     };
     div()
-        .h(px(166.0))
+        .h(px(168.0))
         .w_full()
         .flex()
         .flex_col()
@@ -45,7 +45,7 @@ pub(super) fn launcher_preview(family: ThemeFamily, light: bool) -> impl IntoEle
         )
         .child(
             h_flex()
-                .h(px(21.0))
+                .h(px(20.0))
                 .flex_none()
                 .px_2()
                 .gap_1()
@@ -53,8 +53,8 @@ pub(super) fn launcher_preview(family: ThemeFamily, light: bool) -> impl IntoEle
                 .border_color(palette.border)
                 .child(
                     div()
-                        .w(px(27.0))
-                        .h(px(3.0))
+                        .w(px(28.0))
+                        .h(px(4.0))
                         .rounded(px(2.0))
                         .bg(palette.muted.opacity(0.65)),
                 )
@@ -63,16 +63,16 @@ pub(super) fn launcher_preview(family: ThemeFamily, light: bool) -> impl IntoEle
                 .child(
                     div()
                         .w(px(20.0))
-                        .h(px(3.0))
+                        .h(px(4.0))
                         .rounded(px(2.0))
                         .bg(palette.muted.opacity(0.65)),
                 )
                 .child(skeleton_key(palette))
-                .child(div().mx_1().w(px(1.0)).h(px(7.0)).bg(palette.border))
+                .child(div().mx_1().w(px(1.0)).h(px(8.0)).bg(palette.border))
                 .child(
                     div()
-                        .w(px(22.0))
-                        .h(px(3.0))
+                        .w(px(24.0))
+                        .h(px(4.0))
                         .rounded(px(2.0))
                         .bg(palette.muted.opacity(0.65)),
                 )
@@ -91,7 +91,7 @@ fn line(width: f32, height: f32, color: gpui::Hsla) -> impl IntoElement {
 
 fn skeleton_row(palette: LauncherPalette, selected: bool, width: f32) -> impl IntoElement {
     h_flex()
-        .h(px(19.0))
+        .h(px(20.0))
         .px_2()
         .gap_2()
         .rounded(px(4.0))
@@ -113,7 +113,7 @@ fn skeleton_row(palette: LauncherPalette, selected: bool, width: f32) -> impl In
 fn skeleton_key(palette: LauncherPalette) -> impl IntoElement {
     div()
         .w(px(8.0))
-        .h(px(7.0))
+        .h(px(8.0))
         .rounded(px(2.0))
         .bg(palette.selected)
 }
@@ -178,17 +178,17 @@ pub(super) fn theme_swatch(
         .child(
             div()
                 .absolute()
-                .right(px(1.0))
-                .bottom(px(1.0))
-                .size(px(24.0))
-                .p(px(4.0))
+                .right(crate::pixels::hairline(cx))
+                .bottom(crate::pixels::hairline(cx))
+                .size(crate::pixels::snap(cx, 24.0))
+                .p(crate::pixels::snap(cx, 4.0))
                 .rounded_full()
                 .bg(active.panel)
                 .child(
                     div()
                         .size_full()
                         .rounded_full()
-                        .border_1()
+                        .border(crate::pixels::hairline(cx))
                         .border_color(if selected {
                             active.accent
                         } else {
@@ -196,15 +196,18 @@ pub(super) fn theme_swatch(
                         })
                         .bg(active.canvas)
                         .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
+                        .items_start()
+                        .child({
+                            // The 16px disc holds a 12px glyph; center it on whole pixels.
+                            let (size, inset) = crate::pixels::fit(cx, 16.0, 1.0, 12.0);
                             svg()
                                 .path(if light { icons::SUN } else { icons::MOON })
-                                .size(px(11.0))
+                                .size(size)
                                 .flex_none()
-                                .text_color(active.foreground),
-                        ),
+                                .ml(inset)
+                                .mt(inset)
+                                .text_color(active.foreground)
+                        }),
                 ),
         )
 }

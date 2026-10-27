@@ -3,12 +3,11 @@ use super::*;
 impl SettingsView {
     pub(super) fn keybindings_page(&self, cx: &Context<Self>) -> gpui::AnyElement {
         let mut body = page(self.page);
-        for (group_index, (group, actions)) in [
+        for (group_title, actions) in [
             (text::SYSTEM_GROUP, &Shortcut::ALL[..1]),
             (text::LAUNCHER_GROUP, &Shortcut::ALL[1..]),
         ]
         .into_iter()
-        .enumerate()
         {
             let mut rows = card(cx);
             for (index, action) in actions.iter().copied().enumerate() {
@@ -17,13 +16,7 @@ impl SettingsView {
                 }
                 rows = rows.child(self.shortcut_row(action, cx));
             }
-            body = body
-                .child(
-                    div()
-                        .when(group_index > 0, |heading| heading.mt_4())
-                        .child(section(group)),
-                )
-                .child(rows);
+            body = body.child(group(group_title).child(rows));
         }
         body.into_any_element()
     }
@@ -43,9 +36,9 @@ impl SettingsView {
             .flex_col()
             .child(
                 h_flex()
-                    .min_h(px(72.0))
+                    .min_h(px(ROW_MIN_HEIGHT))
                     .px_4()
-                    .py_3()
+                    .py_4()
                     .gap_3()
                     .child(
                         div()
@@ -73,7 +66,7 @@ impl SettingsView {
                             .id(action.id())
                             .px_2()
                             .py_2()
-                            .rounded(px(6.0))
+                            .rounded(px(RADIUS_MD))
                             .cursor_pointer()
                             .when(recording, |slot| {
                                 slot.bg(palette.hover)
@@ -98,9 +91,9 @@ impl SettingsView {
                         div()
                             .id(("reset", action as usize))
                             .p_2()
-                            .rounded(px(5.0))
+                            .rounded(px(RADIUS_MD))
                             .cursor_pointer()
-                            .text_size(px(11.0))
+                            .text_size(px(CAPTION_SIZE))
                             .text_color(palette.muted)
                             .hover(move |button| {
                                 button.bg(palette.hover).text_color(palette.foreground)

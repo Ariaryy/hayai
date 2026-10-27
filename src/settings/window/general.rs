@@ -1,10 +1,9 @@
 use super::*;
 use crate::settings::{DisplayTarget, General};
 use gpui_component::{
-    Disableable, Sizable,
+    Sizable,
     button::Button,
     menu::{DropdownMenu, PopupMenuItem},
-    switch::Switch,
 };
 
 #[derive(Clone, Copy)]
@@ -56,14 +55,11 @@ impl SettingsView {
         setting_row(
             label,
             detail,
-            Switch::new(id)
-                .checked(setting.value(prefs))
+            components::ToggleSwitch::new(id, setting.value(prefs))
                 .disabled(disabled)
-                .color(crate::theme::settings_palette(cx).accent)
-                .when(!disabled, |toggle| toggle.cursor_pointer())
-                .on_click(move |checked, _, cx| {
+                .on_change(move |checked, _, cx| {
                     let mut next = preferences(cx).clone();
-                    setting.set(&mut next.general, *checked);
+                    setting.set(&mut next.general, checked);
                     save(next, cx);
                 }),
             cx,
@@ -80,7 +76,7 @@ impl SettingsView {
             .small()
             .outline()
             .w(px(WIDTH))
-            .h(px(30.0))
+            .h(px(CONTROL_HEIGHT))
             .bg(palette.canvas)
             .text_color(palette.foreground)
             .border_color(palette.border)
@@ -90,8 +86,8 @@ impl SettingsView {
                     .h(px(20.0))
                     .items_center()
                     .justify_between()
-                    .text_size(px(13.0))
-                    .line_height(px(20.0))
+                    .text_size(px(BODY_SIZE))
+                    .line_height(px(BODY_LINE))
                     .child(display_label(selected))
                     .child(
                         svg()
@@ -110,14 +106,14 @@ impl SettingsView {
                             h_flex()
                                 .flex_1()
                                 .min_w_0()
-                                .h(px(26.0))
+                                .h(px(28.0))
                                 .mx_neg_2()
                                 .px_2()
                                 .items_center()
-                                .rounded(px(4.0))
+                                .rounded(px(RADIUS_SM))
                                 .cursor_pointer()
-                                .text_size(px(13.0))
-                                .line_height(px(20.0))
+                                .text_size(px(BODY_SIZE))
+                                .line_height(px(BODY_LINE))
                                 .when(target == selected, |row| row.bg(palette.selected))
                                 .child(display_label(target))
                         })
@@ -131,46 +127,51 @@ impl SettingsView {
                 menu
             });
         page(self.page)
-            .child(section(text::LAUNCHER_GROUP))
             .child(
-                card(cx)
-                    .child(self.toggle_row(Toggle::Login, cx))
-                    .child(components::separator(cx))
-                    .child(setting_row(
-                        text::DISPLAY,
-                        text::DISPLAY_HELP,
-                        display_choices,
-                        cx,
-                    )),
+                group(text::LAUNCHER_GROUP).child(
+                    card(cx)
+                        .child(self.toggle_row(Toggle::Login, cx))
+                        .child(components::separator(cx))
+                        .child(setting_row(
+                            text::DISPLAY,
+                            text::DISPLAY_HELP,
+                            display_choices,
+                            cx,
+                        )),
+                ),
             )
-            .child(div().mt_4().child(section(text::HISTORY)))
             .child(
-                card(cx)
-                    .child(self.toggle_row(Toggle::Recents, cx))
-                    .child(components::separator(cx))
-                    .child(setting_row(
-                        text::CLEAR_HISTORY,
-                        text::CLEAR_HISTORY_HELP,
-                        div()
-                            .id("clear-history")
-                            .px_3()
-                            .py_1()
-                            .rounded(px(5.0))
-                            .border_1()
-                            .border_color(palette.border)
-                            .cursor_pointer()
-                            .hover(move |button| button.bg(palette.hover))
-                            .child(text::CLEAR_HISTORY)
-                            .on_click(|_, _, cx| crate::settings::clear_history(cx)),
-                        cx,
-                    )),
+                group(text::HISTORY).child(
+                    card(cx)
+                        .child(self.toggle_row(Toggle::Recents, cx))
+                        .child(components::separator(cx))
+                        .child(setting_row(
+                            text::CLEAR_HISTORY,
+                            text::CLEAR_HISTORY_HELP,
+                            div()
+                                .id("clear-history")
+                                .h(px(CONTROL_HEIGHT))
+                                .px_3()
+                                .flex()
+                                .items_center()
+                                .rounded(px(RADIUS_MD))
+                                .border_1()
+                                .border_color(palette.border)
+                                .cursor_pointer()
+                                .hover(move |button| button.bg(palette.hover))
+                                .child(text::CLEAR_HISTORY)
+                                .on_click(|_, _, cx| crate::settings::clear_history(cx)),
+                            cx,
+                        )),
+                ),
             )
-            .child(div().mt_4().child(section(text::UPDATES_GROUP)))
             .child(
-                card(cx)
-                    .child(self.toggle_row(Toggle::CheckUpdates, cx))
-                    .child(components::separator(cx))
-                    .child(self.toggle_row(Toggle::DownloadUpdates, cx)),
+                group(text::UPDATES_GROUP).child(
+                    card(cx)
+                        .child(self.toggle_row(Toggle::CheckUpdates, cx))
+                        .child(components::separator(cx))
+                        .child(self.toggle_row(Toggle::DownloadUpdates, cx)),
+                ),
             )
             .into_any_element()
     }
@@ -182,11 +183,11 @@ impl SettingsView {
             text::SETTINGS_LOCATION_HELP,
             h_flex()
                 .id("preferences-folder")
+                .h(px(CONTROL_HEIGHT))
                 .px_2()
-                .py_1()
-                .rounded(px(4.0))
+                .rounded(px(RADIUS_MD))
                 .gap_1()
-                .text_size(px(12.0))
+                .text_size(px(CAPTION_SIZE))
                 .text_color(palette.muted)
                 .cursor_pointer()
                 .hover(move |link| link.bg(palette.hover).text_color(palette.foreground))

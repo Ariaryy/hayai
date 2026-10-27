@@ -4,7 +4,11 @@ use crate::licenses::{NOTICES, Notice};
 impl SettingsView {
     pub(super) fn licenses_page(&self, cx: &Context<Self>) -> gpui::AnyElement {
         let palette = crate::theme::settings_palette(cx);
-        page(self.page)
+        div()
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap_3()
             .child(
                 h_flex()
                     .justify_between()
@@ -12,7 +16,7 @@ impl SettingsView {
                     .child(section(text::THIRD_PARTY_NOTICES))
                     .child(
                         div()
-                            .text_size(px(12.0))
+                            .text_size(px(CAPTION_SIZE))
                             .text_color(palette.muted)
                             .child(text::notice_count(NOTICES.len())),
                     ),
@@ -42,11 +46,11 @@ impl SettingsView {
             .child(
                 h_flex()
                     .id(("license", index))
-                    .min_h(px(42.0))
+                    .min_h(px(40.0))
                     .px_3()
                     .py_2()
                     .gap_3()
-                    .rounded(px(8.0))
+                    .rounded(px(RADIUS_LG))
                     .cursor_pointer()
                     .hover(move |row| row.bg(palette.hover))
                     .child(
@@ -85,13 +89,13 @@ impl SettingsView {
                         div()
                             .id(("license-source", index))
                             .p_1()
-                            .rounded(px(4.0))
+                            .rounded(px(RADIUS_SM))
                             .cursor_pointer()
                             .hover(move |source| source.bg(palette.selected))
                             .child(
                                 svg()
                                     .path(icons::EXTERNAL_LINK)
-                                    .size(px(13.0))
+                                    .size(px(12.0))
                                     .text_color(palette.muted),
                             )
                             .on_click(move |_, _, cx| {
@@ -119,7 +123,7 @@ impl SettingsView {
                             div()
                                 .font_family("Consolas")
                                 .text_size(px(11.0))
-                                .line_height(px(18.0))
+                                .line_height(px(20.0))
                                 .text_color(palette.muted)
                                 .child(notice.license_text.trim()),
                         ),

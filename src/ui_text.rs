@@ -131,6 +131,9 @@ pub mod headings {
 pub mod about {
     pub const DESCRIPTION: &str = "A fast, lightweight launcher for Windows.";
     pub const PROJECT_LINK: &str = "View project on GitHub";
+    pub fn version_tag(version: &str) -> String {
+        format!("v{version}")
+    }
     pub fn version(version: &str) -> String {
         format!("Version {version}")
     }
@@ -143,6 +146,8 @@ pub mod keys {
 }
 pub mod settings {
     pub const COMMANDS: &str = "Commands";
+    pub const COMMAND: &str = "Command";
+    pub const TRIGGER: &str = "Trigger";
     pub const ALIASES: &str = "Aliases";
     pub const ADD_ALIAS: &str = "Add alias";
     pub const SHOW_COMMAND_PICKER: &str = "Show command picker";
@@ -251,6 +256,8 @@ pub mod settings {
     pub const THIRD_PARTY_NOTICES: &str = "Third-party notices";
     pub const LICENSE_ARTWORK: &str = "Artwork";
     pub const LICENSE_PALETTE: &str = "Palette";
+    pub const NOTICES_HELP: &str =
+        "Licenses and attributions for the software and artwork Hayai includes.";
     pub fn notice_count(count: usize) -> String {
         format!("{count} notices")
     }

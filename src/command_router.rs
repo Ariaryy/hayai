@@ -24,6 +24,15 @@ impl Command {
         }
     }
 
+    pub fn icon(self) -> &'static str {
+        use crate::assets::icons;
+        match self {
+            Self::Files => icons::SETTINGS_FILES,
+            Self::Settings => icons::SETTINGS_GENERAL,
+            Self::Calculator => icons::CALCULATOR,
+        }
+    }
+
     fn default_trigger(self) -> &'static str {
         match self {
             Self::Files => "f",

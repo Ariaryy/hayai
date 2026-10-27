@@ -22,8 +22,11 @@ mod scrolling;
 #[cfg(test)]
 mod tests;
 
-use components::{card, description, page, section, setting_row};
-pub use components::{key_badges, trigger_badge};
+use components::{
+    BODY_LINE, BODY_SIZE, CAPTION_LINE, CAPTION_SIZE, CONTROL_HEIGHT, RADIUS_LG, RADIUS_MD,
+    RADIUS_SM, RADIUS_XL, ROW_MIN_HEIGHT, card, description, group, page, section, setting_row,
+};
+pub use components::{key_badges, keycap_icon, keycap_label, trigger_badge};
 pub use lifecycle::open;
 use pages::Page;
 pub use recording::capture_registered_shortcut;
@@ -62,39 +65,89 @@ impl SettingsView {
         }
     }
 
+    /// Ancestors are links; the current page is plain text. Settings opens
+    /// the first page, and Third-party notices sits under About.
+    fn breadcrumb(&self, cx: &Context<Self>) -> impl IntoElement {
+        let palette = crate::theme::settings_palette(cx);
+        let mut trail = vec![(text::SETTINGS_ITEM, Some(Page::General))];
+        if self.page == Page::Licenses {
+            trail.push((Page::About.label(), Some(Page::About)));
+        }
+        let current = self.page.label();
+        let mut crumbs = h_flex().px_8().gap_3().text_size(px(BODY_SIZE));
+        for (index, (label, target)) in trail.into_iter().enumerate() {
+            crumbs = crumbs
+                .child(
+                    div()
+                        .id(("crumb", index))
+                        .text_color(palette.muted)
+                        .when_some(target, |crumb, page| {
+                            crumb
+                                .cursor_pointer()
+                                .hover(move |crumb| crumb.text_color(palette.foreground))
+                                // The titlebar drags the window; a crumb is a click.
+                                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                    cx.stop_propagation()
+                                })
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.navigate(page, window, cx);
+                                }))
+                        })
+                        .child(label),
+                )
+                .child(div().text_color(palette.muted).child("/"));
+        }
+        crumbs.child(div().font_weight(FontWeight::SEMIBOLD).child(current))
+    }
+
     fn navigation(&self, page: Page, cx: &Context<Self>) -> impl IntoElement {
         let palette = crate::theme::settings_palette(cx);
         let selected = self.page == page || (page == Page::About && self.page == Page::Licenses);
+        let color = if selected {
+            palette.foreground
+        } else {
+            palette.muted
+        };
+        let line = crate::pixels::snap(cx, BODY_LINE);
+        let (icon, icon_top) = crate::pixels::fit(cx, 36.0, 0.0, 16.0);
         h_flex()
             .id(page.label())
-            .h(px(36.0))
+            .h(crate::pixels::snap(cx, 36.0))
+            .items_start()
             .px_3()
             .gap_3()
-            .rounded(px(7.0))
-            .text_color(if selected {
-                palette.foreground
-            } else {
-                palette.muted
-            })
+            .rounded(px(RADIUS_LG))
+            .text_color(color)
             .font_weight(if selected {
                 FontWeight::SEMIBOLD
             } else {
                 FontWeight::MEDIUM
             })
             .cursor_pointer()
-            .when(selected, |row| row.bg(palette.selected))
-            .hover(move |row| row.bg(palette.hover))
+            .when(selected, |row| row.bg(palette.sidebar_selected))
+            .hover(move |row| row.bg(palette.sidebar_hover))
             .child(
                 svg()
                     .path(page.icon())
-                    .size(px(17.0))
-                    .text_color(if selected {
-                        palette.foreground
-                    } else {
-                        palette.muted
-                    }),
+                    .size(icon)
+                    .flex_none()
+                    .mt(icon_top)
+                    .text_color(color),
             )
-            .child(page.label())
+            .child(
+                div()
+                    .mt(crate::pixels::text_top(
+                        cx,
+                        36.0,
+                        0.0,
+                        BODY_LINE,
+                        BODY_SIZE,
+                        crate::pixels::Glyphs::Lowercase,
+                    ))
+                    .h(line)
+                    .line_height(line)
+                    .child(page.label()),
+            )
             .on_click(cx.listener(move |this, _, window, cx| {
                 this.navigate(page, window, cx);
             }))
@@ -109,6 +162,7 @@ impl Focusable for SettingsView {
 
 impl Render for SettingsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        crate::pixels::sync(window, cx);
         if self.scrolling.advance(window.is_window_active()) {
             window.request_animation_frame();
         }
@@ -137,7 +191,7 @@ impl Render for SettingsView {
                             window.remove_window();
                         }
                     }))
-                    .h(px(46.0))
+                    .h(px(48.0))
                     .pl_0()
                     .bg(palette.canvas)
                     .border_color(palette.border)
@@ -157,7 +211,7 @@ impl Render for SettingsView {
                                     .border_r_1()
                                     .border_color(palette.border)
                                     .when_some(self.brand.clone(), |row, brand| {
-                                        row.child(gpui::img(brand).size(px(22.0)))
+                                        row.child(gpui::img(brand).size(px(24.0)))
                                     })
                                     .child(
                                         div()
@@ -165,21 +219,7 @@ impl Render for SettingsView {
                                             .child(crate::ui_text::headings::HAYAI),
                                     ),
                             )
-                            .child(
-                                h_flex()
-                                    .px_6()
-                                    .gap_3()
-                                    .text_size(px(13.0))
-                                    .child(
-                                        div().text_color(palette.muted).child(text::SETTINGS_ITEM),
-                                    )
-                                    .child(div().text_color(palette.muted).child("/"))
-                                    .child(
-                                        div()
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child(self.page.label()),
-                                    ),
-                            ),
+                            .child(self.breadcrumb(cx)),
                     ),
             )
             .child(
@@ -193,8 +233,7 @@ impl Render for SettingsView {
                             .flex_none()
                             .flex()
                             .flex_col()
-                            .px_2()
-                            .py_4()
+                            .p_2()
                             .gap_1()
                             .bg(palette.sidebar)
                             .border_r_1()

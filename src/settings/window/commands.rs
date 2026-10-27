@@ -4,11 +4,15 @@ use gpui::Entity;
 use gpui_component::{
     Sizable,
     input::{Input, InputEvent, InputState},
-    switch::Switch,
 };
 
 /// Chips, the trigger and the add field share one height so rows stay level.
 const INPUT_HEIGHT: f32 = 24.0;
+// Column widths shared by the header and every row so the table lines up.
+const GUTTER_WIDTH: f32 = 16.0;
+const COMMAND_WIDTH: f32 = 148.0;
+const TRIGGER_WIDTH: f32 = 124.0;
+const COLUMN_GAP: f32 = 12.0;
 
 pub(super) struct AliasEditor {
     pub(super) triggers: [Entity<InputState>; Command::ALL.len()],
@@ -139,35 +143,51 @@ impl SettingsView {
         let palette = crate::theme::settings_palette(cx);
         let removed = alias.to_owned();
         let id = command as usize * 8 + index;
+        // Children are placed by whole-device-pixel offsets, not flex centering.
+        let line = crate::pixels::snap(cx, 20.0);
+        let text_top = crate::pixels::text_top(
+            cx,
+            INPUT_HEIGHT,
+            0.0,
+            20.0,
+            13.0,
+            crate::pixels::Glyphs::Lowercase,
+        );
+        let (close, close_top) = crate::pixels::fit(cx, INPUT_HEIGHT, 0.0, 16.0);
         h_flex()
-            .h(px(INPUT_HEIGHT))
+            .h(crate::pixels::snap(cx, INPUT_HEIGHT))
+            .items_start()
             .pl_2()
+            // The close glyph has padding inside its button, so a 4px right inset
+            // makes the visible gaps either side of the chip equal.
             .pr_1()
-            .gap_1p5()
-            .rounded(px(6.0))
+            .gap_1()
+            .rounded(px(RADIUS_MD))
             .bg(palette.keycap)
             .when_some(conflict, |chip, message| {
-                chip.child(components::conflict_glyph(
-                    ("alias-conflict", id),
-                    message,
-                    cx,
+                chip.child(div().mt(crate::pixels::lead(cx, INPUT_HEIGHT, 16.0)).child(
+                    components::conflict_glyph(("alias-conflict", id), message, cx),
                 ))
             })
-            .child(alias.to_owned())
+            .child(
+                div()
+                    .mt(text_top)
+                    .h(line)
+                    .line_height(line)
+                    .child(alias.to_owned()),
+            )
             .child(
                 div()
                     .id(("alias-remove", id))
-                    .size(px(20.0))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(4.0))
+                    .mt(close_top)
+                    .size(close)
+                    .rounded(px(RADIUS_SM))
                     .cursor_pointer()
                     .hover(move |button| button.bg(palette.hover))
                     .child(
                         svg()
                             .path(icons::WINDOW_CLOSE)
-                            .size(px(16.0))
+                            .size(close)
                             .text_color(palette.muted),
                     )
                     .on_click(
@@ -177,19 +197,19 @@ impl SettingsView {
     }
 
     pub(super) fn commands_page(&self, cx: &Context<Self>) -> gpui::AnyElement {
-        let mut body = page(self.page).child(section(text::COMMANDS)).child(
+        let mut body = group(text::COMMANDS).child(
             card(cx).child(setting_row(
                 text::SHOW_COMMAND_PICKER,
                 text::SHOW_COMMAND_PICKER_HELP,
-                Switch::new("show-command-picker")
-                    .checked(preferences(cx).show_command_picker)
-                    .color(crate::theme::settings_palette(cx).accent)
-                    .cursor_pointer()
-                    .on_click(|checked, _, cx| {
-                        let mut next = preferences(cx).clone();
-                        next.show_command_picker = *checked;
-                        save(next, cx);
-                    }),
+                components::ToggleSwitch::new(
+                    "show-command-picker",
+                    preferences(cx).show_command_picker,
+                )
+                .on_change(|checked, _, cx| {
+                    let mut next = preferences(cx).clone();
+                    next.show_command_picker = checked;
+                    save(next, cx);
+                }),
                 cx,
             )),
         );
@@ -198,7 +218,25 @@ impl SettingsView {
         };
         let routes = &preferences(cx).commands;
         let palette = crate::theme::settings_palette(cx);
-        let mut rows = card(cx);
+        let header_cell = |label: &'static str| {
+            div()
+                .text_size(px(CAPTION_SIZE))
+                .line_height(px(CAPTION_LINE))
+                .text_color(palette.muted)
+                .child(label)
+        };
+        let mut rows = card(cx).child(
+            h_flex()
+                .px_4()
+                .py_2()
+                .gap(px(COLUMN_GAP))
+                .border_b_1()
+                .border_color(palette.border)
+                .child(div().w(px(GUTTER_WIDTH)).flex_none())
+                .child(header_cell(text::COMMAND).w(px(COMMAND_WIDTH)).flex_none())
+                .child(header_cell(text::TRIGGER).w(px(TRIGGER_WIDTH)).flex_none())
+                .child(header_cell(text::ALIASES).flex_1()),
+        );
         for (index, command) in Command::ALL.into_iter().enumerate() {
             if index > 0 {
                 rows = rows.child(components::separator(cx));
@@ -217,48 +255,54 @@ impl SettingsView {
                     self.alias_chip(command, index, alias, conflict, cx)
                 })
                 .collect::<Vec<_>>();
+            // Every cell is one input tall, so the first line of a wrapped alias
+            // list stays level with the name and trigger beside it.
+            let cell = || h_flex().h(px(INPUT_HEIGHT)).flex_none();
             rows = rows.child(
                 div()
-                    .p_4()
+                    .px_4()
+                    .py_3()
                     .flex()
                     .flex_col()
-                    .gap_3()
+                    .gap_2()
                     .child(
                         h_flex()
-                            .gap_2()
+                            .items_start()
+                            .gap(px(COLUMN_GAP))
+                            .child(cell().w(px(GUTTER_WIDTH)).justify_center().child(
+                                components::conflict_slot(
+                                    ("trigger-conflict", command as usize),
+                                    conflict_message(routes, command, routes.trigger(command)),
+                                    cx,
+                                ),
+                            ))
                             .child(
-                                div()
-                                    .flex_1()
+                                cell()
+                                    .w(px(COMMAND_WIDTH))
+                                    .gap_2()
                                     .font_weight(FontWeight::MEDIUM)
+                                    .child(
+                                        svg()
+                                            .path(command.icon())
+                                            .size(px(16.0))
+                                            .flex_none()
+                                            .text_color(palette.muted),
+                                    )
                                     .child(text::command_label(command)),
                             )
-                            .child(components::conflict_slot(
-                                ("trigger-conflict", command as usize),
-                                conflict_message(routes, command, routes.trigger(command)),
-                                cx,
-                            ))
-                            .child(components::key_badge("space", cx))
                             .child(
-                                Input::new(&editor.triggers[command as usize])
-                                    .small()
-                                    .h(px(INPUT_HEIGHT))
-                                    .w(px(64.0))
-                                    .text_size(px(13.0))
-                                    .line_height(px(20.0)),
-                            ),
-                    )
-                    .child(
-                        h_flex()
-                            .gap_4()
-                            .items_start()
-                            .child(
-                                div()
-                                    .w(px(50.0))
-                                    .h(px(INPUT_HEIGHT))
-                                    .flex()
-                                    .items_center()
-                                    .text_color(palette.muted)
-                                    .child(text::ALIASES),
+                                cell()
+                                    .w(px(TRIGGER_WIDTH))
+                                    .gap_1()
+                                    .child(components::key_badge("space", cx))
+                                    .child(
+                                        Input::new(&editor.triggers[command as usize])
+                                            .small()
+                                            .h(px(INPUT_HEIGHT))
+                                            .w(px(56.0))
+                                            .text_size(px(BODY_SIZE))
+                                            .line_height(px(BODY_LINE)),
+                                    ),
                             )
                             .child(
                                 h_flex()
@@ -277,9 +321,9 @@ impl SettingsView {
                                                 Input::new(&editor.additions[command as usize])
                                                     .small()
                                                     .h(px(INPUT_HEIGHT))
-                                                    .w(px(120.0))
-                                                    .text_size(px(13.0))
-                                                    .line_height(px(20.0)),
+                                                    .w(px(112.0))
+                                                    .text_size(px(BODY_SIZE))
+                                                    .line_height(px(BODY_LINE)),
                                             )
                                         },
                                     ),
@@ -288,7 +332,9 @@ impl SettingsView {
                     .when_some(error, |column, message| {
                         column.child(
                             div()
-                                .text_size(px(12.0))
+                                .pl(px(GUTTER_WIDTH + COLUMN_GAP))
+                                .text_size(px(CAPTION_SIZE))
+                                .line_height(px(CAPTION_LINE))
                                 .text_color(palette.danger)
                                 .child(message),
                         )

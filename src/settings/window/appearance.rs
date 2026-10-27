@@ -14,7 +14,7 @@ impl SettingsView {
                     .flex_1()
                     .min_w_0()
                     .p_2()
-                    .rounded(px(12.0))
+                    .rounded(px(RADIUS_XL))
                     .border_2()
                     .border_color(if selected {
                         palette.accent
@@ -27,9 +27,9 @@ impl SettingsView {
                     .child(launcher_preview(preferences(cx).theme_for(light), light))
                     .child(
                         h_flex()
-                            .h(px(34.0))
+                            .h(px(36.0))
                             .justify_center()
-                            .text_size(px(12.0))
+                            .text_size(px(CAPTION_SIZE))
                             .text_color(if selected {
                                 palette.foreground
                             } else {
@@ -51,19 +51,19 @@ impl SettingsView {
             );
         }
         page(self.page)
-            .child(section(text::COLOR_SCHEME))
-            .child(choices)
-            .child(div().mt_5().child(section(text::THEMES)))
+            .child(group(text::COLOR_SCHEME).child(choices))
             .child(
-                div()
-                    .grid()
-                    .grid_cols(if window.viewport_size().width < px(960.0) {
-                        2
-                    } else {
-                        3
-                    })
-                    .gap_3()
-                    .children(ThemeFamily::ALL.map(|family| self.theme_card(family, cx))),
+                group(text::THEMES).child(
+                    div()
+                        .grid()
+                        .grid_cols(if window.viewport_size().width < px(960.0) {
+                            2
+                        } else {
+                            3
+                        })
+                        .gap_3()
+                        .children(ThemeFamily::ALL.map(|family| self.theme_card(family, cx))),
+                ),
             )
             .into_any_element()
     }
@@ -73,7 +73,7 @@ impl SettingsView {
         div()
             .min_w_0()
             .p_3()
-            .rounded(px(12.0))
+            .rounded(px(RADIUS_XL))
             .border_1()
             .border_color(palette.border)
             .bg(palette.panel)
