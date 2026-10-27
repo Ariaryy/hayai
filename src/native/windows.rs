@@ -2,6 +2,7 @@ use crate::native::NativeCommand;
 use futures::channel::mpsc::UnboundedSender;
 use std::path::{Path, PathBuf};
 use std::ptr::{null, null_mut};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{OnceLock, mpsc};
 use std::{io, thread};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -37,6 +38,10 @@ mod associations;
 pub use associations::{associated_apps, open_with_app};
 
 const TRAY_ICON_ID: u32 = 1;
+// The message window owning the tray icon, or 0 once the icon is removed.
+// GPUI's quit ends in `ExitProcess`, which skips the native thread's
+// `WM_DESTROY`, so the quit hook removes the icon from the GPUI thread.
+static TRAY_WINDOW: AtomicUsize = AtomicUsize::new(0);
 const WM_TRAY_ICON: u32 = WM_APP + 1;
 mod hotkeys;
 use hotkeys::WM_SET_HOTKEY;
@@ -697,14 +702,32 @@ fn add_tray_icon(hwnd: HWND) -> io::Result<()> {
     if unsafe { Shell_NotifyIconW(NIM_ADD, &data) } == 0 {
         return Err(io::Error::last_os_error());
     }
+    TRAY_WINDOW.store(hwnd as usize, Ordering::Release);
 
     Ok(())
 }
 
-fn remove_tray_icon(hwnd: HWND) {
+/// Remove the tray icon before the process exits. Without this, an exit that
+/// bypasses `WM_DESTROY` (restart to update) leaves a stale icon beside the
+/// restarted instance's icon until the user hovers it.
+pub fn remove_tray_icon() {
+    let hwnd = TRAY_WINDOW.swap(0, Ordering::AcqRel) as HWND;
+    if hwnd.is_null() {
+        return;
+    }
     let data = notify_icon_data(hwnd);
     unsafe {
         Shell_NotifyIconW(NIM_DELETE, &data);
+    }
+}
+
+/// Child processes inherit Hayai's working directory. Velopack starts Hayai
+/// in its `current` install directory, and any program launched from there
+/// keeps that directory open, so applying an update cannot replace it. Use
+/// the profile directory instead, matching the Run dialog's default.
+pub fn leave_install_directory() {
+    if let Some(profile) = std::env::var_os("USERPROFILE") {
+        let _ = std::env::set_current_dir(profile);
     }
 }
 
@@ -750,7 +773,7 @@ unsafe extern "system" fn window_proc(
 
         WM_DESTROY => {
             hotkeys::unregister(hwnd);
-            remove_tray_icon(hwnd);
+            remove_tray_icon();
             unsafe {
                 PostQuitMessage(0);
             }
@@ -803,6 +826,45 @@ mod search_worker_tests {
         }
         drop(send);
         worker.join().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod working_directory_tests {
+    const CHILD: &str = "HAYAI_WORKING_DIRECTORY_CHILD";
+
+    /// The working directory is process-wide and other tests read it, so the
+    /// assertions run in a child copy of this test binary.
+    #[test]
+    fn launched_programs_do_not_hold_the_install_directory() {
+        let install = std::env::temp_dir().join(format!("hayai-install-{}", std::process::id()));
+        if std::env::var_os(CHILD).is_none() {
+            std::fs::create_dir_all(&install).unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "native::windows::working_directory_tests::launched_programs_do_not_hold_the_install_directory",
+                    "--nocapture",
+                ])
+                .env(CHILD, &install)
+                .status()
+                .unwrap();
+            let _ = std::fs::remove_dir(&install);
+            assert!(status.success());
+            return;
+        }
+        // Velopack starts Hayai inside its `current` install directory.
+        std::env::set_current_dir(std::env::var_os(CHILD).unwrap()).unwrap();
+        super::leave_install_directory();
+        let output = std::process::Command::new("cmd.exe")
+            .args(["/C", "cd"])
+            .output()
+            .unwrap();
+        let inherited = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(
+            std::path::Path::new(inherited.trim()),
+            std::path::Path::new(&std::env::var_os("USERPROFILE").unwrap())
+        );
     }
 }
 

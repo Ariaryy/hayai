@@ -48,6 +48,7 @@ fn main() {
             let _ = startup::unregister();
         })
         .run();
+    native::leave_install_directory();
 
     let (native_tx, native_rx) = futures::channel::mpsc::unbounded();
     let settings = settings::SettingsGlobal::load();
@@ -80,6 +81,11 @@ fn main() {
             registry.configure(settings::preferences(cx));
             RegistryGlobal::install(cx, registry);
 
+            cx.on_app_quit(|_| {
+                native::remove_tray_icon();
+                async {}
+            })
+            .detach();
             drive_native_commands(cx, native_rx, native_runtime);
         });
 }

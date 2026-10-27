@@ -5,6 +5,11 @@ yet included in a published package.
 
 ## Unreleased
 
+### Fixes
+
+- Restart to update now installs the new version even when apps opened from Hayai are still running. Previously the update failed and Hayai restarted on the old version.
+- Restarting to update no longer leaves a second, stale Hayai icon in the tray.
+
 ## 0.2.0 - 2026-10-27
 
 ### Settings
