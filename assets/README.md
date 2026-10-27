@@ -27,5 +27,5 @@ separate DPI-sized renditions displayed at the standard 22 logical pixels.
 
 Third-party icons live under `icons/thirdparty/<source>/`, with each source's
 extensionless `LICENSE` in its own directory. `phosphor/` contains the plain
-settings navigation glyphs from [Phosphor Icons](https://github.com/phosphor-icons/core).
+settings navigation and warning glyphs from [Phosphor Icons](https://github.com/phosphor-icons/core).
 Hayai's branded artwork and window-control glyphs stay directly under `icons/`.

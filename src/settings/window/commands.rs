@@ -7,69 +7,169 @@ use gpui_component::{
     switch::Switch,
 };
 
+/// Chips, the trigger and the add field share one height so rows stay level.
+const INPUT_HEIGHT: f32 = 24.0;
+
 pub(super) struct AliasEditor {
-    pub(super) inputs: [Entity<InputState>; Command::ALL.len()],
+    pub(super) triggers: [Entity<InputState>; Command::ALL.len()],
+    /// Pending text for a new alias; committed aliases render as chips.
+    pub(super) additions: [Entity<InputState>; Command::ALL.len()],
+    pub(super) error: Option<(Command, String)>,
     _subscriptions: Vec<Subscription>,
 }
 
 impl AliasEditor {
     pub(super) fn new(window: &mut Window, cx: &mut Context<SettingsView>) -> Self {
-        let inputs = Command::ALL.map(|command| {
-            let value = preferences(cx).commands.names(command).join(", ");
+        let triggers = Command::ALL.map(|command| {
+            let value = preferences(cx).commands.trigger(command).to_owned();
             cx.new(|cx| InputState::new(window, cx).default_value(value))
         });
+        let additions = Command::ALL
+            .map(|_| cx.new(|cx| InputState::new(window, cx).placeholder(text::ADD_ALIAS)));
         let subscriptions = Command::ALL
             .into_iter()
-            .map(|command| {
-                cx.subscribe_in(
-                    &inputs[command as usize],
-                    window,
-                    move |this, input, event, _, cx| {
-                        if !matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
-                            return;
-                        }
-                        let value = input.read(cx).value().to_string();
-                        let mut next = preferences(cx).clone();
-                        match next.commands.set(command, &value) {
-                            Ok(()) => {
-                                this.validation = None;
-                                if next != *preferences(cx) {
-                                    save(next, cx);
+            .flat_map(|command| {
+                [&triggers[command as usize], &additions[command as usize]]
+                    .into_iter()
+                    .map(|input| {
+                        cx.subscribe_in(input, window, move |this, input, event, window, cx| {
+                            if !matches!(event, InputEvent::Blur | InputEvent::PressEnter { .. }) {
+                                return;
+                            }
+                            if this.commit_routes(Some(command), cx) {
+                                let is_addition =
+                                    this.alias_editor.as_ref().is_some_and(|editor| {
+                                        editor.additions[command as usize] == *input
+                                    });
+                                if is_addition {
+                                    input.update(cx, |input, cx| input.set_value("", window, cx));
                                 }
                             }
-                            Err(error) => this.validation = Some(error.to_string()),
-                        }
-                        cx.notify();
-                    },
-                )
+                        })
+                    })
+                    .collect::<Vec<_>>()
             })
             .collect();
         Self {
-            inputs,
+            triggers,
+            additions,
+            error: None,
             _subscriptions: subscriptions,
         }
     }
 }
 
+fn conflict_message(
+    aliases: &crate::command_router::Aliases,
+    command: Command,
+    entry: &str,
+) -> Option<String> {
+    let (other, theirs) = aliases.conflict(command, entry)?;
+    let kind = if aliases.trigger(other) == theirs {
+        "trigger"
+    } else {
+        "alias"
+    };
+    Some(text::route_conflict(other, theirs, kind))
+}
+
 impl SettingsView {
     pub(super) fn commit_aliases(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(editor) = &self.alias_editor else {
+        self.commit_routes(None, cx)
+    }
+
+    /// Format errors stay in the editor and block closing; overlaps between
+    /// commands are valid to save and are flagged on the page instead. All
+    /// requested commands are applied as one edit, so there is a single save.
+    fn commit_routes(&mut self, only: Option<Command>, cx: &mut Context<Self>) -> bool {
+        let Some(editor) = &mut self.alias_editor else {
             return true;
         };
         let mut next = preferences(cx).clone();
-        for command in Command::ALL {
-            let value = editor.inputs[command as usize].read(cx).value();
-            if let Err(error) = next.commands.set(command, &value) {
-                self.validation = Some(error.to_string());
+        for command in Command::ALL
+            .into_iter()
+            .filter(|command| only.is_none_or(|only| only == *command))
+        {
+            let trigger = editor.triggers[command as usize].read(cx).value();
+            let added = editor.additions[command as usize].read(cx).value();
+            let result = next.commands.set_trigger(command, &trigger).and_then(|()| {
+                if added.trim().is_empty() {
+                    return Ok(());
+                }
+                let all = [next.commands.aliases(command).join(","), added.to_string()];
+                next.commands.set_aliases(command, &all.join(","))
+            });
+            if let Err(error) = result {
+                editor.error = Some((command, error.to_string()));
                 cx.notify();
                 return false;
             }
         }
-        self.validation = None;
+        editor.error = None;
         if next != *preferences(cx) {
             save(next, cx);
         }
+        cx.notify();
         true
+    }
+
+    fn remove_alias(&mut self, command: Command, alias: &str, cx: &mut Context<Self>) {
+        let mut next = preferences(cx).clone();
+        let remaining = next
+            .commands
+            .aliases(command)
+            .iter()
+            .filter(|name| *name != alias)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(",");
+        if next.commands.set_aliases(command, &remaining).is_ok() {
+            save(next, cx);
+        }
+    }
+
+    fn alias_chip(
+        &self,
+        command: Command,
+        index: usize,
+        alias: &str,
+        conflict: Option<String>,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let palette = crate::theme::settings_palette(cx);
+        let removed = alias.to_owned();
+        let id = command as usize * 8 + index;
+        h_flex()
+            .h(px(INPUT_HEIGHT))
+            .pl_2()
+            .pr_1()
+            .gap_1p5()
+            .rounded(px(6.0))
+            .bg(palette.keycap)
+            .when_some(conflict, |chip, message| {
+                chip.child(components::conflict_glyph(("alias-conflict", id), message))
+            })
+            .child(alias.to_owned())
+            .child(
+                div()
+                    .id(("alias-remove", id))
+                    .size(px(20.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(4.0))
+                    .cursor_pointer()
+                    .hover(move |button| button.bg(palette.hover))
+                    .child(
+                        svg()
+                            .path(icons::WINDOW_CLOSE)
+                            .size(px(16.0))
+                            .text_color(palette.muted),
+                    )
+                    .on_click(
+                        cx.listener(move |this, _, _, cx| this.remove_alias(command, &removed, cx)),
+                    ),
+            )
     }
 
     pub(super) fn commands_page(&self, cx: &Context<Self>) -> gpui::AnyElement {
@@ -92,14 +192,27 @@ impl SettingsView {
         let Some(editor) = &self.alias_editor else {
             return body.into_any_element();
         };
-        let aliases = &preferences(cx).commands;
+        let routes = &preferences(cx).commands;
         let palette = crate::theme::settings_palette(cx);
         let mut rows = card(cx);
         for (index, command) in Command::ALL.into_iter().enumerate() {
             if index > 0 {
                 rows = rows.child(components::separator(cx));
             }
-            let triggers = aliases.triggers(command);
+            let error = editor
+                .error
+                .as_ref()
+                .filter(|(failed, _)| *failed == command)
+                .map(|(_, message)| message.clone());
+            let chips = routes
+                .aliases(command)
+                .iter()
+                .enumerate()
+                .map(|(index, alias)| {
+                    let conflict = conflict_message(routes, command, alias);
+                    self.alias_chip(command, index, alias, conflict, cx)
+                })
+                .collect::<Vec<_>>();
             rows = rows.child(
                 div()
                     .p_4()
@@ -108,45 +221,73 @@ impl SettingsView {
                     .gap_3()
                     .child(
                         h_flex()
-                            .gap_3()
-                            .items_start()
+                            .gap_2()
                             .child(
                                 div()
                                     .flex_1()
                                     .font_weight(FontWeight::MEDIUM)
                                     .child(text::command_label(command)),
                             )
+                            .child(components::conflict_slot(
+                                ("trigger-conflict", command as usize),
+                                conflict_message(routes, command, routes.trigger(command)),
+                            ))
+                            .child(components::key_badge("space", cx))
                             .child(
-                                h_flex()
-                                    .max_w(gpui::relative(0.65))
-                                    .flex_wrap()
-                                    .justify_end()
-                                    .gap_2()
-                                    .children(
-                                        triggers
-                                            .into_iter()
-                                            .map(|trigger| command_badges(trigger, cx)),
-                                    ),
+                                Input::new(&editor.triggers[command as usize])
+                                    .small()
+                                    .h(px(INPUT_HEIGHT))
+                                    .w(px(64.0))
+                                    .text_size(px(13.0))
+                                    .line_height(px(20.0)),
                             ),
                     )
                     .child(
                         h_flex()
                             .gap_4()
+                            .items_start()
                             .child(
                                 div()
                                     .w(px(50.0))
+                                    .h(px(INPUT_HEIGHT))
+                                    .flex()
+                                    .items_center()
                                     .text_color(palette.muted)
                                     .child(text::ALIASES),
                             )
                             .child(
-                                Input::new(&editor.inputs[command as usize])
-                                    .small()
+                                h_flex()
                                     .flex_1()
                                     .min_w_0()
-                                    .text_size(px(13.0))
-                                    .line_height(px(20.0)),
+                                    .flex_wrap()
+                                    .gap_2()
+                                    .children(chips)
+                                    // At the limit there is nothing left to add, so
+                                    // the field goes away instead of erroring.
+                                    .when(
+                                        routes.aliases(command).len()
+                                            < crate::command_router::MAX_ALIASES,
+                                        |row| {
+                                            row.child(
+                                                Input::new(&editor.additions[command as usize])
+                                                    .small()
+                                                    .h(px(INPUT_HEIGHT))
+                                                    .w(px(120.0))
+                                                    .text_size(px(13.0))
+                                                    .line_height(px(20.0)),
+                                            )
+                                        },
+                                    ),
                             ),
-                    ),
+                    )
+                    .when_some(error, |column, message| {
+                        column.child(
+                            div()
+                                .text_size(px(12.0))
+                                .text_color(palette.accent)
+                                .child(message),
+                        )
+                    }),
             );
         }
         body = body.child(rows);

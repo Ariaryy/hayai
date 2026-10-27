@@ -98,21 +98,56 @@ pub fn key_badges(binding: &str, cx: &App) -> impl IntoElement + use<> {
     )
 }
 
-pub fn command_badges(trigger: &str, cx: &App) -> impl IntoElement + use<> {
-    h_flex()
-        .max_w_full()
-        .flex_wrap()
-        .gap_1()
-        .child(key_badge("space", cx))
-        .children(
-            trigger
-                .chars()
-                .map(|key| key_badge(&key.to_string(), cx))
-                .collect::<Vec<_>>(),
-        )
+/// A trigger is typed text, so a multi-key one is a single badge.
+pub fn trigger_badge(trigger: &str, cx: &App) -> impl IntoElement + use<> {
+    key_badge(trigger, cx)
 }
 
-fn key_badge(key: &str, cx: &App) -> impl IntoElement + use<> {
+const WARNING_COLOR: u32 = 0xf59e0b;
+
+fn warning_glyph(id: impl Into<gpui::ElementId>, message: String) -> gpui::Stateful<gpui::Div> {
+    let message = gpui::SharedString::from(message);
+    div()
+        .id(id)
+        .flex_none()
+        .size(px(16.0))
+        .child(
+            svg()
+                .path(icons::WARNING)
+                .size(px(16.0))
+                .text_color(gpui::rgb(WARNING_COLOR)),
+        )
+        .tooltip(move |window, cx| {
+            let message = message.clone();
+            // Wrap long explanations instead of stretching across the window.
+            gpui_component::tooltip::Tooltip::element(move |_, _| {
+                div().max_w(px(260.0)).child(message.clone())
+            })
+            .build(window, cx)
+        })
+}
+
+/// A warning glyph that always sits at the leading edge of what it flags. The
+/// slot keeps its width when empty so rows stay aligned whether or not a
+/// conflict exists.
+pub(super) fn conflict_slot(
+    id: impl Into<gpui::ElementId>,
+    message: Option<String>,
+) -> impl IntoElement {
+    div()
+        .flex_none()
+        .size(px(16.0))
+        .when_some(message, |slot, message| {
+            slot.child(warning_glyph(id, message))
+        })
+}
+
+/// The same glyph for items that are not reserved a slot, such as alias chips.
+pub(super) fn conflict_glyph(id: impl Into<gpui::ElementId>, message: String) -> impl IntoElement {
+    warning_glyph(id, message)
+}
+
+pub(super) fn key_badge(key: &str, cx: &App) -> impl IntoElement + use<> {
     let palette = crate::theme::settings_palette(cx);
     div()
         .h(px(22.0))

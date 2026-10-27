@@ -13,10 +13,13 @@ pub(super) async fn check(
 ) {
     handle
         .update(cx, |_, window, cx| {
-            cx.global_mut::<crate::settings::SettingsGlobal>()
-                .preferences
+            let preferences = &mut cx
+                .global_mut::<crate::settings::SettingsGlobal>()
+                .preferences;
+            preferences.show_command_picker = true;
+            preferences
                 .commands
-                .set(crate::command_router::Command::Settings, "folders")
+                .set_trigger(crate::command_router::Command::Files, "fi")
                 .unwrap();
             root.update(cx, |root, cx| {
                 edit(root, " ", window, cx);
@@ -49,7 +52,7 @@ pub(super) async fn check(
                 assert_eq!(root.search_input.read(cx).value().as_str(), "2+2");
                 assert_eq!(root.list.read(cx).delegate().last_query, " = 2+2");
                 root.on_escape(&gpui_component::input::Escape, window, cx);
-                edit(root, " c", window, cx);
+                edit(root, " =", window, cx);
                 assert!(root.calculator_mode);
                 root.on_intercepted_key("backspace", false, window, cx);
                 assert!(!root.calculator_mode);
@@ -142,6 +145,21 @@ pub(super) async fn check(
             cx.global_mut::<crate::settings::SettingsGlobal>()
                 .preferences
                 .commands = Default::default();
+            // Hidden picker: text that cannot be a command is a normal search.
+            cx.global_mut::<crate::settings::SettingsGlobal>()
+                .preferences
+                .show_command_picker = false;
+            root.update(cx, |root, cx| {
+                edit(root, " ", window, cx);
+                assert!(root.waiting_for_command);
+                edit(root, "c", window, cx);
+                assert!(root.waiting_for_command);
+                edit(root, "chrome", window, cx);
+                assert!(!root.waiting_for_command);
+                assert_eq!(root.search_input.read(cx).value().as_str(), "chrome");
+                assert_eq!(root.list.read(cx).delegate().last_query, "chrome");
+                root.reset_to_apps(window, cx);
+            });
         })
         .unwrap();
 }

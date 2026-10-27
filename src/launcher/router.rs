@@ -20,8 +20,31 @@ impl LauncherRoot {
         {
             let remainder = remainder.to_owned();
             self.activate_command(command, &remainder, window, cx);
+        } else if !typed.is_empty()
+            && !crate::settings::preferences(cx).show_command_picker
+            && !crate::settings::preferences(cx).commands.could_match(typed)
+        {
+            // Without the picker nothing explains a stalled command prompt, so
+            // text that can no longer be a command searches normally.
+            let query = typed.to_owned();
+            self.leave_command_for_search(&query, window, cx);
         }
         cx.notify();
+    }
+
+    fn leave_command_for_search(
+        &mut self,
+        query: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.waiting_for_command = false;
+        self.search_input.update(cx, |input, cx| {
+            input.set_placeholder(text::search::APPS_PLACEHOLDER, window, cx);
+        });
+        self.list.update(cx, |list, cx| {
+            perform_search_and_select_first(list, query, window, cx);
+        });
     }
 
     pub(super) fn refresh_command_results(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -94,14 +117,12 @@ impl LauncherRoot {
         let mut count = 0;
         for command in Command::ALL {
             if !aliases
-                .names(command)
-                .iter()
+                .entries(command)
                 .any(|name| name.starts_with(&typed))
             {
                 continue;
             }
             count += 1;
-            let triggers = aliases.triggers(command);
             body = body.child(
                 h_flex()
                     .id(command.id())
@@ -123,18 +144,7 @@ impl LauncherRoot {
                             .text_color(cx.theme().muted_foreground),
                     )
                     .child(div().flex_1().child(text::settings::command_label(command)))
-                    .child(
-                        h_flex()
-                            .max_w(px(300.0))
-                            .flex_wrap()
-                            .justify_end()
-                            .gap_2()
-                            .children(
-                                triggers
-                                    .into_iter()
-                                    .map(|trigger| crate::settings::command_badges(trigger, cx)),
-                            ),
-                    )
+                    .child(crate::settings::trigger_badge(aliases.trigger(command), cx))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, window, cx| {

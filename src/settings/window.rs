@@ -23,7 +23,7 @@ mod scrolling;
 mod tests;
 
 use components::{card, description, page, section, setting_row};
-pub use components::{command_badges, key_badges};
+pub use components::{key_badges, trigger_badge};
 pub use lifecycle::open;
 use pages::Page;
 pub use recording::capture_registered_shortcut;

@@ -144,14 +144,38 @@ pub mod keys {
 pub mod settings {
     pub const COMMANDS: &str = "Commands";
     pub const ALIASES: &str = "Aliases";
+    pub const ADD_ALIAS: &str = "Add alias";
     pub const SHOW_COMMAND_PICKER: &str = "Show command picker";
     pub const SHOW_COMMAND_PICKER_HELP: &str =
         "Show matching commands after pressing Space. Aliases still work when hidden.";
     pub const ALIAS_LIMIT: &str = "Use between one and eight aliases per command.";
     pub const ALIAS_FORMAT: &str =
-        "Use letters, numbers or hyphens, starting with a letter (up to 32 characters), or =.";
-    pub const ALIAS_CONFLICT: &str =
-        "An alias cannot equal or contain another command's complete alias as a prefix.";
+        "Aliases use letters, numbers or hyphens, starting with a letter (up to 32 characters).";
+    pub const TRIGGER_FORMAT: &str = "A trigger is one to four keys, without spaces.";
+    pub fn route_conflict(
+        other: crate::command_router::Command,
+        entry: &str,
+        kind: &str,
+    ) -> String {
+        format!(
+            "Overlaps the {kind} “{entry}” of {}. Neither works until one is changed.",
+            command_label(other)
+        )
+    }
+    pub fn shortcut_conflict(
+        action: crate::settings::Shortcut,
+        other: crate::settings::Shortcut,
+    ) -> String {
+        use crate::settings::Shortcut;
+        let other_label = shortcut_label(other);
+        if action == Shortcut::ToggleLauncher {
+            format!("Also used by {other_label}, which is disabled while they share a key.")
+        } else if other == Shortcut::ToggleLauncher {
+            format!("Also used by {other_label}, so this shortcut is disabled.")
+        } else {
+            format!("Also used by {other_label}. Neither works until one is changed.")
+        }
+    }
     pub fn command_label(command: crate::command_router::Command) -> &'static str {
         match command {
             crate::command_router::Command::Files => FILE_SEARCH,
@@ -214,7 +238,6 @@ pub mod settings {
     pub const MODIFIER_REQUIRED: &str = "Include Ctrl, Alt or Win so typing keeps working.";
     pub const RESERVED_KEY: &str =
         "This key is reserved for editing, navigation or closing windows.";
-    pub const CONFLICT: &str = "Another action already uses this shortcut.";
     pub const GLOBAL_SUPPORTED: &str =
         "Use a letter, digit, function key or Space for the system shortcut.";
     pub const LOAD_FAILED: &str = "Could not load preferences. Using defaults.";

@@ -61,6 +61,12 @@ impl SettingsView {
                             )
                             .child(description(detail, cx)),
                     )
+                    .child(components::conflict_slot(
+                        ("shortcut-conflict", action as usize),
+                        preferences(cx)
+                            .binding_conflict(action)
+                            .map(|other| text::shortcut_conflict(action, other)),
+                    ))
                     .child(
                         div()
                             .id(action.id())

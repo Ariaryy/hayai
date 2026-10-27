@@ -77,18 +77,24 @@ identify typed destinations; internal ` f ` and ` = ` prefixes remain stable.
 Typing Space enters a picker, invalidates pending provider generations and
 removes selectable results. Partial or unknown aliases cannot confirm old apps.
 The optional picker controls suggestions only. With it disabled, the launcher
-shows a fresh default app query while collecting the same command prefix.
+shows a fresh default app query while collecting the same command prefix. With it
+disabled, text that can no longer become an active trigger or alias leaves
+command mode and is searched as an ordinary query, since nothing else would
+explain the stalled prompt.
 Saving a visibility change refreshes an active command session without editing
 its input; both directions invalidate older provider generations. No partial
 alias is dispatched as an app or calculator query, and Enter stays guarded.
-Each alias activates at the shortest prefix distinguishing its destination;
-aliases for the same destination may share a trigger. Complete aliases cannot
-prefix another destination's alias: instant activation would make it unreachable.
-Full aliases pasted with queries consume the complete token. Ordinary typing
-consumes the displayed trigger immediately and leaves subsequent text as a query.
-The alias editor is created only while its settings page is open. Validation
-and persistence share the normal settings draft/save path; routing reads only
-committed aliases. No timer, file watcher, or additional provider is involved.
+Each command has one user-set trigger (one to four keys, activating without
+Enter) and optional full-word aliases. A complete alias wins over the trigger it
+may begin with, so pasted text keeps its query. Entries of different commands may
+not prefix one another: instant activation would make the longer one unreachable.
+Such overlaps are saved and flagged, never refused, but every overlapping entry
+stays inactive so the router never guesses. Shortcut conflicts follow the same
+rule; the system-wide launcher hotkey is registered with Windows and keeps
+working, so it only disables the in-launcher action it shares a key with.
+The alias editor is created only while its settings page is open. Format
+errors stay inline in the editor; persistence shares the normal settings
+draft/save path, and routing reads only committed entries. No timer, file watcher, or additional provider is involved.
 
 Windows-owned combinations may never enter GPUI's key stream. In particular,
 Win+B focuses the Windows notification area. Preserve the Win modifier on keys

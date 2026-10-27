@@ -39,6 +39,8 @@ impl Shortcut {
 struct Binding {
     text: String,
     keystroke: Keystroke,
+    /// Another action sharing this key. Derived by `refresh_conflicts`.
+    conflict: Option<Shortcut>,
 }
 
 impl Binding {
@@ -47,6 +49,7 @@ impl Binding {
         Ok(Self {
             text: keystroke.unparse(),
             keystroke,
+            conflict: None,
         })
     }
 }
@@ -68,7 +71,7 @@ impl Default for Preferences {
             light: false,
             general: super::General::default(),
             commands: crate::command_router::Aliases::default(),
-            show_command_picker: true,
+            show_command_picker: false,
             light_theme: crate::theme::ThemeFamily::default(),
             dark_theme: crate::theme::ThemeFamily::default(),
             bindings: Shortcut::ALL.map(|action| Binding::parse(action.default_key()).unwrap()),
@@ -102,11 +105,34 @@ impl Preferences {
             .expect("launcher binding is validated when preferences are loaded or changed")
     }
 
+    /// The other action sharing this action's key. Conflicts are saved and
+    /// shown, not rejected; a conflicted launcher shortcut stays inactive until
+    /// one side changes. The system-wide launcher hotkey is registered with
+    /// Windows, so it keeps working and only disables the launcher action.
+    pub fn binding_conflict(&self, action: Shortcut) -> Option<Shortcut> {
+        self.bindings[action as usize].conflict
+    }
+
     pub fn matches(&self, action: Shortcut, key: &Keystroke) -> bool {
         // Matching is on every input event: parse once when loading/saving,
         // and ignore key_char (typed text metadata is not shortcut identity).
-        let binding = &self.bindings[action as usize].keystroke;
-        binding.key == key.key && binding.modifiers == key.modifiers
+        let binding = &self.bindings[action as usize];
+        binding.conflict.is_none()
+            && binding.keystroke.key == key.key
+            && binding.keystroke.modifiers == key.modifiers
+    }
+
+    fn refresh_conflicts(&mut self) {
+        let conflicts = Shortcut::ALL.map(|action| {
+            let key = &self.bindings[action as usize].keystroke;
+            Shortcut::ALL.into_iter().find(|&other| {
+                let candidate = &self.bindings[other as usize].keystroke;
+                other != action && candidate.key == key.key && candidate.modifiers == key.modifiers
+            })
+        });
+        for (binding, conflict) in self.bindings.iter_mut().zip(conflicts) {
+            binding.conflict = conflict;
+        }
     }
 
     pub fn set_binding(&mut self, action: Shortcut, binding: &str) -> anyhow::Result<()> {
@@ -142,12 +168,6 @@ impl Preferences {
             !(key.modifiers.alt && key.key == "f4"),
             crate::ui_text::settings::RESERVED_KEY
         );
-        anyhow::ensure!(
-            Shortcut::ALL
-                .into_iter()
-                .all(|other| other == action || !self.matches(other, &key)),
-            crate::ui_text::settings::CONFLICT
-        );
         if action == Shortcut::ToggleLauncher {
             anyhow::ensure!(
                 native_hotkey(&key).is_some(),
@@ -157,7 +177,9 @@ impl Preferences {
         self.bindings[action as usize] = Binding {
             text: key.unparse(),
             keystroke: key,
+            conflict: None,
         };
+        self.refresh_conflicts();
         Ok(())
     }
 
@@ -186,7 +208,7 @@ impl Preferences {
             general: super::General::parse(&json["general"])?,
             commands: crate::command_router::Aliases::parse(&json["commands"])?,
             show_command_picker: match json["show_command_picker"] {
-                serde_json::Value::Null => true,
+                serde_json::Value::Null => false,
                 serde_json::Value::Bool(show) => show,
                 _ => anyhow::bail!("Invalid command picker visibility"),
             },
@@ -194,15 +216,10 @@ impl Preferences {
             dark_theme: theme_for("dark")?,
             ..Self::default()
         };
-        // Validate as a complete set, allowing users to swap two defaults.
         for action in Shortcut::ALL {
             if let Some(binding) = json["keybindings"][action.id()].as_str() {
-                result.bindings[action as usize] = Binding::parse(binding)?;
+                result.set_binding(action, binding)?;
             }
-        }
-        for action in Shortcut::ALL {
-            let binding = result.binding(action).to_owned();
-            result.set_binding(action, &binding)?;
         }
         Ok(result)
     }
@@ -255,11 +272,6 @@ mod tests {
             .set_binding(Shortcut::Actions, "ctrl-shift-k")
             .unwrap();
         assert_eq!(Preferences::parse(&prefs.encode()).unwrap(), prefs);
-        assert!(
-            prefs
-                .set_binding(Shortcut::Settings, "ctrl-shift-k")
-                .is_err()
-        );
         assert!(prefs.set_binding(Shortcut::Actions, "k").is_err());
         assert!(
             prefs
@@ -267,15 +279,41 @@ mod tests {
                 .is_err()
         );
         assert!(prefs.set_binding(Shortcut::Actions, "alt-f4").is_err());
-        assert!(
-            prefs
-                .set_binding(Shortcut::ToggleLauncher, "ctrl-,")
-                .is_err()
-        );
         assert!(Preferences::parse("{\"version\":2}").is_err());
-        assert!(
-            Preferences::parse("{\"version\":1,\"keybindings\":{\"actions\":\"ctrl-f\"}}").is_err()
+    }
+
+    #[test]
+    fn shared_shortcuts_are_saved_flagged_and_inactive() {
+        let mut prefs = Preferences::default();
+        prefs.set_binding(Shortcut::Settings, "ctrl-k").unwrap();
+        assert_eq!(
+            prefs.binding_conflict(Shortcut::Settings),
+            Some(Shortcut::Actions)
         );
+        assert_eq!(
+            prefs.binding_conflict(Shortcut::Actions),
+            Some(Shortcut::Settings)
+        );
+        let key = Keystroke::parse("ctrl-k").unwrap();
+        assert!(!prefs.matches(Shortcut::Actions, &key));
+        assert!(!prefs.matches(Shortcut::Settings, &key));
+        let reloaded = Preferences::parse(&prefs.encode()).unwrap();
+        assert_eq!(
+            reloaded.binding_conflict(Shortcut::Settings),
+            Some(Shortcut::Actions)
+        );
+        prefs.set_binding(Shortcut::Settings, "ctrl-,").unwrap();
+        assert_eq!(prefs.binding_conflict(Shortcut::Actions), None);
+        assert!(prefs.matches(Shortcut::Actions, &key));
+        // The system hotkey still registers; only the launcher action yields.
+        prefs
+            .set_binding(Shortcut::ToggleLauncher, "ctrl-f")
+            .unwrap();
+        assert_eq!(
+            prefs.binding_conflict(Shortcut::FileSearch),
+            Some(Shortcut::ToggleLauncher)
+        );
+        assert_eq!(prefs.launcher_hotkey(), (2, b'F' as u32));
     }
 
     #[test]
@@ -308,30 +346,40 @@ mod tests {
         assert_eq!(prefs.commands, crate::command_router::Aliases::default());
         prefs
             .commands
-            .set(
+            .set_aliases(
                 crate::command_router::Command::Settings,
                 "folders, preferences",
             )
             .unwrap();
+        prefs
+            .commands
+            .set_trigger(crate::command_router::Command::Settings, "p")
+            .unwrap();
         prefs.light = true;
         prefs.general.check_updates = false;
         assert_eq!(Preferences::parse(&prefs.encode()).unwrap(), prefs);
+        // Overlapping entries load and are flagged rather than discarded.
+        let overlapping =
+            Preferences::parse(r#"{"version":1,"commands":{"settings":{"trigger":"f"}}}"#).unwrap();
         assert!(
-            Preferences::parse(r#"{"version":1,"commands":{"files":["f"],"settings":["files"]}}"#)
-                .is_err()
+            overlapping
+                .commands
+                .conflict(crate::command_router::Command::Settings, "f")
+                .is_some()
         );
+        assert!(Preferences::parse(r#"{"version":1,"commands":{"files":["f"]}}"#).is_err());
     }
 
     #[test]
     fn command_picker_visibility_is_persisted() {
         assert!(
-            Preferences::parse(r#"{"version":1}"#)
+            !Preferences::parse(r#"{"version":1}"#)
                 .unwrap()
                 .show_command_picker
         );
-        let prefs = Preferences::parse(r#"{"version":1,"show_command_picker":false}"#).unwrap();
+        let prefs = Preferences::parse(r#"{"version":1,"show_command_picker":true}"#).unwrap();
         let saved: serde_json::Value = serde_json::from_str(&prefs.encode()).unwrap();
-        assert_eq!(saved["show_command_picker"], false);
+        assert_eq!(saved["show_command_picker"], true);
         assert!(Preferences::parse(r#"{"version":1,"show_command_picker":"false"}"#).is_err());
     }
 

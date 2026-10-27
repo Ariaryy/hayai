@@ -104,6 +104,7 @@ fn settings_window_gui_smoke() {
                     })
                     .await;
                 assert!(saved.contains("ctrl-shift-k"));
+                // A shared key is saved and flagged, not rejected.
                 handle
                     .update(cx, |_, window, cx| {
                         view.update(cx, |view, cx| {
@@ -111,15 +112,28 @@ fn settings_window_gui_smoke() {
                         })
                         .unwrap();
                         key(window, "ctrl-shift-k", cx);
-                        view.update(cx, |view, _| {
-                            assert!(view.validation.is_some());
-                            assert_eq!(view.recording, Some(Shortcut::Settings));
+                    })
+                    .unwrap();
+                cx.background_executor()
+                    .timer(Duration::from_millis(250))
+                    .await;
+                cx.update(|cx| {
+                    assert_eq!(preferences(cx).binding(Shortcut::Settings), "ctrl-shift-k");
+                    assert_eq!(
+                        preferences(cx).binding_conflict(Shortcut::Settings),
+                        Some(Shortcut::Actions)
+                    );
+                    assert!(view.upgrade().unwrap().read(cx).recording.is_none());
+                });
+                handle
+                    .update(cx, |_, window, cx| {
+                        view.update(cx, |view, cx| {
+                            view.start_recording(Shortcut::Settings, window, cx)
                         })
                         .unwrap();
                         key(window, "escape", cx);
                         view.update(cx, |view, _| assert!(view.recording.is_none()))
                             .unwrap();
-                        assert_eq!(preferences(cx).binding(Shortcut::Settings), "ctrl-,");
                     })
                     .unwrap();
                 handle

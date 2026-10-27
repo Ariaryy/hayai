@@ -20,6 +20,7 @@ pub mod icons {
         EXTERNAL_LINK => "icons/thirdparty/phosphor/arrow-square-out.svg",
         SUN => "icons/thirdparty/phosphor/sun.svg",
         MOON => "icons/thirdparty/phosphor/moon.svg",
+        WARNING => "icons/thirdparty/phosphor/warning.svg",
         // TitleBar resolves these exact gpui-component IconName paths.
         WINDOW_CLOSE => "icons/window-close.svg",
         WINDOW_MINIMIZE => "icons/window-minimize.svg",

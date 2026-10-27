@@ -7,8 +7,9 @@ yet included in a published package.
 
 ### Settings
 
-- Hide command suggestions with the Show command picker toggle in Commands. Aliases continue working while the normal launcher results remain visible.
-- Configure command aliases in Settings → Commands, using the same layout as other settings pages. Space opens a command picker; file search, calculator and settings activate at their shortest distinguishing prefix without Enter. Conflicting aliases are rejected, and triggers are shown beside each command.
+- Shortcuts that share a key are no longer refused. Both are flagged with a warning icon and tooltip on the Key bindings page, and the launcher action is inactive until one changes.
+- Command suggestions are off by default; turn on Show command picker in Commands to list them after Space. Triggers and aliases work either way, and with the picker off, text after Space that cannot become a command is searched normally.
+- Configure each command's trigger key and aliases in Settings → Commands. Space opens a command picker; the trigger (for example Space F) activates a command without Enter, and aliases select it by full name. Overlapping triggers or aliases are kept but flagged with a warning and a tooltip, and stay inactive until changed.
 - Keep settings scrolling responsive in development builds by optimizing the rendering and layout dependencies.
 - General settings control Windows login startup, launcher display, recent-item history, and automatic update checking/downloading. Turning history off clears saved recents; queued writes cannot restore them. Display placement uses a dropdown and on/off settings use themed toggles. Controls retain their state while changes save.
 - Open Settings from the Hayai group in its own resizable window, with a themed titlebar, sidebar navigation, and About pinned at the bottom.
