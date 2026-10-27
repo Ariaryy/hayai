@@ -6,6 +6,8 @@ pub(super) const RADIUS_SM: f32 = 4.0;
 pub(super) const RADIUS_MD: f32 = 6.0;
 pub(super) const RADIUS_LG: f32 = 8.0;
 pub(super) const RADIUS_XL: f32 = 12.0;
+/// Rows meet the inside edge of `card`'s one-pixel border.
+pub(super) const CARD_INNER_RADIUS: f32 = RADIUS_XL - 1.0;
 /// Buttons and dropdowns. Text inputs keep the component's own small height.
 pub(super) const CONTROL_HEIGHT: f32 = 28.0;
 /// Keycaps in settings; the launcher footer uses a shorter cap.
@@ -241,6 +243,14 @@ pub fn keycap_icon(path: &'static str, size: f32, height: f32, cx: &App) -> gpui
             // Svg::paint needs its own color; it does not inherit the keycap's.
             .text_color(color),
     )
+}
+
+/// `Space` followed by a command's trigger, as the launcher shows it.
+pub(super) fn trigger_keys(trigger: &str, cx: &App) -> impl IntoElement + use<> {
+    h_flex()
+        .gap_1()
+        .child(key_badge("space", cx))
+        .child(key_badge(trigger, cx))
 }
 
 pub(super) fn key_badge(key: &str, cx: &App) -> impl IntoElement + use<> {

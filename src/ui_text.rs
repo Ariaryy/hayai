@@ -237,9 +237,13 @@ pub mod settings {
     pub const RECORDING_HELP: &str = "Press a key combination. Esc cancels.";
     pub const FILE_DESCRIPTION: &str =
         "File search is powered by Scry Search, using its Windows index.";
-    pub const FILE_SEARCH_HELP: &str =
-        "Open file search directly, or use its trigger from Commands.";
     pub const FILE_GUIDE: &str = "File search setup and search syntax";
+    pub const GUIDE: &str = "Setup guide";
+    pub const OPEN_FILE_SEARCH: &str = "Open file search";
+    pub const SHORTCUT: &str = "Shortcut";
+    pub const SHORTCUT_HELP: &str =
+        "Press it while the launcher is focused. Change it in Key bindings.";
+    pub const COMMAND_HELP: &str = "Type it after pressing Space. Change it in Commands.";
     pub const MODIFIER_REQUIRED: &str = "Include Ctrl, Alt or Win so typing keeps working.";
     pub const RESERVED_KEY: &str =
         "This key is reserved for editing, navigation or closing windows.";
