@@ -32,10 +32,94 @@ numeric, preview, and rate-lifecycle constraints are maintained in
 
 ## Window lifetime
 
-Hayai hides its only GPUI window instead of destroying it. On Windows, closing
+Hayai hides its launcher GPUI window instead of destroying it. On Windows, closing
 the last GPUI window quits the process, which would break tray and hotkey
 behavior. Callers already inside a window update must use the supplied
 `&mut Window`; re-entering the same `WindowHandle::update` fails.
+
+Settings opens a separate, ordinary window lazily. Closing it releases its view
+and recording subscriptions; the hidden launcher keeps the tray process alive.
+App-wide keystroke interceptors must check their owning window before handling
+input. Otherwise the hidden launcher's interceptor can consume settings keys.
+
+Preferences are loaded once before the native runtime starts. Settings controls
+show the latest requested draft while a single background save runs. Rapid edits
+replace the queued draft; failures restore the committed values and report the
+error. Runtime routing uses committed preferences. Only a change to the active
+appearance reapplies the theme, so ordinary saves do not reset widget state.
+The native thread acquires a replacement hotkey before releasing the old one;
+startup registration is restored if persistence fails. Startup reads the actual
+Windows Run entry instead of rewriting it on unrelated saves.
+`HAYAI_SETTINGS_PATH` isolates preferences for tests. No file watcher or polling
+is retained; external edits take effect at the next launch.
+
+Providers receive committed preferences at startup and after relevant saves.
+Configuration hooks only copy in-memory values; each background file search
+captures its own options. A changed file-search preference reruns the visible
+file query with its input and folder scope intact, invalidating older work.
+Hidden file searches are invalidated without starting replacement I/O; other
+providers keep their in-flight queries. Registry borrows end before window or
+entity updates, which can re-enter GPUI.
+
+Providers mark empty-query recents as a contiguous prefix. The result delegate
+keeps Recent, main results and Hayai commands as sections of one flat result
+set, so headings never consume selection or action indexes. File-mode entry
+merges validated recents with the home listing and removes duplicate paths;
+scoped browsing and typed searches do not add a recent section.
+
+Recent-item persistence captures a generation before queueing background writes.
+Disabling or clearing history advances that generation and pauses recording;
+a worker-only disk lock orders deletion against writes already in progress.
+Re-enabling cannot admit snapshots from before the clear. A queued clear request
+survives rapid off/on edits until its disk work completes. Clearing memory also
+invalidates launcher search generations so old recent results cannot reappear.
+
+Automatic Hayai update discovery and downloads are separate preferences. Startup
+loads them before creating the updater. An in-flight discovery rechecks policy
+before downloading or announcing availability. Discovery without downloading
+exposes a Download update action; only staged updates expose Restart to update.
+Manual checks remain available with automatic checks off. No timer is added.
+
+Settings scrolling owns a per-window scroll handle and reuses launcher wheel
+physics and precision-input handoff. Navigation cancels pending motion and
+resets the offset; deactivation cancels motion and dragging. Frames are requested
+only until the wheel motion settles. The scrollbar reads layout after the
+scrollable content, so its thumb appears only when content overflows.
+
+Command aliases resolve in `command_router`, before provider dispatch. They
+identify typed destinations; internal ` f ` and ` = ` prefixes remain stable.
+Typing Space enters a picker, invalidates pending provider generations and
+removes selectable results. Partial or unknown aliases cannot confirm old apps.
+The optional picker controls suggestions only. With it disabled, the launcher
+shows a fresh default app query while collecting the same command prefix. With it
+disabled, text that can no longer become an active trigger or alias leaves
+command mode and is searched as an ordinary query, since nothing else would
+explain the stalled prompt.
+Saving a visibility change refreshes an active command session without editing
+its input; both directions invalidate older provider generations. No partial
+alias is dispatched as an app or calculator query, and Enter stays guarded.
+Each command has one user-set trigger (one to four keys, activating without
+Enter) and optional full-word aliases. A complete alias wins over the trigger it
+may begin with, so pasted text keeps its query. Entries of different commands may
+not prefix one another: instant activation would make the longer one unreachable.
+Such overlaps are saved and flagged, never refused, but every overlapping entry
+stays inactive so the router never guesses. Shortcut conflicts follow the same
+rule; the system-wide launcher hotkey is registered with Windows and keeps
+working, so it only disables the in-launcher action it shares a key with.
+The alias editor is created only while its settings page is open. Format
+errors stay inline in the editor; persistence shares the normal settings
+draft/save path, and routing reads only committed entries. No timer, file watcher, or additional provider is involved.
+
+Windows-owned combinations may never enter GPUI's key stream. In particular,
+Win+B focuses the Windows notification area. Preserve the Win modifier on keys
+that reach the recorder, but do not install a global keyboard hook to intercept
+OS shortcuts. Registered Hayai hotkeys take a separate WM_HOTKEY path while
+recording; they must not open the launcher mid-recording.
+
+Appearance mode and palette choices are separate preferences. Light and dark
+each retain their own theme family; changing the inactive mode's palette must
+not switch appearances. Both windows and skeleton previews use the palette
+definitions in `theme.rs`, with derived widget tokens refreshed after applying.
 
 For focus, reset/presentation ordering, action propagation, borrowing, and shell
 resource ownership, read [GPUI and Windows invariants](gpui-windows.md).

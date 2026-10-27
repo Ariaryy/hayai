@@ -81,6 +81,9 @@ repeated enumeration without retaining the entire zone database or polling.
 Run `cargo fmt --all -- --check`,
 `cargo clippy --locked --all-targets -- -D warnings`, and `cargo test --locked`.
 Calculator tests use in-memory rate snapshots; they require no live FX server.
+Semantic tests allow two seconds per evaluation to tolerate unoptimized builds
+and CI scheduling contention. Normal builds retain the 12 ms deadline; explicit
+expired-budget tests verify cancellation without relying on machine speed.
 Concurrency tests cover shared refresh and independent query completion.
 Windows tests cover named zones and DST transitions.
 

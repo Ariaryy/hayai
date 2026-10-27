@@ -58,6 +58,16 @@ impl PluginRegistry {
         self.generation
     }
 
+    pub fn configure(&mut self, preferences: &crate::settings::Preferences) {
+        for provider in &mut self.providers {
+            provider.configure(preferences);
+        }
+    }
+
+    pub fn invalidate(&mut self) {
+        self.generation += 1;
+    }
+
     /// Route `raw_query` (untrimmed — the leading space is the mode sentinel)
     /// to exactly one provider and return the effective query to run. Pure
     /// routing; the caller runs the search so it can choose sync vs.
@@ -165,6 +175,7 @@ mod tests {
         fn search(&self, query: &str) -> Vec<CommandItem> {
             self.queries.borrow_mut().push(query.to_string());
             vec![CommandItem {
+                recent: false,
                 id: "fake".into(),
                 title: query.to_string(),
                 subtitle: None,
@@ -206,6 +217,7 @@ mod tests {
             let query = query.to_string();
             Some(Box::new(move || {
                 vec![CommandItem {
+                    recent: false,
                     id: "fake-debounced".into(),
                     title: query,
                     subtitle: None,

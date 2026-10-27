@@ -48,6 +48,11 @@ The workflow then:
 6. publishes the versioned setup, portable archive, and checksum manifest;
 7. publishes the matching `CHANGELOG.md` entry as the GitHub release notes.
 
+The staged payload includes Hayai's `LICENSE` and `THIRD_PARTY_NOTICES`.
+Preserve these in both installer and portable distributions; the latter covers
+the bundled theme palette adaptations and third-party artwork. The same notice
+text is embedded in About for users running a standalone executable.
+
 The public artifacts use the tag in their names:
 
 ```text

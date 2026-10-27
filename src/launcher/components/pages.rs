@@ -1,6 +1,31 @@
 use super::*;
 use crate::links;
 
+/// The centered icon and message every empty result area shows.
+pub(in crate::launcher) fn empty_screen(
+    icon: &'static str,
+    message: impl IntoElement,
+    cx: &App,
+) -> gpui::Div {
+    div()
+        .size_full()
+        .flex()
+        .flex_col()
+        .items_center()
+        .justify_center()
+        .gap_3()
+        .text_xs()
+        .text_color(cx.theme().muted_foreground)
+        .child(
+            gpui::svg()
+                .path(icon)
+                .size(px(40.0))
+                .flex_none()
+                .text_color(cx.theme().muted_foreground.opacity(0.65)),
+        )
+        .child(message)
+}
+
 pub(in crate::launcher) fn updates_page(
     delegate: &ResultListDelegate,
     cx: &Context<LauncherRoot>,
@@ -180,6 +205,9 @@ pub(in crate::launcher) fn updates_page(
                         }
                     } else if update_ready {
                         text::actions::RESTART_TO_UPDATE
+                    } else if delegate.update_result == Some(crate::updates::CheckResult::Available)
+                    {
+                        text::actions::DOWNLOAD_UPDATE
                     } else {
                         text::actions::CHECK_AGAIN
                     }),

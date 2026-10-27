@@ -158,6 +158,11 @@ try {
     New-CleanDirectory -LiteralPath $outputDir
 
     Copy-Item -LiteralPath $exePath -Destination (Join-Path $stageDir $exeName) -Force
+    # Both the installer and portable ZIP retain the bundled asset/theme notices.
+    # About embeds the same text for standalone executable users.
+    foreach ($notice in @("LICENSE", "THIRD_PARTY_NOTICES")) {
+        Copy-Item -LiteralPath (Join-Path $projectRoot $notice) -Destination $stageDir -Force
+    }
 
     foreach ($file in @("scryd.exe", "scry.exe", "install-daemon.ps1", "uninstall-daemon.ps1", "scry-release.json")) {
         Copy-Item -LiteralPath (Join-Path $scryPackageRoot $file) -Destination $stageDir -Force

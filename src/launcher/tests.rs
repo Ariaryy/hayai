@@ -1,6 +1,9 @@
 use super::{format_expression_for_display, format_result_for_display};
 use crate::assets::icons as icon_assets;
 
+mod folders;
+mod routing;
+
 #[cfg(windows)]
 #[test]
 fn keyboard_heading_entries_skip_empty_sections_and_include_headers() {
@@ -55,6 +58,7 @@ fn wheel_scroll_gui_smoke() {
         fn search(&self, _: &str) -> Vec<CommandItem> {
             (0..200)
                 .map(|i| CommandItem {
+                    recent: false,
                     id: format!("smoke:{i}"),
                     title: format!("Smoke row {i}"),
                     subtitle: None,
@@ -91,6 +95,7 @@ fn wheel_scroll_gui_smoke() {
         .with_assets(crate::assets::LauncherAssets)
         .run(move |cx| {
             gpui_component::init(cx);
+            cx.set_global(crate::settings::SettingsGlobal::for_test(std::env::temp_dir().join(format!("hayai-scroll-gui-{}.json", std::process::id()))));
             gpui_component::Theme::change(gpui_component::ThemeMode::Dark, None, cx);
             crate::theme::apply_launcher_theme(cx);
             let launcher = LauncherState::install(cx);
@@ -109,6 +114,11 @@ fn wheel_scroll_gui_smoke() {
                 cx.background_executor()
                     .timer(Duration::from_millis(200))
                     .await;
+                folders::check(window, &root, cx).await;
+                routing::check(window, &root, cx).await;
+                // The routing checks rebuild the result list after the picker.
+                // Let it lay out before using its measured scroll bounds.
+                cx.background_executor().timer(Duration::from_millis(200)).await;
                 window
                     .update(cx, |_, window, cx| {
                         let bounds = root.read(cx).list.read(cx).scroll_handle().bounds();
@@ -270,7 +280,7 @@ fn wheel_scroll_gui_smoke() {
                     assert_eq!(root.list.read(cx).scroll_handle().offset().y, px(0.0), "reopening must reveal the heading");
                     assert!(root.search_input.read(cx).value().is_empty());
                 }).unwrap();
-                for (case, mode) in ["apps", "file", "pending_file", "calc", "about", "updates", "scry", "actions", "folder", "command"].into_iter().enumerate() {
+                for (case, mode) in ["apps", "file", "pending_file", "calc", "explicit_calc", "about", "updates", "scry", "actions", "folder", "command"].into_iter().enumerate() {
                     window.update(cx, |_, window, cx| {
                         root.update(cx, |root, cx| {
                             match mode {
@@ -284,6 +294,7 @@ fn wheel_scroll_gui_smoke() {
                                     root.on_search_event(&input, &InputEvent::Change, window, cx);
                                     assert!(!root.list.read(cx).delegate().apps_view);
                                 }
+                                "explicit_calc" => { root.route_command(" = 2+2", window, cx); }
                                 "about" | "updates" | "scry" => root.list.update(cx, |list, cx| {
                                     let delegate = list.delegate_mut();
                                     delegate.show_about = mode == "about";
@@ -322,6 +333,7 @@ fn wheel_scroll_gui_smoke() {
                         assert_eq!(root.list.read(cx).scroll_handle().offset().y, px(0.0), "{mode}: stale scroll offset");
                     }).unwrap();
                 }
+                routing::settings(window, &root, cx).await;
                 eprintln!("{SUCCESS}");
                 cx.update(|cx| cx.quit());
             })
@@ -373,12 +385,35 @@ fn row_icon_prefilter_averages_fine_details_at_physical_size() {
 }
 
 #[test]
+fn recent_sections_preserve_flat_navigation_and_hayai_results() {
+    for (recent, main, total) in [
+        (0, 0, 0),
+        (0, 4, 7),
+        (1, 4, 7),
+        (4, 4, 7),
+        (1, 4, 4),
+        (1, 1, 1),
+    ] {
+        for flat in 0..total {
+            let ix = super::result_index_path(flat, recent, main, total);
+            assert_eq!(super::result_flat_index(ix, recent, main), flat);
+            let expected = if flat < recent {
+                1
+            } else {
+                1 + usize::from(recent > 0) + usize::from(flat >= main)
+            };
+            assert_eq!(ix.section, expected);
+        }
+    }
+}
+
+#[test]
 fn empty_results_keep_a_valid_measurement_section_when_search_is_cleared() {
     for (main, total, section) in [(0, 0, 1), (5, 5, 1), (0, 2, 2), (5, 7, 1)] {
-        assert_eq!(super::result_index_path(0, main, total).section, section);
+        assert_eq!(super::result_index_path(0, 0, main, total).section, section);
     }
-    assert_eq!(super::result_index_path(5, 5, 7).section, 2);
-    assert_eq!(super::result_index_path(5, 5, 7).row, 0);
+    assert_eq!(super::result_index_path(5, 0, 5, 7).section, 2);
+    assert_eq!(super::result_index_path(5, 0, 5, 7).row, 0);
 }
 
 #[test]
@@ -423,7 +458,7 @@ fn notification_actions_include_dismiss_without_file_operations() {
     let menu = super::ActionMenu {
         diagnostics_only: false,
         notification: true,
-        notification_action: "Restart to update",
+        notification_action: Some(super::PrimaryAction::RestartToUpdate),
         submenu: None,
         path: Default::default(),
         is_dir: false,
@@ -442,7 +477,7 @@ fn update_page_actions_only_copy_diagnostics() {
     let menu = super::ActionMenu {
         diagnostics_only: true,
         notification: false,
-        notification_action: "",
+        notification_action: None,
         submenu: None,
         path: Default::default(),
         is_dir: false,
@@ -457,9 +492,36 @@ fn update_page_actions_only_copy_diagnostics() {
 }
 
 #[test]
+fn notification_progress_is_status_not_an_action() {
+    for status in [
+        super::PrimaryAction::Updating,
+        super::PrimaryAction::Checking,
+        super::PrimaryAction::Starting,
+        super::PrimaryAction::Restarting,
+    ] {
+        let menu = super::ActionMenu {
+            diagnostics_only: false,
+            notification: true,
+            notification_action: Some(status),
+            submenu: None,
+            path: Default::default(),
+            is_dir: false,
+            is_app: false,
+            can_run_as_admin: false,
+            selected: 0,
+        };
+        assert_eq!(
+            menu.actions().map(|(_, label)| label).collect::<Vec<_>>(),
+            ["Dismiss", "Copy diagnostic log"]
+        );
+    }
+}
+
+#[test]
 fn scry_readiness_accepts_empty_searches_but_not_setup_prompts() {
     use crate::commands::{CommandAction, CommandItem, IconSource};
     let item = |action| CommandItem {
+        recent: false,
         id: "readiness-test".into(),
         title: String::new(),
         subtitle: None,
@@ -512,7 +574,7 @@ fn open_with_submenu_has_its_own_numbering_and_returns_to_parent() {
     let mut menu = super::ActionMenu {
         diagnostics_only: false,
         notification: false,
-        notification_action: "",
+        notification_action: None,
         submenu: Some(super::OpenWithMenu {
             request: 1,
             loading: true,
@@ -595,7 +657,7 @@ fn context_actions_follow_result_type_and_stay_compact() {
         let menu = super::ActionMenu {
             diagnostics_only: false,
             notification: false,
-            notification_action: "",
+            notification_action: None,
             submenu: None,
             path: root.join(name),
             is_dir,
@@ -611,7 +673,7 @@ fn context_actions_follow_result_type_and_stay_compact() {
     let packaged = super::ActionMenu {
         diagnostics_only: false,
         notification: false,
-        notification_action: "",
+        notification_action: None,
         submenu: None,
         path: "shell:AppsFolder/Publisher.App!App".into(),
         is_dir: false,
@@ -693,6 +755,7 @@ fn displays_timezone_abbreviations_in_uppercase() {
 fn empty_notices_are_not_selectable_results_and_recovery_clears_them() {
     use super::{CommandAction, CommandItem, IconSource, take_empty_state};
     let notice = CommandItem {
+        recent: false,
         id: "calc:error".into(),
         title: "Invalid expression".into(),
         subtitle: None,
@@ -709,6 +772,7 @@ fn empty_notices_are_not_selectable_results_and_recovery_clears_them() {
     assert!(items.is_empty());
     assert!(take_empty_state(&mut items).is_none());
     items.push(CommandItem {
+        recent: false,
         id: "calc:2+2".into(),
         title: "4".into(),
         subtitle: None,

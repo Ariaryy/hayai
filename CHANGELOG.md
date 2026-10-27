@@ -5,6 +5,27 @@ yet included in a published package.
 
 ## Unreleased
 
+### Settings
+
+- Open Settings from the Hayai group in a separate resizable window, with a themed titlebar, sidebar navigation and About pinned at the bottom.
+- Configure Windows login startup, launcher display placement, recent-item history and automatic update checking/downloading. Preferences save automatically and persist between launches.
+- Configure file-search entry recents, build/cache-folder filtering, scoped subfolder searches and folders-first browsing. The page includes Scry Search information and its setup guide.
+- Record and reset shortcuts for opening Hayai, the action panel, file search and settings. Conflicts appear beside the affected bindings with an explanation.
+- Browse third-party artwork and theme notices in About, with full license texts and source links. Packaged releases include these notices.
+
+### Commands and appearance
+
+- Configure command triggers and aliases for file search, calculator and settings. The optional command picker supports keyboard navigation and confirmation; triggers activate without Enter. Overlapping entries are saved and flagged, and remain inactive until resolved.
+- Choose light and dark palettes independently from Hayai, One Dark/One Light, Catppuccin, Tokyo Night and Gruvbox. Appearance applies to both windows, with launcher previews in Settings.
+- Settings uses grouped controls, shared spacing and typography, smooth scrolling and a scrollbar that appears when content overflows.
+
+### Launcher
+
+- Group recent apps and files under Recent, followed by the remaining Applications or home-folder Files without duplicates.
+- Actions is available at the bottom right in every launcher view, dimmed when unavailable. Menus and keycaps use the active theme.
+- Fix footer flicker when navigating between folders, and ignore repeated Tab presses while folder results load.
+- Exclude non-interactive update progress labels from action menus; dismissal and diagnostics remain available.
+
 ## 0.1.1 - 2026-10-24
 
 ### Launcher

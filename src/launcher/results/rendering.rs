@@ -9,6 +9,8 @@ impl ResultListDelegate {
     ) -> Option<impl IntoElement> {
         let label = if self.notification_visible() && section == 0 {
             text::headings::NOTIFICATIONS
+        } else if self.recent_results > 0 && section == 1 {
+            text::headings::RECENT
         } else if section == self.section_offset() + 1 {
             text::headings::HAYAI
         } else if self.apps_view {
@@ -36,41 +38,35 @@ impl ResultListDelegate {
         _window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> impl IntoElement {
-        div()
-            .size_full()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_3()
-            .text_xs()
-            .text_color(cx.theme().muted_foreground)
-            .when(!self.search_pending, |view| {
-                view.child(
-                    gpui::svg()
-                        .path(
-                            if self.empty_state.as_ref().is_some_and(|notice| {
-                                matches!(notice.action, CommandAction::PendingState)
-                            }) {
-                                icon_assets::CALCULATOR
-                            } else if self.empty_state.is_some() {
-                                icon_assets::CALCULATOR_INVALID
-                            } else {
-                                icon_assets::SEARCH_EMPTY
-                            },
-                        )
-                        .size(px(40.0))
-                        .flex_none()
-                        .text_color(cx.theme().muted_foreground.opacity(0.65)),
-                )
-                .child(if let Some(notice) = self.empty_state.as_ref() {
-                    notice.title.clone()
-                } else if self.file_search {
-                    text::search::NO_FILES.to_string()
-                } else {
-                    text::search::NO_APPS.to_string()
-                })
-            })
+        if self.search_pending {
+            return div().size_full();
+        }
+        if self.calculator_view() && self.empty_state.is_none() {
+            return super::super::components::empty_screen(
+                icon_assets::CALCULATOR,
+                text::search::CALCULATOR_START,
+                cx,
+            );
+        }
+        let icon = if self
+            .empty_state
+            .as_ref()
+            .is_some_and(|notice| matches!(notice.action, CommandAction::PendingState))
+        {
+            icon_assets::CALCULATOR
+        } else if self.empty_state.is_some() {
+            icon_assets::CALCULATOR_INVALID
+        } else {
+            icon_assets::SEARCH_EMPTY
+        };
+        let message = if let Some(notice) = self.empty_state.as_ref() {
+            notice.title.clone()
+        } else if self.file_search {
+            text::search::NO_FILES.to_string()
+        } else {
+            text::search::NO_APPS.to_string()
+        };
+        super::super::components::empty_screen(icon, message, cx)
     }
 
     pub(super) fn result_row(
@@ -107,7 +103,7 @@ impl ResultListDelegate {
                 text::updates::HAYAI_CHECKING
             } else if self.restarting_update {
                 text::updates::RESTARTING
-            } else if crate::updates::ready_version().is_some() {
+            } else if crate::updates::available_version().is_some() {
                 text::updates::HAYAI_AVAILABLE
             } else if self.update_result == Some(crate::updates::CheckResult::Current) {
                 text::updates::HAYAI_CURRENT
@@ -131,7 +127,7 @@ impl ResultListDelegate {
             } else if self.update_failed {
                 text::updates::START_UPDATE_FAILED.into()
             } else {
-                crate::updates::ready_version()
+                crate::updates::available_version()
                     .map(|version| text::updates::hayai_version(&version))
                     .unwrap_or_else(|| {
                         self.update_message
@@ -166,7 +162,9 @@ impl ResultListDelegate {
                     .into(),
             );
         }
-        let icon = if matches!(item.action, CommandAction::CheckForUpdates) {
+        let icon = if matches!(item.action, CommandAction::OpenSettings) {
+            self.builtin_row_icons[3].clone()
+        } else if matches!(item.action, CommandAction::CheckForUpdates) {
             self.builtin_row_icons[1].clone()
         } else if is_hayai_action(&item.action) {
             self.builtin_row_icons[0].clone()

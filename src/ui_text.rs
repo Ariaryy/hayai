@@ -1,6 +1,7 @@
 // User-facing launcher copy. Keep identifiers, queries, and asset paths out of this module.
 
 pub mod actions {
+    pub const DOWNLOAD_UPDATE: &str = "Download update";
     pub const UPDATING: &str = "Updating…";
     pub const CHECKING: &str = "Checking…";
     pub const BACK_TO_SEARCH: &str = "Back to search";
@@ -40,9 +41,13 @@ pub mod actions {
 
 pub mod search {
     pub const FILES_PLACEHOLDER: &str = "Search files...";
+    pub const CALCULATOR_PLACEHOLDER: &str = "Calculate…";
+    pub const CALCULATOR_START: &str = "Type an expression to calculate.";
+    pub const EXIT_CALCULATOR: &str = "Exit calculator";
     pub const APPS_PLACEHOLDER: &str = "Search apps or calculate...";
     pub const FOLDER_PLACEHOLDER: &str = "Search this folder...";
-    pub const COMMAND_PLACEHOLDER: &str = "Type a command, e.g. f for files";
+    pub const COMMAND_PLACEHOLDER: &str = "Type a command…";
+    pub const NO_COMMANDS: &str = "No commands found. Try another search.";
     pub const UP_ONE_LEVEL: &str = "Up one level";
     pub const EXIT_FILE_SEARCH: &str = "Exit file search";
     pub const CANCEL_COMMAND: &str = "Cancel command";
@@ -58,6 +63,8 @@ pub mod search {
 }
 
 pub mod updates {
+    pub const AVAILABLE_TO_DOWNLOAD: &str =
+        "An update is available. Select Download update to download it.";
     pub const HAYAI_PROMPT: &str = "Check for a new Hayai release.";
     pub const SCRY_CHECKING: &str = "Checking Scry Search…";
     pub const SCRY_AVAILABLE: &str = "Scry Search update available";
@@ -117,6 +124,7 @@ pub mod updates {
 pub mod headings {
     pub const NOTIFICATIONS: &str = "Notifications";
     pub const HAYAI: &str = "Hayai";
+    pub const RECENT: &str = "Recent";
     pub const APPLICATIONS: &str = "Applications";
     pub const FILES: &str = "Files";
     pub const CALCULATOR: &str = "Calculator";
@@ -125,6 +133,9 @@ pub mod headings {
 pub mod about {
     pub const DESCRIPTION: &str = "A fast, lightweight launcher for Windows.";
     pub const PROJECT_LINK: &str = "View project on GitHub";
+    pub fn version_tag(version: &str) -> String {
+        format!("v{version}")
+    }
     pub fn version(version: &str) -> String {
         format!("Version {version}")
     }
@@ -134,6 +145,151 @@ pub mod keys {
     pub const SPACE: &str = "Space";
     pub const TAB: &str = "Tab";
     pub const BACKSPACE: &str = "Backspace";
-    pub const CTRL: &str = "Ctrl";
-    pub const K: &str = "K";
+}
+pub mod settings {
+    pub const COMMANDS: &str = "Commands";
+    pub const COMMAND: &str = "Command";
+    pub const TRIGGER: &str = "Trigger";
+    pub const ALIASES: &str = "Aliases";
+    pub const ADD_ALIAS: &str = "Add alias";
+    pub const SHOW_COMMAND_PICKER: &str = "Show command picker";
+    pub const SHOW_COMMAND_PICKER_HELP: &str =
+        "Show matching commands after pressing Space. Aliases still work when hidden.";
+    pub const ALIAS_LIMIT: &str = "Use between one and eight aliases per command.";
+    pub const ALIAS_FORMAT: &str =
+        "Aliases use letters, numbers or hyphens, starting with a letter (up to 32 characters).";
+    pub const TRIGGER_FORMAT: &str = "A trigger is one to four keys, without spaces.";
+    pub fn route_conflict(
+        other: crate::command_router::Command,
+        entry: &str,
+        kind: &str,
+    ) -> String {
+        format!(
+            "Overlaps the {kind} “{entry}” of {}. Neither works until one is changed.",
+            command_label(other)
+        )
+    }
+    pub fn shortcut_conflict(
+        action: crate::settings::Shortcut,
+        other: crate::settings::Shortcut,
+    ) -> String {
+        use crate::settings::Shortcut;
+        let other_label = shortcut_label(other);
+        if action == Shortcut::ToggleLauncher {
+            format!("Also used by {other_label}, which is disabled while they share a key.")
+        } else if other == Shortcut::ToggleLauncher {
+            format!("Also used by {other_label}, so this shortcut is disabled.")
+        } else {
+            format!("Also used by {other_label}. Neither works until one is changed.")
+        }
+    }
+    pub fn command_label(command: crate::command_router::Command) -> &'static str {
+        match command {
+            crate::command_router::Command::Files => FILE_SEARCH,
+            crate::command_router::Command::Settings => OPEN_SETTINGS,
+            crate::command_router::Command::Calculator => crate::ui_text::headings::CALCULATOR,
+        }
+    }
+    pub const LOGIN: &str = "Launch at login";
+    pub const LOGIN_HELP: &str = "Start Hayai in the tray when you sign in to Windows.";
+    pub const DISPLAY: &str = "Open on display";
+    pub const DISPLAY_HELP: &str = "Choose which display the launcher opens on.";
+    pub const DISPLAY_POINTER: &str = "Pointer";
+    pub const DISPLAY_ACTIVE: &str = "Active window";
+    pub const DISPLAY_PRIMARY: &str = "Primary";
+    pub const HISTORY: &str = "History";
+    pub const REMEMBER_RECENTS: &str = "Remember recently opened items";
+    pub const REMEMBER_RECENTS_HELP: &str =
+        "Keep recent apps and files. Turning this off clears saved history.";
+    pub const CLEAR_HISTORY: &str = "Clear history";
+    pub const CLEAR_HISTORY_HELP: &str =
+        "Remove recent apps, files and this session's query history.";
+    pub const UPDATES_GROUP: &str = "Updates";
+    pub const AUTO_CHECK: &str = "Check for updates on startup";
+    pub const AUTO_CHECK_HELP: &str =
+        "Look for new Hayai releases when the app starts. Installed releases only.";
+    pub const AUTO_DOWNLOAD: &str = "Download updates automatically";
+    pub const AUTO_DOWNLOAD_HELP: &str =
+        "Stage updates in the background. Restart only when you choose.";
+
+    pub const WINDOW_TITLE: &str = "Hayai Settings";
+    pub const GENERAL: &str = "General";
+    pub const APPEARANCE: &str = "Appearance";
+    pub const KEYBINDINGS: &str = "Key bindings";
+    pub const FILE_SEARCH: &str = "File search";
+    pub const ABOUT: &str = "About";
+    pub const LAUNCHER_SHORTCUT: &str = "Open Hayai";
+    pub const SETTINGS_FILENAME: &str = "settings.json";
+    pub const SETTINGS_LOCATION_HELP: &str =
+        "Saved in your local Hayai app data folder and restored on startup.";
+    pub const PREFERENCES_FILE: &str = "Preferences file";
+    pub const COLOR_SCHEME: &str = "Color scheme";
+    pub const THEMES: &str = "Themes";
+    pub const SEARCH_ENGINE: &str = "Search engine";
+    pub const SCRY_NAME: &str = "Scry Search";
+    pub const WINDOWS_INDEX: &str = "Windows index";
+    pub const SYSTEM_SCOPE: &str = "Available system-wide";
+    pub const LAUNCHER_SCOPE: &str = "When the launcher is focused";
+    pub const DARK: &str = "Dark";
+    pub const LIGHT: &str = "Light";
+    pub const SYSTEM_GROUP: &str = "System";
+    pub const LAUNCHER_GROUP: &str = "Launcher";
+    pub const PRESS_SHORTCUT: &str = "Press a shortcut…";
+    pub const RESET: &str = "Reset";
+    pub const RECORDING_HELP: &str = "Press a key combination. Esc cancels.";
+    pub const FILE_DESCRIPTION: &str =
+        "File search is powered by Scry Search, using its Windows index.";
+    pub const FILE_GUIDE: &str = "File search setup and search syntax";
+    pub const GUIDE: &str = "Setup guide";
+    pub const FILE_FILTERING: &str = "Search behavior";
+    pub const FILE_BROWSING: &str = "Browsing";
+    pub const HIDE_NOISY_FOLDERS: &str = "Hide build and cache folders";
+    pub const HIDE_NOISY_FOLDERS_HELP: &str =
+        "Hide folders such as node_modules and .git unless named in your query.";
+    pub const SEARCH_SUBFOLDERS: &str = "Search subfolders";
+    pub const SEARCH_SUBFOLDERS_HELP: &str =
+        "Search inside nested folders when you enter a query within a folder.";
+    pub const SHOW_FILE_RECENTS: &str = "Show recent files on entry";
+    pub const SHOW_FILE_RECENTS_HELP: &str = "Show recent files above your home folder contents.";
+    pub const FOLDERS_FIRST: &str = "Folders first";
+    pub const FOLDERS_FIRST_HELP: &str =
+        "List folders before files when browsing. Search results keep their relevance order.";
+    pub const MODIFIER_REQUIRED: &str = "Include Ctrl, Alt or Win so typing keeps working.";
+    pub const RESERVED_KEY: &str =
+        "This key is reserved for editing, navigation or closing windows.";
+    pub const GLOBAL_SUPPORTED: &str =
+        "Use a letter, digit, function key or Space for the system shortcut.";
+    pub const LOAD_FAILED: &str = "Could not load preferences. Using defaults.";
+    pub const SAVE_FAILED: &str = "Could not save preferences.";
+    pub const OPEN_FOLDER_FAILED: &str = "Could not open the preferences folder.";
+    pub const HOTKEY_FAILED: &str =
+        "Windows could not register that shortcut. It may belong to another app.";
+    pub const OPEN_ACTIONS: &str = "Toggle action panel";
+    pub const OPEN_SETTINGS: &str = "Open settings";
+    pub const SETTINGS_ITEM: &str = "Settings";
+    pub const THIRD_PARTY_NOTICES: &str = "Third-party notices";
+    pub const LICENSE_ARTWORK: &str = "Artwork";
+    pub const LICENSE_PALETTE: &str = "Palette";
+    pub const NOTICES_HELP: &str =
+        "Licenses and attributions for the software and artwork Hayai includes.";
+    pub fn notice_count(count: usize) -> String {
+        format!("{count} notices")
+    }
+    pub fn theme_label(family: crate::theme::ThemeFamily) -> &'static str {
+        match family {
+            crate::theme::ThemeFamily::Hayai => "Hayai",
+            crate::theme::ThemeFamily::OneDark => "One Dark",
+            crate::theme::ThemeFamily::Catppuccin => "Catppuccin",
+            crate::theme::ThemeFamily::TokyoNight => "Tokyo Night",
+            crate::theme::ThemeFamily::Gruvbox => "Gruvbox",
+        }
+    }
+    pub fn shortcut_label(action: crate::settings::Shortcut) -> &'static str {
+        match action {
+            crate::settings::Shortcut::ToggleLauncher => LAUNCHER_SHORTCUT,
+            crate::settings::Shortcut::Actions => OPEN_ACTIONS,
+            crate::settings::Shortcut::FileSearch => FILE_SEARCH,
+            crate::settings::Shortcut::Settings => OPEN_SETTINGS,
+        }
+    }
 }

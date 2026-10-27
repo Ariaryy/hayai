@@ -10,6 +10,7 @@ impl LauncherRoot {
     ) {
         match event {
             InputEvent::Change => {
+                self.pending_folder_footer = None;
                 self.cancel_wheel_animation();
                 self.action_menu = None;
                 // Only real user edits reach this arm — our own history-recall
@@ -18,30 +19,17 @@ impl LauncherRoot {
                 // recall in progress.
                 self.history_cursor = None;
                 let raw = input.read(cx).value().to_string();
-                if !self.file_mode && !self.waiting_for_command && raw == " " {
-                    self.waiting_for_command = true;
-                    // set_value does not emit Change. Remove the trigger before
-                    // paint while retaining command routing in our own state.
-                    input.update(cx, |input, cx| {
-                        input.set_value("", window, cx);
-                        input.set_placeholder(text::search::COMMAND_PLACEHOLDER, window, cx);
-                    });
-                    self.action_menu = None;
-                    cx.notify();
-                    return;
-                }
-                if self.waiting_for_command && (raw == "f" || raw.starts_with("f ")) {
-                    self.enter_file_mode(&format!(" {raw}"), window, cx);
-                    return;
-                }
-                if !self.file_mode && (raw == " f" || raw.starts_with(" f ")) {
-                    self.enter_file_mode(&raw, window, cx);
+                if !self.file_mode
+                    && !self.calculator_mode
+                    && (self.waiting_for_command || raw.starts_with(' '))
+                {
+                    self.route_command(&raw, window, cx);
                     return;
                 }
                 let query = if self.file_mode {
                     self.build_query(&raw)
-                } else if self.waiting_for_command {
-                    format!(" {raw}")
+                } else if self.calculator_mode {
+                    format!(" = {raw}")
                 } else {
                     raw
                 };
@@ -50,6 +38,11 @@ impl LauncherRoot {
                 });
             }
             InputEvent::PressEnter { .. } => {
+                // Partial/unknown aliases must never confirm old app results.
+                if self.waiting_for_command {
+                    self.confirm_picker(window, cx);
+                    return;
+                }
                 if self.list.read(cx).delegate().empty_state.is_some() {
                     return;
                 }
@@ -67,9 +60,6 @@ impl LauncherRoot {
                     return;
                 }
                 let text = input.read(cx).value().to_string();
-                if self.waiting_for_command && text.is_empty() {
-                    return;
-                }
                 if !text.is_empty()
                     && self.history.first().map(String::as_str) != Some(text.as_str())
                 {
@@ -96,14 +86,17 @@ impl LauncherRoot {
     /// listener on an ancestor div never sees them while the input holds
     /// focus. Interception runs before action/keymap dispatch entirely, so
     /// it's the only hook that can steal these two keys away first.
-    fn on_intercepted_key(
+    pub(super) fn on_intercepted_key(
         &mut self,
         key: &str,
-        control_k: bool,
+        toggle_actions: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if control_k {
+        if self.waiting_for_command && toggle_actions {
+            return;
+        }
+        if toggle_actions {
             cx.stop_propagation();
             self.action_menu = if self.action_menu.is_some() {
                 None
@@ -114,6 +107,14 @@ impl LauncherRoot {
             return;
         }
         if self.waiting_for_command
+            && key == "backspace"
+            && self.search_input.read(cx).value().is_empty()
+        {
+            cx.stop_propagation();
+            self.reset_to_apps(window, cx);
+            return;
+        }
+        if self.calculator_mode
             && key == "backspace"
             && self.search_input.read(cx).value().is_empty()
         {
@@ -142,6 +143,10 @@ impl LauncherRoot {
         if key != "tab" {
             return;
         }
+        if self.list.read(cx).delegate().search_pending {
+            cx.stop_propagation();
+            return;
+        }
         let selected_dir = self.list.read(cx).selected_index().and_then(|ix| {
             self.list
                 .read(cx)
@@ -167,6 +172,7 @@ impl LauncherRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.pending_folder_footer = None;
         if self.action_menu.take().is_some() {
             cx.notify();
         }
@@ -239,6 +245,10 @@ impl LauncherRoot {
     }
 
     pub(super) fn on_move_up(&mut self, _: &MoveUp, window: &mut Window, cx: &mut Context<Self>) {
+        if self.waiting_for_command {
+            self.move_picker_selection(-1, cx);
+            return;
+        }
         self.cancel_wheel_animation();
         if self.list.read(cx).delegate().show_about
             || self.list.read(cx).delegate().show_updates
@@ -294,6 +304,10 @@ impl LauncherRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.waiting_for_command {
+            self.move_picker_selection(1, cx);
+            return;
+        }
         self.cancel_wheel_animation();
         if self.list.read(cx).delegate().show_about
             || self.list.read(cx).delegate().show_updates
@@ -325,6 +339,9 @@ impl LauncherRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.waiting_for_command {
+            return false;
+        }
         let next = match (self.history_cursor, delta) {
             (None, 1) if !self.history.is_empty() => Some(0),
             (Some(i), 1) if i + 1 < self.history.len() => Some(i + 1),
@@ -333,6 +350,7 @@ impl LauncherRoot {
             _ => return false,
         };
         self.history_cursor = next;
+        self.pending_folder_footer = None;
         let text = next
             .and_then(|i| self.history.get(i))
             .cloned()
@@ -341,8 +359,8 @@ impl LauncherRoot {
             .update(cx, |input, cx| input.set_value(&text, window, cx));
         let query = if self.file_mode {
             self.build_query(&text)
-        } else if self.waiting_for_command {
-            format!(" {text}")
+        } else if self.calculator_mode {
+            format!(" = {text}")
         } else {
             text
         };
@@ -383,7 +401,7 @@ impl LauncherRoot {
             self.pop_folder_scope(window, cx);
             return;
         }
-        if self.file_mode || self.waiting_for_command {
+        if self.file_mode || self.calculator_mode || self.waiting_for_command {
             self.exit_file_mode(window, cx);
             return;
         }
@@ -401,8 +419,9 @@ impl LauncherRoot {
         });
     }
 
-    pub(super) fn intercept_keys(cx: &mut Context<Self>) -> Subscription {
+    pub(super) fn intercept_keys(window: &Window, cx: &mut Context<Self>) -> Subscription {
         let this = cx.entity();
+        let owner = window.window_handle();
         // `InputState` owns Backspace and Tab as key *bindings* (its "Input"
         // key context is more specific than any context we could put on an
         // ancestor div), so a normal `on_key_down`/`on_action` listener up
@@ -411,8 +430,32 @@ impl LauncherRoot {
         // its doc comment), so it's the only hook that can steal these two
         // keys away from the input while it still holds focus.
         cx.intercept_keystrokes(move |event, window, cx| {
+            if window.window_handle() != owner {
+                return;
+            }
             let key = event.keystroke.key.as_str();
-            let control_k = event.keystroke.modifiers.control && key == "k";
+            let preferences = crate::settings::preferences(cx);
+            let toggle_actions =
+                preferences.matches(crate::settings::Shortcut::Actions, &event.keystroke);
+            let files =
+                preferences.matches(crate::settings::Shortcut::FileSearch, &event.keystroke);
+            let settings =
+                preferences.matches(crate::settings::Shortcut::Settings, &event.keystroke);
+            if files || settings {
+                cx.stop_propagation();
+                this.update(cx, |this, cx| {
+                    if files {
+                        this.cancel_wheel_animation();
+                        this.action_menu = None;
+                        this.enter_file_mode(" f", window, cx);
+                        cx.notify();
+                    } else {
+                        LauncherState::dismiss(window, cx);
+                        cx.defer(crate::settings::open);
+                    }
+                });
+                return;
+            }
             let action_number = if event.keystroke.modifiers == gpui::Modifiers::default() {
                 match key {
                     "1" => Some(0),
@@ -427,7 +470,7 @@ impl LauncherRoot {
             } else {
                 None
             };
-            if key != "backspace" && key != "tab" && !control_k && action_number.is_none() {
+            if key != "backspace" && key != "tab" && !toggle_actions && action_number.is_none() {
                 return;
             }
             this.update(cx, |this, cx| {
@@ -445,7 +488,7 @@ impl LauncherRoot {
                     }
                     return;
                 }
-                this.on_intercepted_key(key, control_k, window, cx);
+                this.on_intercepted_key(key, toggle_actions, window, cx);
             });
         })
     }

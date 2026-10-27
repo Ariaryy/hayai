@@ -15,12 +15,17 @@ Windows builds require the MSVC toolchain and Windows 10/11 SDK resource compile
 
 The Python rendering packages are development tools only.
 
-`icons/scry.svg` is Scry Search's app icon, used on the file-search setup screen.
+`icons/thirdparty/scry/scry.svg` is Scry Search's app icon, used on the file-search setup screen.
 It is copied from the [Scry Search repository](https://github.com/Ariaryy/scry-search)
-under the MIT license; see `icons/scry-LICENSE.txt`.
+under the MIT license; see `icons/thirdparty/scry/LICENSE`.
 
-The same command also bakes 128px `hayai.png`, `icons/update.png`, and
-`icons/scry.png` from their SVG sources. These embedded PNGs are decoded before
+The same command also bakes 128px `hayai.png`, `icons/update.png`, `icons/settings.png`, and
+`icons/thirdparty/scry/scry.png` from their SVG sources. These embedded PNGs are decoded before
 the launcher's first frame; fixed notification artwork no longer needs a runtime
 SVG raster job. Detail cards use the 128px sources, while result rows cache
 separate DPI-sized renditions displayed at the standard 22 logical pixels.
+
+Third-party icons live under `icons/thirdparty/<source>/`, with each source's
+extensionless `LICENSE` in its own directory. `phosphor/` contains the plain
+settings navigation and warning glyphs from [Phosphor Icons](https://github.com/phosphor-icons/core).
+Hayai's branded artwork and window-control glyphs stay directly under `icons/`.

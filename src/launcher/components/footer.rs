@@ -1,48 +1,38 @@
 use super::*;
 
-/// Fixed-height keycaps keep shortcut labels centered independently of the
-/// input widget's text sizing. Each physical key gets its own cap.
-pub(super) fn shortcut_keycap(content: impl IntoElement, _cx: &App) -> impl IntoElement {
-    div()
-        .flex()
-        .items_center()
-        .justify_center()
-        .text_color(gpui::rgb(crate::theme::KEYCAP_FOREGROUND))
-        .bg(gpui::rgb(crate::theme::KEYCAP_BACKGROUND))
-        .h(px(20.0))
-        .min_w(px(20.0))
-        .px(px(5.0))
-        .rounded(px(4.0))
-        .line_height(relative(1.0))
-        .text_size(px(11.0))
-        .font_weight(FontWeight::MEDIUM)
-        .flex_shrink_0()
-        .child(content)
+/// The launcher footer uses a slightly shorter cap than settings.
+pub(super) fn shortcut_keycap(label: impl Into<SharedString>, cx: &App) -> impl IntoElement {
+    crate::settings::keycap_label(label, 20.0, cx)
 }
 
 pub(in crate::launcher) fn footer(
     root: &LauncherRoot,
     setup_screen: bool,
-    updates_page: bool,
+    showing_picker: bool,
     actions_disabled: bool,
     empty_notice: bool,
-    cx: &App,
+    cx: &Context<LauncherRoot>,
 ) -> impl IntoElement {
     let primary_action = root.selected_primary_action(cx);
     let primary_label = primary_action.label();
-    let can_enter_folder = root.file_mode && primary_action == PrimaryAction::OpenFolder;
+    let can_enter_folder = !showing_picker && root.can_enter_folder(primary_action);
     // Backspace edits non-empty queries; advertise navigation only when
     // the empty-input handler can actually leave the current scope/mode.
-    let can_go_back = (root.file_mode || root.waiting_for_command)
+    let can_go_back = (root.file_mode || root.calculator_mode || root.waiting_for_command)
         && root.search_input.read(cx).value().is_empty();
     let show_commands_hint = !setup_screen
         && !root.file_mode
+        && !root.calculator_mode
         && !root.waiting_for_command
         && root.search_input.read(cx).value().is_empty();
-    let backspace_label = if !root.folder_scope.is_empty() {
+    let backspace_label = if showing_picker {
+        text::search::CANCEL_COMMAND
+    } else if !root.folder_scope.is_empty() {
         text::search::UP_ONE_LEVEL
     } else if root.file_mode {
         text::search::EXIT_FILE_SEARCH
+    } else if root.calculator_mode {
+        text::search::EXIT_CALCULATOR
     } else {
         text::search::CANCEL_COMMAND
     };
@@ -99,43 +89,44 @@ pub(in crate::launcher) fn footer(
                     .text_color(cx.theme().foreground)
                     .font_weight(FontWeight::MEDIUM)
                     .child(primary_label)
-                    .child(shortcut_keycap(
-                        gpui::svg()
-                            .path(icon_assets::ENTER)
-                            // Svg::paint requires its own style color;
-                            // inheriting the keycap's text color does
-                            // not populate that field on this GPUI rev.
-                            .text_color(gpui::rgb(crate::theme::KEYCAP_FOREGROUND))
-                            .size(px(14.0))
-                            .flex_none(),
+                    .child(crate::settings::keycap_icon(
+                        icon_assets::ENTER,
+                        16.0,
+                        20.0,
                         cx,
                     )),
             )
         })
-        .when((!setup_screen || updates_page) && !empty_notice, |footer| {
-            footer
-                .child(div().mx_2().w(px(1.0)).h(px(16.0)).bg(cx.theme().border))
-                .child(
-                    h_flex()
-                        .items_center()
-                        .gap_2()
-                        .h(px(26.0))
-                        .px(px(2.5))
-                        // The 20px caps retain 3px of vertical breathing room.
-                        .rounded(px(7.0))
-                        .when(actions_disabled, |group| group.opacity(0.4))
-                        .when(root.action_menu.is_some(), |group| {
-                            group
-                                .bg(gpui::rgb(crate::theme::OPEN_ACTIONS_BACKGROUND))
-                                .text_color(cx.theme().foreground)
-                        })
-                        .child(div().pl(px(3.0)).child(text::search::ACTIONS))
-                        .child(
-                            h_flex()
-                                .gap_1()
-                                .child(shortcut_keycap(text::keys::CTRL, cx))
-                                .child(shortcut_keycap(text::keys::K, cx)),
-                        ),
-                )
+        .when(!empty_notice, |footer| {
+            footer.child(div().mx_2().w(px(1.0)).h(px(16.0)).bg(cx.theme().border))
         })
+        .child(
+            h_flex()
+                .id("launcher-actions")
+                .items_center()
+                .gap_2()
+                .h(px(28.0))
+                .px(px(4.0))
+                // The 20px caps retain 4px of vertical breathing room.
+                .rounded(px(7.0))
+                .when(actions_disabled, |group| group.opacity(0.4))
+                .when(!actions_disabled, |group| {
+                    group.cursor_pointer().on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            this.on_intercepted_key("", true, window, cx)
+                        }),
+                    )
+                })
+                .when(root.action_menu.is_some(), |group| {
+                    group
+                        .bg(cx.theme().list_hover)
+                        .text_color(cx.theme().foreground)
+                })
+                .child(div().child(text::search::ACTIONS))
+                .child(crate::settings::key_badges(
+                    crate::settings::preferences(cx).binding(crate::settings::Shortcut::Actions),
+                    cx,
+                )),
+        )
 }

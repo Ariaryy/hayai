@@ -55,6 +55,7 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_SystemInformation",
     "Win32_System_Time",
     "Win32_System_Threading",
+    "Win32_Storage_FileSystem",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
@@ -65,3 +66,15 @@ windows-sys = { version = "0.61.2", features = [
 # re-export valid on newer Rust without changing the pinned GUI dependencies.
 [patch.crates-io]
 proc-macro-error2 = { path = "vendor/proc-macro-error2" }
+
+# Large settings pages miss refresh intervals with the renderer/layout crates
+# fully unoptimized. Keep Hayai itself debuggable while giving cargo run/test
+# the same responsive rendering path as release builds. Release is unaffected.
+[profile.dev.package.gpui]
+opt-level = 1
+[profile.dev.package.gpui_windows]
+opt-level = 1
+[profile.dev.package.gpui-component]
+opt-level = 1
+[profile.dev.package.taffy]
+opt-level = 1

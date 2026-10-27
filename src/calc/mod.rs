@@ -92,6 +92,7 @@ fn evaluation_items(
     match evaluation.result {
         Some(result) => vec![result_item(source, result, fx)],
         None if evaluation.pending => vec![CommandItem {
+            recent: false,
             id: "calc:pending".into(),
             action: CommandAction::PendingState,
             ..error_item("Keep typing to complete the calculation.")
@@ -274,6 +275,7 @@ fn result_item(query: &str, result: EvalResult, fx: &currency::FxCache) -> Comma
             })
         });
     CommandItem {
+        recent: false,
         file_size: None,
         id: format!("calc:{query}"),
         title: result.value.clone(),
@@ -286,6 +288,7 @@ fn result_item(query: &str, result: EvalResult, fx: &currency::FxCache) -> Comma
 
 fn error_item(message: &str) -> CommandItem {
     CommandItem {
+        recent: false,
         id: "calc:error".into(),
         title: message.into(),
         subtitle: None,

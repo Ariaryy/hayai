@@ -32,12 +32,14 @@ mod icons;
 mod input;
 mod lifecycle;
 mod results;
+mod router;
 mod row;
 mod scrolling;
 mod view;
 
 use actions::*;
 use formatting::*;
+pub(crate) use icons::load_builtin_icon;
 use icons::*;
 pub use lifecycle::{LauncherGlobal, LauncherState};
 use results::*;
@@ -99,6 +101,12 @@ struct WheelAnimation {
     results_generation: u64,
 }
 
+#[derive(Clone, Copy)]
+struct FolderFooter {
+    primary: PrimaryAction,
+    actions_disabled: bool,
+}
+
 /// The window's root view: hosts our own search `Input` (not the `List`'s
 /// built-in one — that hardcodes a search-icon prefix and clear button with
 /// no way to remove them) plus the results `List`, and gives gpui-component's
@@ -121,8 +129,17 @@ struct LauncherRoot {
     /// The leading command space is state, not text, so the caret stays at
     /// the start while the placeholder explains which command to enter.
     waiting_for_command: bool,
+    /// Highlighted row of the command picker; reset whenever the typed text changes.
+    picker_selected: usize,
+    /// At most three command identities, retained only until the destination
+    /// has content. Never paint an empty async list between the two views.
+    pending_picker: Option<Vec<crate::command_router::Command>>,
     /// File mode reconstructs its provider prefix outside the visible input.
     file_mode: bool,
+    /// Hold presentation through folder navigation, without copying results.
+    /// Execution still checks search_pending, so stale rows remain inactive.
+    pending_folder_footer: Option<FolderFooter>,
+    calculator_mode: bool,
     /// Stack of folders entered via Tab-on-a-folder-result, outermost first.
     /// Empty means file mode is searching everywhere; the last entry scopes
     /// the query under it using the file provider's scoped-search form
@@ -148,13 +165,16 @@ impl LauncherRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let intercept = Self::intercept_keys(cx);
+        let intercept = Self::intercept_keys(window, cx);
         let _subscriptions = vec![
             cx.subscribe_in(&search_input, window, Self::on_search_event),
             cx.observe_in(&list, window, |this, list, window, cx| {
                 let delegate = list.read(cx).delegate();
                 let return_to_apps =
                     delegate.scry_installing && (this.file_mode || delegate.show_scry_updates);
+                if !delegate.search_pending || !delegate.results.is_empty() {
+                    this.pending_picker = None;
+                }
                 if return_to_apps {
                     this.reset_to_apps(window, cx);
                 }
@@ -170,7 +190,11 @@ impl LauncherRoot {
             list,
             search_input,
             waiting_for_command: false,
+            picker_selected: 0,
+            pending_picker: None,
             file_mode: false,
+            pending_folder_footer: None,
+            calculator_mode: false,
             folder_scope: Vec::new(),
             history: Vec::new(),
             history_cursor: None,
@@ -197,7 +221,10 @@ impl LauncherRoot {
     }
 
     fn enter_file_mode(&mut self, raw: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_picker = None;
+        self.pending_folder_footer = None;
         self.waiting_for_command = false;
+        self.calculator_mode = false;
         self.file_mode = true;
         self.folder_scope.clear();
         let remainder = raw
@@ -228,6 +255,9 @@ impl LauncherRoot {
         self.history_cursor = None;
         self.waiting_for_command = false;
         self.file_mode = false;
+        self.pending_picker = None;
+        self.pending_folder_footer = None;
+        self.calculator_mode = false;
         self.folder_scope.clear();
         self.search_input.update(cx, |input, cx| {
             input.set_value("", window, cx);
@@ -265,6 +295,11 @@ impl LauncherRoot {
     }
 
     fn refresh_folder_scope(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_folder_footer = Some(FolderFooter {
+            primary: self.selected_primary_action(cx),
+            actions_disabled: self.actions_disabled(cx),
+        });
+        self.action_menu = None;
         let placeholder = if self.folder_scope.is_empty() {
             text::search::FILES_PLACEHOLDER
         } else {
@@ -279,6 +314,40 @@ impl LauncherRoot {
             perform_search_and_select_first(list, &query, window, cx);
         });
         cx.notify();
+    }
+
+    fn can_enter_folder(&self, primary_action: PrimaryAction) -> bool {
+        self.file_mode && primary_action == PrimaryAction::OpenFolder
+    }
+
+    fn actions_disabled(&self, cx: &App) -> bool {
+        let delegate = self.list.read(cx).delegate();
+        if self.file_mode
+            && delegate.search_pending
+            && let Some(footer) = self.pending_folder_footer
+        {
+            return footer.actions_disabled;
+        }
+        let showing_updates =
+            delegate.show_updates || delegate.show_scry_updates || delegate.needs_pinned_scry();
+        self.waiting_for_command
+            || (delegate.search_pending
+                && !showing_updates
+                && (!delegate.file_search || delegate.results.is_empty()))
+            || delegate.show_about
+            || (!showing_updates
+                && !delegate.notification_selected
+                && !delegate
+                    .selected_index
+                    .and_then(|ix| delegate.item(ix))
+                    .is_some_and(|item| {
+                        matches!(
+                            item.action,
+                            CommandAction::LaunchApplication(_)
+                                | CommandAction::OpenFile(_)
+                                | CommandAction::CheckForUpdates
+                        )
+                    }))
     }
 
     /// Footer hint text for the currently selected row's Enter action —
@@ -307,6 +376,8 @@ impl LauncherRoot {
                 PrimaryAction::Checking
             } else if delegate.update_result == Some(crate::updates::CheckResult::Ready) {
                 PrimaryAction::RestartToUpdate
+            } else if delegate.update_result == Some(crate::updates::CheckResult::Available) {
+                PrimaryAction::DownloadUpdate
             } else {
                 PrimaryAction::CheckAgain
             };
@@ -315,7 +386,14 @@ impl LauncherRoot {
             return PrimaryAction::Back;
         }
         if delegate.file_search && delegate.search_pending {
-            return PrimaryAction::SearchFiles;
+            if let Some(footer) = self.pending_folder_footer {
+                return footer.primary;
+            }
+            if delegate.results.is_empty() {
+                return PrimaryAction::SearchFiles;
+            }
+            // An immediate file preview already has a visible selection.
+            // Present its action now; execution still waits for validation.
         }
         if delegate.notification_selected {
             if delegate.selected_notification() == Some(UpdateNotification::Scry) {
@@ -384,7 +462,9 @@ impl LauncherRoot {
             Some(CommandAction::CheckFileSearchUpdates) => PrimaryAction::CheckForUpdates,
             Some(CommandAction::RestartToUpdate) => PrimaryAction::RestartToUpdate,
             Some(CommandAction::CheckForUpdates) => PrimaryAction::CheckForUpdates,
+            Some(CommandAction::DownloadHayaiUpdate) => PrimaryAction::DownloadUpdate,
             Some(CommandAction::AboutHayai) => PrimaryAction::AboutHayai,
+            Some(CommandAction::OpenSettings) => PrimaryAction::OpenSettings,
             Some(CommandAction::LaunchApplication(_)) | None => PrimaryAction::OpenApplication,
         }
     }

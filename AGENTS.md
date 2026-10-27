@@ -58,6 +58,7 @@ Fast input, low idle cost, and minimum retained memory are product requirements.
 | --- | --- |
 | Window visibility/focus, input/actions, list layout, scrolling, themes, or shell icons | [GPUI and Windows invariants](docs/internal/gpui-windows.md) |
 | UI composition, feature enable/disable, threading, provider dispatch, background search, or Scry integration | [Architecture](docs/internal/architecture.md) |
+| Settings window layout, spacing, type, colors, theme palettes, conflict markers, or command trigger/alias UI | [Design](DESIGN.md) |
 | Calculator detection, parsing, previews, numeric output, FX, or timezones | [Calculator invariants](docs/internal/calculator.md) |
 | Icon cache sizing, prefetch, or DPI rendering | [Icon measurements and limitations](docs/icon-cache-memory.md), plus the GPUI reference above |
 | Version bumps, packaging, tags, or publication | [Release procedure](docs/internal/releasing.md) |

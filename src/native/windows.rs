@@ -9,12 +9,13 @@ use windows_sys::Win32::Graphics::Dwm::{
     DWMWA_TRANSITIONS_FORCEDISABLED, DwmFlush, DwmSetWindowAttribute,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
+    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTOPRIMARY, MONITORINFO,
+    MonitorFromPoint, MonitorFromWindow,
 };
 use windows_sys::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    MOD_ALT, MOD_NOREPEAT, RegisterHotKey, SetActiveWindow, SetFocus, UnregisterHotKey, VK_SPACE,
+    MOD_NOREPEAT, RegisterHotKey, SetActiveWindow, SetFocus, UnregisterHotKey,
 };
 use windows_sys::Win32::UI::Shell::{
     NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
@@ -35,9 +36,11 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
 mod associations;
 pub use associations::{associated_apps, open_with_app};
 
-const HOTKEY_ID: i32 = 1;
 const TRAY_ICON_ID: u32 = 1;
 const WM_TRAY_ICON: u32 = WM_APP + 1;
+mod hotkeys;
+use hotkeys::WM_SET_HOTKEY;
+pub use hotkeys::set_launcher_hotkey;
 
 // `UnboundedSender` is `Sync` for `Send` payloads and `unbounded_send` takes
 // `&self` and never blocks, so no `Mutex` is needed — the send must not block
@@ -78,9 +81,9 @@ pub struct NativeRuntime {
 }
 
 impl NativeRuntime {
-    pub fn start(sender: UnboundedSender<NativeCommand>) -> Self {
+    pub fn start(sender: UnboundedSender<NativeCommand>, hotkey: (u32, u32)) -> Self {
         let thread = thread::spawn(move || {
-            if let Err(error) = run_message_window(sender) {
+            if let Err(error) = run_message_window(sender, hotkey) {
                 eprintln!("Failed to start native Windows runtime: {error}");
             }
         });
@@ -139,22 +142,40 @@ unsafe fn disable_launcher_transitions(hwnd: HWND) {
     }
 }
 
-/// Move the (still-hidden) launcher onto the monitor under the cursor,
-/// centered in the work area. Runs before ShowWindow so the window never
-/// paints at its previous monitor's position. Keeps the window's current
-/// pixel size (GPUI sized it at creation for the then-current DPI).
-unsafe fn reposition_on_cursor_monitor(hwnd: HWND) {
-    unsafe {
-        let mut cursor = POINT { x: 0, y: 0 };
-        if GetCursorPos(&mut cursor) == 0 {
-            return; // leave the window where it was
+/// Capture the destination before GPUI can activate the launcher and change
+/// GetForegroundWindow. Pass this snapshot through reset painting and UAC return.
+#[derive(Clone, Copy)]
+pub struct LauncherMonitor(usize);
+pub fn launcher_monitor(target: crate::settings::DisplayTarget) -> LauncherMonitor {
+    use crate::settings::DisplayTarget;
+    let monitor = unsafe {
+        match target {
+            DisplayTarget::Pointer => {
+                let mut cursor = POINT { x: 0, y: 0 };
+                if GetCursorPos(&mut cursor) != 0 {
+                    MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST)
+                } else {
+                    MonitorFromWindow(null_mut(), MONITOR_DEFAULTTOPRIMARY)
+                }
+            }
+            DisplayTarget::ActiveWindow => {
+                MonitorFromWindow(GetForegroundWindow(), MONITOR_DEFAULTTONEAREST)
+            }
+            DisplayTarget::Primary => MonitorFromWindow(null_mut(), MONITOR_DEFAULTTOPRIMARY),
         }
-        let monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+    };
+    LauncherMonitor(monitor as usize)
+}
+
+/// Position while hidden, before ShowWindow, preserving the current pixel size.
+/// GPUI sized the window for its creation DPI; cross-DPI resizing is unchanged.
+unsafe fn reposition_on_monitor(hwnd: HWND, monitor: LauncherMonitor) {
+    unsafe {
         let mut info = MONITORINFO {
             cbSize: std::mem::size_of::<MONITORINFO>() as u32,
             ..std::mem::zeroed()
         };
-        if GetMonitorInfoW(monitor, &mut info) == 0 {
+        if GetMonitorInfoW(monitor.0 as _, &mut info) == 0 {
             return;
         }
         let mut rect = RECT {
@@ -177,7 +198,7 @@ unsafe fn reposition_on_cursor_monitor(hwnd: HWND) {
     }
 }
 
-pub fn focus_launcher_window(window: &gpui::Window) {
+pub fn focus_launcher_window(window: &gpui::Window, monitor: LauncherMonitor) {
     if let Some(hwnd) = hwnd_of(window) {
         unsafe {
             disable_launcher_transitions(hwnd);
@@ -190,7 +211,7 @@ pub fn focus_launcher_window(window: &gpui::Window) {
                 (ex | WS_EX_TOOLWINDOW as isize) & !(WS_EX_APPWINDOW as isize),
             );
 
-            reposition_on_cursor_monitor(hwnd);
+            reposition_on_monitor(hwnd, monitor);
             ShowWindow(hwnd, SW_SHOW);
             // Apply the exstyle change and push to top of Z-order in one call.
             SetWindowPos(
@@ -210,7 +231,7 @@ pub fn focus_launcher_window(window: &gpui::Window) {
     }
 }
 
-pub fn focus_launcher_after_approval(window: &gpui::Window) {
+pub fn focus_launcher_after_approval(window: &gpui::Window, monitor: LauncherMonitor) {
     use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetForegroundWindow, GetWindowThreadProcessId,
@@ -224,7 +245,7 @@ pub fn focus_launcher_after_approval(window: &gpui::Window) {
         let attached = foreground != 0
             && foreground != current
             && AttachThreadInput(current, foreground, 1) != 0;
-        focus_launcher_window(window);
+        focus_launcher_window(window, monitor);
         if attached {
             AttachThreadInput(current, foreground, 0);
         }
@@ -593,7 +614,10 @@ fn entries_to_hits(entries: Vec<scry_client::ResultEntry>) -> Vec<FileHit> {
         .collect()
 }
 
-fn run_message_window(sender: UnboundedSender<NativeCommand>) -> io::Result<()> {
+fn run_message_window(
+    sender: UnboundedSender<NativeCommand>,
+    hotkey: (u32, u32),
+) -> io::Result<()> {
     let _ = COMMAND_SENDER.set(sender);
 
     let class_name = wide_null("HayaiNativeMessageWindow");
@@ -636,7 +660,8 @@ fn run_message_window(sender: UnboundedSender<NativeCommand>) -> io::Result<()> 
         return Err(io::Error::last_os_error());
     }
     add_tray_icon(hwnd)?;
-    register_hotkey(hwnd)?;
+    // A registration conflict must not take down tray access to Settings.
+    hotkeys::install(hwnd, hotkey);
 
     let mut message = MSG::default();
     loop {
@@ -667,7 +692,7 @@ fn add_tray_icon(hwnd: HWND) -> io::Result<()> {
     if data.hIcon.is_null() {
         return Err(io::Error::last_os_error());
     }
-    copy_wide_fixed(&mut data.szTip, "Hayai - Alt+Space");
+    copy_wide_fixed(&mut data.szTip, "Hayai");
 
     if unsafe { Shell_NotifyIconW(NIM_ADD, &data) } == 0 {
         return Err(io::Error::last_os_error());
@@ -683,15 +708,6 @@ fn remove_tray_icon(hwnd: HWND) {
     }
 }
 
-fn register_hotkey(hwnd: HWND) -> io::Result<()> {
-    let modifiers = MOD_ALT | MOD_NOREPEAT;
-    if unsafe { RegisterHotKey(hwnd, HOTKEY_ID, modifiers, VK_SPACE as u32) } == 0 {
-        return Err(io::Error::last_os_error());
-    }
-
-    Ok(())
-}
-
 fn send(command: NativeCommand) {
     if let Some(sender) = COMMAND_SENDER.get() {
         let _ = sender.unbounded_send(command);
@@ -705,12 +721,13 @@ unsafe extern "system" fn window_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match message {
-        WM_HOTKEY if wparam as i32 == HOTKEY_ID => {
+        WM_SET_HOTKEY => hotkeys::replace(hwnd, wparam as u32, lparam as u32),
+        WM_HOTKEY if hotkeys::is_active(wparam as i32) => {
             // Grant our process permission to call SetForegroundWindow from any thread.
             // Must be called here (on the thread that received WM_HOTKEY) while we hold
             // foreground permission. ASFW_ANY (u32::MAX) grants it to the whole process.
             unsafe { AllowSetForegroundWindow(u32::MAX) };
-            send(NativeCommand::ToggleLauncher);
+            send(NativeCommand::ShortcutPressed);
             0
         }
         WM_TRAY_ICON => {
@@ -732,9 +749,7 @@ unsafe extern "system" fn window_proc(
         }
 
         WM_DESTROY => {
-            unsafe {
-                UnregisterHotKey(hwnd, HOTKEY_ID);
-            }
+            hotkeys::unregister(hwnd);
             remove_tray_icon(hwnd);
             unsafe {
                 PostQuitMessage(0);

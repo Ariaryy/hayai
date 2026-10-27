@@ -104,7 +104,9 @@ impl Catalog {
             icon_recency: VecDeque::new(),
             recents: Vec::new(),
         };
-        catalog.load_recents();
+        if crate::history::enabled() {
+            catalog.load_recents();
+        }
         let handle = Rc::new(RefCell::new(catalog));
         cx.set_global(CatalogGlobal {
             catalog: handle.clone(),
@@ -304,6 +306,10 @@ impl Catalog {
             .join("\n")
     }
 
+    pub fn clear_recents(&mut self) {
+        self.recents.clear();
+    }
+
     fn load_recents(&mut self) {
         let Some(file) = recents_file() else {
             return;
@@ -317,18 +323,6 @@ impl Catalog {
                 .collect();
         }
     }
-}
-
-/// Write pre-serialized recents contents to disk. Free function on purpose:
-/// runs on the background pool, must not touch the (non-Send) catalog.
-pub fn write_recents_file(contents: &str) {
-    let Some(file) = recents_file() else {
-        return;
-    };
-    if let Some(parent) = file.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::write(&file, contents);
 }
 
 /// Scan Start Menu shortcuts + `shell:AppsFolder` into a fresh app list.
@@ -495,6 +489,7 @@ impl CommandProvider for AppsProvider {
             .filter_map(|index| {
                 let app = catalog.app(index)?;
                 Some(CommandItem {
+                    recent: query.trim().is_empty() && catalog.recents.contains(&app.path),
                     id: format!("app:{}", app.path().display()),
                     title: app.name.clone(),
                     subtitle: None,
@@ -514,6 +509,11 @@ pub(crate) fn hayai_commands(query: &str) -> Vec<CommandItem> {
     let query = query.to_ascii_lowercase();
     [
         (
+            crate::ui_text::settings::SETTINGS_ITEM,
+            "hayai settings preferences appearance theme key bindings shortcuts",
+            CommandAction::OpenSettings,
+        ),
+        (
             "Check for updates",
             "hayai check for updates update upgrade",
             CommandAction::CheckForUpdates,
@@ -527,6 +527,7 @@ pub(crate) fn hayai_commands(query: &str) -> Vec<CommandItem> {
     .into_iter()
     .filter(|(_, terms, _)| query.split_whitespace().all(|token| terms.contains(token)))
     .map(|(title, _, action)| CommandItem {
+        recent: false,
         id: format!("hayai:{title}"),
         title: title.into(),
         subtitle: Some("Hayai".into()),
@@ -541,6 +542,37 @@ pub(crate) fn hayai_commands(query: &str) -> Vec<CommandItem> {
 #[cfg(test)]
 mod tests {
     use super::fuzzy_score;
+
+    #[test]
+    fn recent_apps_lead_the_complete_catalog_only_on_entry() {
+        use super::*;
+        let catalog = Rc::new(RefCell::new(Catalog {
+            apps: ["Alpha", "Beta"]
+                .into_iter()
+                .map(|name| AppEntry {
+                    name: name.into(),
+                    name_lower: name.to_lowercase(),
+                    path: name.into(),
+                })
+                .collect(),
+            icons: Default::default(),
+            icon_recency: Default::default(),
+            recents: vec!["missing".into(), "Beta".into()],
+        }));
+        let provider = AppsProvider::new(catalog.clone());
+        let entry = provider.search("");
+        assert_eq!(
+            entry
+                .iter()
+                .filter(|item| matches!(item.action, CommandAction::LaunchApplication(_)))
+                .map(|item| (item.title.as_str(), item.recent))
+                .collect::<Vec<_>>(),
+            [("Beta", true), ("Alpha", false)]
+        );
+        assert!(provider.search("beta").iter().all(|item| !item.recent));
+        catalog.borrow_mut().clear_recents();
+        assert!(provider.search("").iter().all(|item| !item.recent));
+    }
 
     #[test]
     fn icon_cache_bounds_failures_and_preserves_pending_and_recent_entries() {
@@ -782,8 +814,8 @@ mod tests {
     fn hayai_commands_are_searchable_and_follow_app_results() {
         use crate::commands::CommandAction;
         let all = super::hayai_commands("");
-        assert_eq!(all.len(), 2);
-        assert_eq!(super::hayai_commands("HAYAI").len(), 2);
+        assert_eq!(all.len(), 3);
+        assert_eq!(super::hayai_commands("HAYAI").len(), 3);
         let updates = super::hayai_commands("check updates");
         assert_eq!(updates.len(), 1);
         assert!(matches!(updates[0].action, CommandAction::CheckForUpdates));
@@ -807,8 +839,9 @@ mod tests {
             items[0].action,
             CommandAction::LaunchApplication(_)
         ));
-        assert!(matches!(items[1].action, CommandAction::CheckForUpdates));
-        assert!(matches!(items[2].action, CommandAction::AboutHayai));
+        assert!(matches!(items[1].action, CommandAction::OpenSettings));
+        assert!(matches!(items[2].action, CommandAction::CheckForUpdates));
+        assert!(matches!(items[3].action, CommandAction::AboutHayai));
     }
 
     #[test]

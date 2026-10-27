@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn load_builtin_icon(bytes: &[u8]) -> Option<Arc<RenderImage>> {
+pub(crate) fn load_builtin_icon(bytes: &[u8]) -> Option<Arc<RenderImage>> {
     let mut buffer = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
         .ok()?
         .into_rgba8();

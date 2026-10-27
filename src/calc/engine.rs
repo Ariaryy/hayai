@@ -11,6 +11,14 @@ use std::time::{Duration, Instant};
 
 const MAX_INPUT_BYTES: usize = 4096;
 const MAX_DEPTH: usize = 48;
+// Semantic tests run unoptimized and concurrently on shared CI runners. Their
+// correctness must not depend on meeting an interactive wall-clock deadline.
+// Explicit expired-budget tests below still exercise cancellation deterministically.
+const EVALUATION_TIMEOUT: Duration = if cfg!(test) {
+    Duration::from_secs(2)
+} else {
+    Duration::from_millis(12)
+};
 struct Budget {
     deadline: Instant,
 }
@@ -46,7 +54,7 @@ pub fn evaluate(input: &str, rates: Option<&FxCache>) -> Option<EvalResult> {
         return None;
     }
     let budget = Budget {
-        deadline: Instant::now() + Duration::from_millis(12),
+        deadline: Instant::now() + EVALUATION_TIMEOUT,
     };
     let snapshot = rates.and_then(FxCache::snapshot);
     evaluate_inner(input, snapshot.as_ref(), &budget, 0)

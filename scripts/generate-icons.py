@@ -15,6 +15,7 @@ image.save(asset.with_suffix('.ico'), sizes=[(n, n) for n in (16, 24, 32, 48, 64
 for source, destination in (
     (root / 'assets' / 'hayai.svg', root / 'assets' / 'hayai.png'),
     (root / 'assets' / 'icons' / 'update.svg', root / 'assets' / 'icons' / 'update.png'),
-    (root / 'assets' / 'icons' / 'scry.svg', root / 'assets' / 'icons' / 'scry.png'),
+    (root / 'assets' / 'icons' / 'thirdparty' / 'scry' / 'scry.svg', root / 'assets' / 'icons' / 'thirdparty' / 'scry' / 'scry.png'),
+    (root / 'assets' / 'icons' / 'settings.svg', root / 'assets' / 'icons' / 'settings.png'),
 ):
     destination.write_bytes(resvg_py.svg_to_bytes(svg_path=str(source), width=128, height=128))
