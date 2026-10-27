@@ -12,26 +12,13 @@ impl gpui::Render for LauncherRoot {
         let delegate = self.list.read(cx).delegate();
         let about = delegate.show_about;
         let empty_notice = delegate.empty_state.is_some();
+        let showing_picker = self.waiting_for_command && crate::settings::preferences(cx).show_command_picker;
         // Compatibility results and explicit update navigation share one page.
         // A query refresh must not briefly expose the older setup renderer.
         let scry_page = delegate.show_scry_updates || delegate.needs_pinned_scry();
         let showing_updates = delegate.show_updates || scry_page;
         let show_main_heading = about || showing_updates;
-        let actions_disabled = (delegate.search_pending && !showing_updates)
-            || about
-            || (!showing_updates
-                && !delegate.notification_selected
-                && !delegate
-                    .selected_index
-                    .and_then(|ix| delegate.item(ix))
-                    .is_some_and(|item| {
-                        matches!(
-                            item.action,
-                            CommandAction::LaunchApplication(_)
-                                | CommandAction::OpenFile(_)
-                                | CommandAction::CheckForUpdates
-                        )
-                    }));
+        let actions_disabled = self.actions_disabled(cx);
         let file_setup = {
             let delegate = self.list.read(cx).delegate();
             delegate
@@ -84,26 +71,23 @@ impl gpui::Render for LauncherRoot {
                     cx,
                 )))
             })
-            .child(
-                if self.waiting_for_command && crate::settings::preferences(cx).show_command_picker
-                {
-                    self.command_picker(cx)
-                } else if showing_updates {
-                    updates_page(self.list.read(cx).delegate(), cx)
-                } else if about {
-                    about_page(delegate.brand_icon.clone(), cx)
-                } else if let Some((title, description, icon)) = file_setup {
-                    file_setup_page(title, description, icon, starting_scry, updating_scry, cx)
-                } else {
-                    results_view(&self.list, cx)
-                },
-            )
+            .child(if showing_picker {
+                self.command_picker(cx)
+            } else if showing_updates {
+                updates_page(self.list.read(cx).delegate(), cx)
+            } else if about {
+                about_page(delegate.brand_icon.clone(), cx)
+            } else if let Some((title, description, icon)) = file_setup {
+                file_setup_page(title, description, icon, starting_scry, updating_scry, cx)
+            } else {
+                results_view(&self.list, cx)
+            })
             .child(footer(
                 self,
                 setup_screen,
-                showing_updates,
+                showing_picker,
                 actions_disabled,
-                empty_notice || self.waiting_for_command,
+                empty_notice || self.waiting_for_command || showing_picker,
                 cx,
             ))
             // Keep the panel last so it paints above the list and footer.

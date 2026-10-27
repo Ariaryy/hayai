@@ -34,16 +34,8 @@ pub(super) async fn check(
                 assert_eq!(root.picker_selected, 0);
                 assert!(root.waiting_for_command && !root.file_mode);
                 assert!(root.list.read(cx).delegate().results.is_empty());
-                let input = root.search_input.clone();
-                root.on_search_event(
-                    &input,
-                    &InputEvent::PressEnter {
-                        secondary: false,
-                        shift: false,
-                    },
-                    window,
-                    cx,
-                );
+                // Picker Enter now opens the highlighted command. The guarded
+                // partial-alias Enter case is exercised below with it hidden.
                 assert!(root.waiting_for_command && root.history.is_empty());
                 edit(root, "fi", window, cx);
                 assert!(root.file_mode && !root.waiting_for_command);
@@ -122,16 +114,19 @@ pub(super) async fn check(
                     assert_eq!(list.delegate().results.is_empty(), show);
                     assert!(list.selected_index().is_none());
                     let input = root.search_input.clone();
-                    root.on_search_event(
-                        &input,
-                        &InputEvent::PressEnter {
-                            secondary: false,
-                            shift: false,
-                        },
-                        window,
-                        cx,
-                    );
+                    if !show {
+                        root.on_search_event(
+                            &input,
+                            &InputEvent::PressEnter {
+                                secondary: false,
+                                shift: false,
+                            },
+                            window,
+                            cx,
+                        );
+                    }
                     assert!(root.waiting_for_command && root.history.is_empty());
+                    assert!(root.selected_action_menu(cx).is_none());
                     edit(root, "fi", window, cx);
                     assert!(root.file_mode && !root.waiting_for_command);
                     root.on_escape(&gpui_component::input::Escape, window, cx);

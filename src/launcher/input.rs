@@ -10,6 +10,7 @@ impl LauncherRoot {
     ) {
         match event {
             InputEvent::Change => {
+                self.pending_folder_footer = None;
                 self.cancel_wheel_animation();
                 self.action_menu = None;
                 // Only real user edits reach this arm — our own history-recall
@@ -142,6 +143,10 @@ impl LauncherRoot {
         if key != "tab" {
             return;
         }
+        if self.list.read(cx).delegate().search_pending {
+            cx.stop_propagation();
+            return;
+        }
         let selected_dir = self.list.read(cx).selected_index().and_then(|ix| {
             self.list
                 .read(cx)
@@ -167,6 +172,7 @@ impl LauncherRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.pending_folder_footer = None;
         if self.action_menu.take().is_some() {
             cx.notify();
         }
@@ -344,6 +350,7 @@ impl LauncherRoot {
             _ => return false,
         };
         self.history_cursor = next;
+        self.pending_folder_footer = None;
         let text = next
             .and_then(|i| self.history.get(i))
             .cloned()

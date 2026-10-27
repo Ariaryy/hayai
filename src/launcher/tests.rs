@@ -1,6 +1,7 @@
 use super::{format_expression_for_display, format_result_for_display};
 use crate::assets::icons as icon_assets;
 
+mod folders;
 mod routing;
 
 #[cfg(windows)]
@@ -112,6 +113,7 @@ fn wheel_scroll_gui_smoke() {
                 cx.background_executor()
                     .timer(Duration::from_millis(200))
                     .await;
+                folders::check(window, &root, cx).await;
                 routing::check(window, &root, cx).await;
                 // The routing checks rebuild the result list after the picker.
                 // Let it lay out before using its measured scroll bounds.

@@ -101,6 +101,12 @@ struct WheelAnimation {
     results_generation: u64,
 }
 
+#[derive(Clone, Copy)]
+struct FolderFooter {
+    primary: PrimaryAction,
+    actions_disabled: bool,
+}
+
 /// The window's root view: hosts our own search `Input` (not the `List`'s
 /// built-in one — that hardcodes a search-icon prefix and clear button with
 /// no way to remove them) plus the results `List`, and gives gpui-component's
@@ -127,6 +133,9 @@ struct LauncherRoot {
     picker_selected: usize,
     /// File mode reconstructs its provider prefix outside the visible input.
     file_mode: bool,
+    /// Hold presentation through folder navigation, without copying results.
+    /// Execution still checks search_pending, so stale rows remain inactive.
+    pending_folder_footer: Option<FolderFooter>,
     calculator_mode: bool,
     /// Stack of folders entered via Tab-on-a-folder-result, outermost first.
     /// Empty means file mode is searching everywhere; the last entry scopes
@@ -177,6 +186,7 @@ impl LauncherRoot {
             waiting_for_command: false,
             picker_selected: 0,
             file_mode: false,
+            pending_folder_footer: None,
             calculator_mode: false,
             folder_scope: Vec::new(),
             history: Vec::new(),
@@ -204,6 +214,7 @@ impl LauncherRoot {
     }
 
     fn enter_file_mode(&mut self, raw: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_folder_footer = None;
         self.waiting_for_command = false;
         self.calculator_mode = false;
         self.file_mode = true;
@@ -236,6 +247,7 @@ impl LauncherRoot {
         self.history_cursor = None;
         self.waiting_for_command = false;
         self.file_mode = false;
+        self.pending_folder_footer = None;
         self.calculator_mode = false;
         self.folder_scope.clear();
         self.search_input.update(cx, |input, cx| {
@@ -274,6 +286,11 @@ impl LauncherRoot {
     }
 
     fn refresh_folder_scope(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_folder_footer = Some(FolderFooter {
+            primary: self.selected_primary_action(cx),
+            actions_disabled: self.actions_disabled(cx),
+        });
+        self.action_menu = None;
         let placeholder = if self.folder_scope.is_empty() {
             text::search::FILES_PLACEHOLDER
         } else {
@@ -288,6 +305,40 @@ impl LauncherRoot {
             perform_search_and_select_first(list, &query, window, cx);
         });
         cx.notify();
+    }
+
+    fn can_enter_folder(&self, primary_action: PrimaryAction) -> bool {
+        self.file_mode && primary_action == PrimaryAction::OpenFolder
+    }
+
+    fn actions_disabled(&self, cx: &App) -> bool {
+        let delegate = self.list.read(cx).delegate();
+        if self.file_mode
+            && delegate.search_pending
+            && let Some(footer) = self.pending_folder_footer
+        {
+            return footer.actions_disabled;
+        }
+        let showing_updates =
+            delegate.show_updates || delegate.show_scry_updates || delegate.needs_pinned_scry();
+        self.waiting_for_command
+            || (delegate.search_pending
+                && !showing_updates
+                && (!delegate.file_search || delegate.results.is_empty()))
+            || delegate.show_about
+            || (!showing_updates
+                && !delegate.notification_selected
+                && !delegate
+                    .selected_index
+                    .and_then(|ix| delegate.item(ix))
+                    .is_some_and(|item| {
+                        matches!(
+                            item.action,
+                            CommandAction::LaunchApplication(_)
+                                | CommandAction::OpenFile(_)
+                                | CommandAction::CheckForUpdates
+                        )
+                    }))
     }
 
     /// Footer hint text for the currently selected row's Enter action —
@@ -326,7 +377,14 @@ impl LauncherRoot {
             return PrimaryAction::Back;
         }
         if delegate.file_search && delegate.search_pending {
-            return PrimaryAction::SearchFiles;
+            if let Some(footer) = self.pending_folder_footer {
+                return footer.primary;
+            }
+            if delegate.results.is_empty() {
+                return PrimaryAction::SearchFiles;
+            }
+            // An immediate file preview already has a visible selection.
+            // Present its action now; execution still waits for validation.
         }
         if delegate.notification_selected {
             if delegate.selected_notification() == Some(UpdateNotification::Scry) {
