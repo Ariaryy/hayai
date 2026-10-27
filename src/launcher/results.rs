@@ -477,7 +477,7 @@ impl ListDelegate for ResultListDelegate {
     ) -> Option<impl IntoElement> {
         // The virtual list measures footer zero and reuses that height for
         // each section, including the final group.
-        self.apps_view.then(|| div().h(px(8.0)).flex_none())
+        (self.apps_view || self.file_search).then(|| div().h(px(8.0)).flex_none())
     }
 
     fn render_empty(
