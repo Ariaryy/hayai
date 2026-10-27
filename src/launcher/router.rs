@@ -60,6 +60,7 @@ impl LauncherRoot {
                 delegate.search_pending = false;
                 delegate.results.clear();
                 delegate.main_results = 0;
+                delegate.recent_results = 0;
                 delegate.file_search = false;
                 delegate.apps_view = false;
                 delegate.last_query = " ".into();

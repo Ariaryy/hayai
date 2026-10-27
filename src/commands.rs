@@ -59,6 +59,8 @@ pub enum CalculationDetail {
 
 #[derive(Clone, Debug)]
 pub struct CommandItem {
+    /// Recent entry on an empty query; providers keep these in a leading block.
+    pub recent: bool,
     // Unused until a provider needs stable IDs (e.g. dedup, action follow-up).
     #[allow(dead_code)]
     pub id: String,

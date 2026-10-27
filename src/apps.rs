@@ -489,6 +489,7 @@ impl CommandProvider for AppsProvider {
             .filter_map(|index| {
                 let app = catalog.app(index)?;
                 Some(CommandItem {
+                    recent: query.trim().is_empty() && catalog.recents.contains(&app.path),
                     id: format!("app:{}", app.path().display()),
                     title: app.name.clone(),
                     subtitle: None,
@@ -526,6 +527,7 @@ pub(crate) fn hayai_commands(query: &str) -> Vec<CommandItem> {
     .into_iter()
     .filter(|(_, terms, _)| query.split_whitespace().all(|token| terms.contains(token)))
     .map(|(title, _, action)| CommandItem {
+        recent: false,
         id: format!("hayai:{title}"),
         title: title.into(),
         subtitle: Some("Hayai".into()),
@@ -540,6 +542,37 @@ pub(crate) fn hayai_commands(query: &str) -> Vec<CommandItem> {
 #[cfg(test)]
 mod tests {
     use super::fuzzy_score;
+
+    #[test]
+    fn recent_apps_lead_the_complete_catalog_only_on_entry() {
+        use super::*;
+        let catalog = Rc::new(RefCell::new(Catalog {
+            apps: ["Alpha", "Beta"]
+                .into_iter()
+                .map(|name| AppEntry {
+                    name: name.into(),
+                    name_lower: name.to_lowercase(),
+                    path: name.into(),
+                })
+                .collect(),
+            icons: Default::default(),
+            icon_recency: Default::default(),
+            recents: vec!["missing".into(), "Beta".into()],
+        }));
+        let provider = AppsProvider::new(catalog.clone());
+        let entry = provider.search("");
+        assert_eq!(
+            entry
+                .iter()
+                .filter(|item| matches!(item.action, CommandAction::LaunchApplication(_)))
+                .map(|item| (item.title.as_str(), item.recent))
+                .collect::<Vec<_>>(),
+            [("Beta", true), ("Alpha", false)]
+        );
+        assert!(provider.search("beta").iter().all(|item| !item.recent));
+        catalog.borrow_mut().clear_recents();
+        assert!(provider.search("").iter().all(|item| !item.recent));
+    }
 
     #[test]
     fn icon_cache_bounds_failures_and_preserves_pending_and_recent_entries() {

@@ -21,14 +21,35 @@ pub(super) fn section_header_entry(previous_sections: impl Iterator<Item = usize
         .sum()
 }
 
-pub(super) fn result_index_path(flat: usize, main: usize, total: usize) -> IndexPath {
-    // An empty list still measures section one, where future file results go.
-    // Section two exists only when there are actual Hayai command results.
+pub(super) fn result_index_path(
+    flat: usize,
+    recent: usize,
+    main: usize,
+    total: usize,
+) -> IndexPath {
+    if flat < recent {
+        return IndexPath {
+            section: 1,
+            row: flat,
+            ..Default::default()
+        };
+    }
+    // Keep a valid measurement section even while async results are empty.
     let secondary = flat >= main && main < total;
     IndexPath {
-        section: 1 + usize::from(secondary),
-        row: if secondary { flat - main } else { flat },
+        section: 1 + usize::from(recent > 0) + usize::from(secondary),
+        row: flat - if secondary { main } else { recent },
         ..Default::default()
+    }
+}
+
+pub(super) fn result_flat_index(ix: IndexPath, recent: usize, main: usize) -> usize {
+    if recent > 0 && ix.section == 1 {
+        ix.row
+    } else if ix.section == 1 + usize::from(recent > 0) {
+        recent + ix.row
+    } else {
+        main + ix.row
     }
 }
 
@@ -82,6 +103,7 @@ pub(super) struct ResultListDelegate {
     pub(super) scry_discovery: Option<crate::scry_updates::Discovery>,
     pub(super) scry_message: String,
     pub(super) main_results: usize,
+    pub(super) recent_results: usize,
     pub(super) update_dismissed: bool,
     pub(super) checking_update: bool,
     pub(super) update_message: Option<&'static str>,
@@ -238,23 +260,24 @@ impl ResultListDelegate {
     }
 
     fn main_count(&self) -> usize {
-        self.main_results
+        self.main_results - self.recent_results
     }
     fn section_offset(&self) -> usize {
         // Reserve section zero even when empty. An update arriving or being
         // dismissed must not change the indexes of already-selected results.
-        1
+        1 + usize::from(self.recent_results > 0)
     }
     pub(super) fn flat_index(&self, ix: IndexPath) -> usize {
         // Notifications are a separate first section, not part of results.
-        if ix.section == self.section_offset() {
-            ix.row
-        } else {
-            self.main_count() + ix.row
-        }
+        result_flat_index(ix, self.recent_results, self.main_results)
     }
     pub(super) fn index_path(&self, flat: usize) -> IndexPath {
-        result_index_path(flat, self.main_count(), self.results.len())
+        result_index_path(
+            flat,
+            self.recent_results,
+            self.main_results,
+            self.results.len(),
+        )
     }
     pub(super) fn item(&self, ix: IndexPath) -> Option<&CommandItem> {
         if ix.section == 0 {
@@ -292,6 +315,7 @@ impl ResultListDelegate {
             scry_discovery: None,
             scry_message: String::new(),
             main_results,
+            recent_results: results.iter().take_while(|item| item.recent).count(),
             notification_selected: crate::updates::available_version().is_some(),
             update_dismissed: false,
             checking_update: false,
@@ -336,6 +360,7 @@ impl ResultListDelegate {
             .iter()
             .position(|item| is_hayai_action(&item.action))
             .unwrap_or(items.len());
+        self.recent_results = items.iter().take_while(|item| item.recent).count();
         self.results = items;
         if self.file_search
             && self.results.iter().any(|item| {
@@ -417,7 +442,7 @@ impl ListDelegate for ResultListDelegate {
 
     fn sections_count(&self, _cx: &App) -> usize {
         self.section_offset()
-            + if self.main_count() < self.results.len() {
+            + if self.main_results < self.results.len() {
                 2
             } else {
                 1
@@ -427,10 +452,12 @@ impl ListDelegate for ResultListDelegate {
         if section == 0 {
             return self.notification_count();
         }
-        if section == self.section_offset() {
+        if self.recent_results > 0 && section == 1 {
+            self.recent_results
+        } else if section == self.section_offset() {
             self.main_count()
         } else {
-            self.results.len() - self.main_count()
+            self.results.len() - self.main_results
         }
     }
     fn render_section_header(

@@ -9,6 +9,8 @@ impl ResultListDelegate {
     ) -> Option<impl IntoElement> {
         let label = if self.notification_visible() && section == 0 {
             text::headings::NOTIFICATIONS
+        } else if self.recent_results > 0 && section == 1 {
+            text::headings::RECENT
         } else if section == self.section_offset() + 1 {
             text::headings::HAYAI
         } else if self.apps_view {

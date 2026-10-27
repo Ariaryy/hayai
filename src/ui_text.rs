@@ -124,6 +124,7 @@ pub mod updates {
 pub mod headings {
     pub const NOTIFICATIONS: &str = "Notifications";
     pub const HAYAI: &str = "Hayai";
+    pub const RECENT: &str = "Recent";
     pub const APPLICATIONS: &str = "Applications";
     pub const FILES: &str = "Files";
     pub const CALCULATOR: &str = "Calculator";
@@ -249,8 +250,7 @@ pub mod settings {
     pub const SEARCH_SUBFOLDERS_HELP: &str =
         "Search inside nested folders when you enter a query within a folder.";
     pub const SHOW_FILE_RECENTS: &str = "Show recent files on entry";
-    pub const SHOW_FILE_RECENTS_HELP: &str =
-        "Start with recent files. Otherwise, or when history is empty, show your home folder.";
+    pub const SHOW_FILE_RECENTS_HELP: &str = "Show recent files above your home folder contents.";
     pub const FOLDERS_FIRST: &str = "Folders first";
     pub const FOLDERS_FIRST_HELP: &str =
         "List folders before files when browsing. Search results keep their relevance order.";

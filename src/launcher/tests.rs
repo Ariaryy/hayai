@@ -58,6 +58,7 @@ fn wheel_scroll_gui_smoke() {
         fn search(&self, _: &str) -> Vec<CommandItem> {
             (0..200)
                 .map(|i| CommandItem {
+                    recent: false,
                     id: format!("smoke:{i}"),
                     title: format!("Smoke row {i}"),
                     subtitle: None,
@@ -384,12 +385,35 @@ fn row_icon_prefilter_averages_fine_details_at_physical_size() {
 }
 
 #[test]
+fn recent_sections_preserve_flat_navigation_and_hayai_results() {
+    for (recent, main, total) in [
+        (0, 0, 0),
+        (0, 4, 7),
+        (1, 4, 7),
+        (4, 4, 7),
+        (1, 4, 4),
+        (1, 1, 1),
+    ] {
+        for flat in 0..total {
+            let ix = super::result_index_path(flat, recent, main, total);
+            assert_eq!(super::result_flat_index(ix, recent, main), flat);
+            let expected = if flat < recent {
+                1
+            } else {
+                1 + usize::from(recent > 0) + usize::from(flat >= main)
+            };
+            assert_eq!(ix.section, expected);
+        }
+    }
+}
+
+#[test]
 fn empty_results_keep_a_valid_measurement_section_when_search_is_cleared() {
     for (main, total, section) in [(0, 0, 1), (5, 5, 1), (0, 2, 2), (5, 7, 1)] {
-        assert_eq!(super::result_index_path(0, main, total).section, section);
+        assert_eq!(super::result_index_path(0, 0, main, total).section, section);
     }
-    assert_eq!(super::result_index_path(5, 5, 7).section, 2);
-    assert_eq!(super::result_index_path(5, 5, 7).row, 0);
+    assert_eq!(super::result_index_path(5, 0, 5, 7).section, 2);
+    assert_eq!(super::result_index_path(5, 0, 5, 7).row, 0);
 }
 
 #[test]
@@ -497,6 +521,7 @@ fn notification_progress_is_status_not_an_action() {
 fn scry_readiness_accepts_empty_searches_but_not_setup_prompts() {
     use crate::commands::{CommandAction, CommandItem, IconSource};
     let item = |action| CommandItem {
+        recent: false,
         id: "readiness-test".into(),
         title: String::new(),
         subtitle: None,
@@ -730,6 +755,7 @@ fn displays_timezone_abbreviations_in_uppercase() {
 fn empty_notices_are_not_selectable_results_and_recovery_clears_them() {
     use super::{CommandAction, CommandItem, IconSource, take_empty_state};
     let notice = CommandItem {
+        recent: false,
         id: "calc:error".into(),
         title: "Invalid expression".into(),
         subtitle: None,
@@ -746,6 +772,7 @@ fn empty_notices_are_not_selectable_results_and_recovery_clears_them() {
     assert!(items.is_empty());
     assert!(take_empty_state(&mut items).is_none());
     items.push(CommandItem {
+        recent: false,
         id: "calc:2+2".into(),
         title: "4".into(),
         subtitle: None,

@@ -130,6 +130,7 @@ fn is_noisy_path(path: &Path, query: &str) -> bool {
 
 fn path_to_item(path: &Path) -> CommandItem {
     CommandItem {
+        recent: false,
         id: path.to_string_lossy().into_owned(),
         title: path
             .file_name()
@@ -143,8 +144,8 @@ fn path_to_item(path: &Path) -> CommandItem {
     }
 }
 
-/// Listing of the user's home folder, used as the file-mode empty-query
-/// fallback when there's no recents history, or recents are hidden. All local
+/// Listing of the user's home folder, displayed after recent entries on
+/// file-mode entry, or on its own when recents are hidden. All local
 /// directory reads and metadata checks run in the provider's background job.
 fn directory_listing(dir: &Path, query: &str, options: FileSearch) -> Vec<CommandItem> {
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -173,6 +174,26 @@ fn directory_listing(dir: &Path, query: &str, options: FileSearch) -> Vec<Comman
     });
     paths.truncate(MAX_RESULTS as usize);
     paths.iter().map(|path| path_to_item(path)).collect()
+}
+
+fn recent_item(path: &Path) -> CommandItem {
+    CommandItem {
+        recent: true,
+        ..path_to_item(path)
+    }
+}
+
+fn entry_results(recents: &[PathBuf], listing: Vec<CommandItem>) -> Vec<CommandItem> {
+    let mut seen = std::collections::HashSet::with_capacity(recents.len());
+    let mut items: Vec<_> = recents
+        .iter()
+        .filter(|path| path.exists() && seen.insert((*path).clone()))
+        .map(|path| recent_item(path))
+        .collect();
+    items.extend(listing.into_iter().filter(
+        |item| !matches!(&item.action, CommandAction::OpenFile(path) if seen.contains(path)),
+    ));
+    items
 }
 
 fn home_dir_listing(options: FileSearch) -> Vec<CommandItem> {
@@ -257,7 +278,7 @@ impl CommandProvider for FileSearchProvider {
             .borrow()
             .recents()
             .iter()
-            .map(|path| path_to_item(path))
+            .map(|path| recent_item(path))
             .collect()
     }
 
@@ -288,6 +309,7 @@ impl CommandProvider for FileSearchProvider {
         Some(Box::new(move || {
             if crate::scry_updates::is_updating() {
                 return vec![CommandItem {
+                    recent: false,
                     id: "files:compatibility:updating".into(),
                     title: "Updating Scry Search".into(),
                     subtitle: Some(
@@ -307,16 +329,7 @@ impl CommandProvider for FileSearchProvider {
                 return vec![unavailable_item()];
             }
             if let Some(recents) = empty_recents {
-                let items: Vec<_> = recents
-                    .iter()
-                    .filter(|path| path.exists())
-                    .map(|path| path_to_item(path))
-                    .collect();
-                return if items.is_empty() {
-                    home_dir_listing(options)
-                } else {
-                    items
-                };
+                return entry_results(&recents, home_dir_listing(options));
             }
             if let Some(dir) = browse_dir {
                 return directory_listing(&dir, &query, options);
@@ -348,6 +361,7 @@ impl CommandProvider for FileSearchProvider {
                             let parent_str = hit.parent.to_string_lossy();
                             let subtitle = parent_str.into_owned();
                             CommandItem {
+                                recent: false,
                                 id: full_path.to_string_lossy().into_owned(),
                                 title: hit.name,
                                 subtitle: Some(subtitle),
@@ -371,6 +385,7 @@ impl CommandProvider for FileSearchProvider {
 fn unavailable_item() -> CommandItem {
     let installed = native::scry_is_installed();
     CommandItem {
+        recent: false,
         id: "files:compatibility:unavailable".into(),
         title: if installed {
             "Scry Search is unavailable"
@@ -414,6 +429,7 @@ fn compatibility_item(status: crate::scry::Compatibility) -> Option<CommandItem>
         ),
     };
     Some(CommandItem {
+        recent: false,
         id: id.into(),
         title: title.into(),
         subtitle: Some(description.into()),
@@ -431,6 +447,32 @@ fn compatibility_item(status: crate::scry::Compatibility) -> Option<CommandItem>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn entry_recents_do_not_replace_the_home_listing() {
+        let root = std::env::temp_dir().join(format!("hayai-entry-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let recent = root.join("recent.txt");
+        let other = root.join("other.txt");
+        std::fs::write(&recent, "").unwrap();
+        std::fs::write(&other, "").unwrap();
+        let items = entry_results(
+            &[recent.clone(), root.join("missing.txt")],
+            vec![path_to_item(&other), path_to_item(&recent)],
+        );
+        assert!(items[0].recent);
+        assert!(!items[1].recent);
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            [recent.to_str().unwrap(), other.to_str().unwrap()]
+        );
+        std::fs::remove_file(recent).unwrap();
+        std::fs::remove_file(other).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
 
     #[test]
     fn immediate_preview_preserves_in_memory_recents_without_disk_validation() {

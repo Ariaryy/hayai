@@ -175,6 +175,7 @@ mod tests {
         fn search(&self, query: &str) -> Vec<CommandItem> {
             self.queries.borrow_mut().push(query.to_string());
             vec![CommandItem {
+                recent: false,
                 id: "fake".into(),
                 title: query.to_string(),
                 subtitle: None,
@@ -216,6 +217,7 @@ mod tests {
             let query = query.to_string();
             Some(Box::new(move || {
                 vec![CommandItem {
+                    recent: false,
                     id: "fake-debounced".into(),
                     title: query,
                     subtitle: None,

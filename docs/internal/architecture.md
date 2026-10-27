@@ -61,6 +61,12 @@ Hidden file searches are invalidated without starting replacement I/O; other
 providers keep their in-flight queries. Registry borrows end before window or
 entity updates, which can re-enter GPUI.
 
+Providers mark empty-query recents as a contiguous prefix. The result delegate
+keeps Recent, main results and Hayai commands as sections of one flat result
+set, so headings never consume selection or action indexes. File-mode entry
+merges validated recents with the home listing and removes duplicate paths;
+scoped browsing and typed searches do not add a recent section.
+
 Recent-item persistence captures a generation before queueing background writes.
 Disabling or clearing history advances that generation and pauses recording;
 a worker-only disk lock orders deletion against writes already in progress.

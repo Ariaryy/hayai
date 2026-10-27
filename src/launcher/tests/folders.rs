@@ -26,6 +26,7 @@ pub(super) async fn check(
                     delegate.results_generation = generation;
                     delegate.search_pending = false;
                     delegate.results = vec![CommandItem {
+                        recent: false,
                         id: "folder-footer:child".into(),
                         title: "child".into(),
                         subtitle: None,
@@ -35,6 +36,7 @@ pub(super) async fn check(
                         action: CommandAction::OpenFile(child.clone()),
                     }];
                     delegate.main_results = 1;
+                    delegate.recent_results = 0;
                     delegate.selected_index = Some(delegate.index_path(0));
                     refresh_result_layout(list, window, cx);
                 });

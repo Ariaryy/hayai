@@ -21,6 +21,7 @@ yet included in a published package.
 
 ### Launcher
 
+- Group recent apps and files under Recent, followed by the remaining Applications or home-folder Files without duplicates.
 - Actions is available at the bottom right in every launcher view, dimmed when unavailable. Menus and keycaps use the active theme.
 - Fix footer flicker when navigating between folders, and ignore repeated Tab presses while folder results load.
 - Exclude non-interactive update progress labels from action menus; dismissal and diagnostics remain available.
