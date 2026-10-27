@@ -42,6 +42,7 @@ pub mod actions {
 pub mod search {
     pub const FILES_PLACEHOLDER: &str = "Search files...";
     pub const CALCULATOR_PLACEHOLDER: &str = "Calculate…";
+    pub const CALCULATOR_START: &str = "Type an expression to calculate.";
     pub const EXIT_CALCULATOR: &str = "Exit calculator";
     pub const APPS_PLACEHOLDER: &str = "Search apps or calculate...";
     pub const FOLDER_PLACEHOLDER: &str = "Search this folder...";

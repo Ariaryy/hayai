@@ -86,6 +86,11 @@ impl LauncherRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let previous_picker = ((self.waiting_for_command
+            && crate::settings::preferences(cx).show_command_picker)
+            || self.pending_picker.is_some())
+        .then(|| self.picker_commands(cx));
+        self.pending_picker = None;
         self.cancel_wheel_animation();
         self.action_menu = None;
         match command {
@@ -110,10 +115,17 @@ impl LauncherRoot {
                 cx.defer(crate::settings::open);
             }
         }
+        let delegate = self.list.read(cx).delegate();
+        if delegate.search_pending && delegate.results.is_empty() {
+            self.pending_picker = previous_picker;
+        }
     }
 
     /// Commands the picker lists for the text typed so far.
     pub(super) fn picker_commands(&self, cx: &App) -> Vec<Command> {
+        if let Some(commands) = &self.pending_picker {
+            return commands.clone();
+        }
         let aliases = &crate::settings::preferences(cx).commands;
         let typed = self.search_input.read(cx).value().to_ascii_lowercase();
         Command::ALL

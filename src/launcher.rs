@@ -131,6 +131,9 @@ struct LauncherRoot {
     waiting_for_command: bool,
     /// Highlighted row of the command picker; reset whenever the typed text changes.
     picker_selected: usize,
+    /// At most three command identities, retained only until the destination
+    /// has content. Never paint an empty async list between the two views.
+    pending_picker: Option<Vec<crate::command_router::Command>>,
     /// File mode reconstructs its provider prefix outside the visible input.
     file_mode: bool,
     /// Hold presentation through folder navigation, without copying results.
@@ -169,6 +172,9 @@ impl LauncherRoot {
                 let delegate = list.read(cx).delegate();
                 let return_to_apps =
                     delegate.scry_installing && (this.file_mode || delegate.show_scry_updates);
+                if !delegate.search_pending || !delegate.results.is_empty() {
+                    this.pending_picker = None;
+                }
                 if return_to_apps {
                     this.reset_to_apps(window, cx);
                 }
@@ -185,6 +191,7 @@ impl LauncherRoot {
             search_input,
             waiting_for_command: false,
             picker_selected: 0,
+            pending_picker: None,
             file_mode: false,
             pending_folder_footer: None,
             calculator_mode: false,
@@ -214,6 +221,7 @@ impl LauncherRoot {
     }
 
     fn enter_file_mode(&mut self, raw: &str, window: &mut Window, cx: &mut Context<Self>) {
+        self.pending_picker = None;
         self.pending_folder_footer = None;
         self.waiting_for_command = false;
         self.calculator_mode = false;
@@ -247,6 +255,7 @@ impl LauncherRoot {
         self.history_cursor = None;
         self.waiting_for_command = false;
         self.file_mode = false;
+        self.pending_picker = None;
         self.pending_folder_footer = None;
         self.calculator_mode = false;
         self.folder_scope.clear();

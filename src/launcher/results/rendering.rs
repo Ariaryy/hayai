@@ -39,6 +39,13 @@ impl ResultListDelegate {
         if self.search_pending {
             return div().size_full();
         }
+        if self.calculator_view() && self.empty_state.is_none() {
+            return super::super::components::empty_screen(
+                icon_assets::CALCULATOR,
+                text::search::CALCULATOR_START,
+                cx,
+            );
+        }
         let icon = if self
             .empty_state
             .as_ref()

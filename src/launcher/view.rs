@@ -12,7 +12,11 @@ impl gpui::Render for LauncherRoot {
         let delegate = self.list.read(cx).delegate();
         let about = delegate.show_about;
         let empty_notice = delegate.empty_state.is_some();
-        let showing_picker = self.waiting_for_command && crate::settings::preferences(cx).show_command_picker;
+        let showing_picker = crate::settings::preferences(cx).show_command_picker
+            && (self.waiting_for_command
+                || (self.pending_picker.is_some()
+                    && delegate.search_pending
+                    && delegate.results.is_empty()));
         // Compatibility results and explicit update navigation share one page.
         // A query refresh must not briefly expose the older setup renderer.
         let scry_page = delegate.show_scry_updates || delegate.needs_pinned_scry();
