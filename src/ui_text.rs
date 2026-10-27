@@ -144,9 +144,6 @@ pub mod keys {
 pub mod settings {
     pub const COMMANDS: &str = "Commands";
     pub const ALIASES: &str = "Aliases";
-    pub const ALIASES_HELP: &str =
-        "Separate aliases with commas. Changes save on Enter or when you leave the field.";
-    pub const ROUTING_HELP: &str = "Press Space in the launcher, then type the shown trigger. Shared initials wait for the next distinguishing letter; Enter is not needed.";
     pub const ALIAS_LIMIT: &str = "Use between one and eight aliases per command.";
     pub const ALIAS_FORMAT: &str =
         "Use letters, numbers or hyphens, starting with a letter (up to 32 characters), or =.";

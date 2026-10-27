@@ -72,10 +72,7 @@ impl SettingsView {
     }
 
     pub(super) fn commands_page(&self, cx: &Context<Self>) -> gpui::AnyElement {
-        let mut body = page(self.page)
-            .child(section(text::COMMANDS))
-            .child(description(text::ROUTING_HELP, cx))
-            .child(description(text::ALIASES_HELP, cx));
+        let mut body = page(self.page).child(section(text::COMMANDS));
         let Some(editor) = &self.alias_editor else {
             return body.into_any_element();
         };

@@ -7,7 +7,7 @@ yet included in a published package.
 
 ### Settings
 
-- Configure command aliases in Settings → Commands. Space opens a command picker; file search, calculator and settings activate at their shortest distinguishing prefix without Enter. Conflicting aliases are rejected, and triggers are shown beside each command.
+- Configure command aliases in Settings → Commands, using the same layout as other settings pages. Space opens a command picker; file search, calculator and settings activate at their shortest distinguishing prefix without Enter. Conflicting aliases are rejected, and triggers are shown beside each command.
 - Keep settings scrolling responsive in development builds by optimizing the rendering and layout dependencies.
 - General settings control Windows login startup, launcher display, recent-item history, and automatic update checking/downloading. Turning history off clears saved recents; queued writes cannot restore them. Display placement uses a dropdown and on/off settings use themed toggles. Controls retain their state while changes save.
 - Open Settings from the Hayai group in its own resizable window, with a themed titlebar, sidebar navigation, and About pinned at the bottom.
