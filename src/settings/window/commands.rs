@@ -147,7 +147,11 @@ impl SettingsView {
             .rounded(px(6.0))
             .bg(palette.keycap)
             .when_some(conflict, |chip, message| {
-                chip.child(components::conflict_glyph(("alias-conflict", id), message))
+                chip.child(components::conflict_glyph(
+                    ("alias-conflict", id),
+                    message,
+                    cx,
+                ))
             })
             .child(alias.to_owned())
             .child(
@@ -231,6 +235,7 @@ impl SettingsView {
                             .child(components::conflict_slot(
                                 ("trigger-conflict", command as usize),
                                 conflict_message(routes, command, routes.trigger(command)),
+                                cx,
                             ))
                             .child(components::key_badge("space", cx))
                             .child(
@@ -284,7 +289,7 @@ impl SettingsView {
                         column.child(
                             div()
                                 .text_size(px(12.0))
-                                .text_color(palette.accent)
+                                .text_color(palette.danger)
                                 .child(message),
                         )
                     }),

@@ -66,6 +66,7 @@ impl SettingsView {
                         preferences(cx)
                             .binding_conflict(action)
                             .map(|other| text::shortcut_conflict(action, other)),
+                        cx,
                     ))
                     .child(
                         div()
@@ -117,7 +118,7 @@ impl SettingsView {
                             .px_4()
                             .pb_3()
                             .text_size(px(12.0))
-                            .text_color(palette.accent)
+                            .text_color(palette.danger)
                             .child(error),
                     )
                 })

@@ -71,7 +71,7 @@ impl Default for Preferences {
             light: false,
             general: super::General::default(),
             commands: crate::command_router::Aliases::default(),
-            show_command_picker: false,
+            show_command_picker: true,
             light_theme: crate::theme::ThemeFamily::default(),
             dark_theme: crate::theme::ThemeFamily::default(),
             bindings: Shortcut::ALL.map(|action| Binding::parse(action.default_key()).unwrap()),
@@ -208,7 +208,7 @@ impl Preferences {
             general: super::General::parse(&json["general"])?,
             commands: crate::command_router::Aliases::parse(&json["commands"])?,
             show_command_picker: match json["show_command_picker"] {
-                serde_json::Value::Null => false,
+                serde_json::Value::Null => true,
                 serde_json::Value::Bool(show) => show,
                 _ => anyhow::bail!("Invalid command picker visibility"),
             },
@@ -373,13 +373,13 @@ mod tests {
     #[test]
     fn command_picker_visibility_is_persisted() {
         assert!(
-            !Preferences::parse(r#"{"version":1}"#)
+            Preferences::parse(r#"{"version":1}"#)
                 .unwrap()
                 .show_command_picker
         );
-        let prefs = Preferences::parse(r#"{"version":1,"show_command_picker":true}"#).unwrap();
+        let prefs = Preferences::parse(r#"{"version":1,"show_command_picker":false}"#).unwrap();
         let saved: serde_json::Value = serde_json::from_str(&prefs.encode()).unwrap();
-        assert_eq!(saved["show_command_picker"], true);
+        assert_eq!(saved["show_command_picker"], false);
         assert!(Preferences::parse(r#"{"version":1,"show_command_picker":"false"}"#).is_err());
     }
 

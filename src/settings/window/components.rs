@@ -103,9 +103,11 @@ pub fn trigger_badge(trigger: &str, cx: &App) -> impl IntoElement + use<> {
     key_badge(trigger, cx)
 }
 
-const WARNING_COLOR: u32 = 0xf59e0b;
-
-fn warning_glyph(id: impl Into<gpui::ElementId>, message: String) -> gpui::Stateful<gpui::Div> {
+fn warning_glyph(
+    id: impl Into<gpui::ElementId>,
+    message: String,
+    cx: &App,
+) -> gpui::Stateful<gpui::Div> {
     let message = gpui::SharedString::from(message);
     div()
         .id(id)
@@ -115,7 +117,7 @@ fn warning_glyph(id: impl Into<gpui::ElementId>, message: String) -> gpui::State
             svg()
                 .path(icons::WARNING)
                 .size(px(16.0))
-                .text_color(gpui::rgb(WARNING_COLOR)),
+                .text_color(crate::theme::settings_palette(cx).warning),
         )
         .tooltip(move |window, cx| {
             let message = message.clone();
@@ -133,18 +135,23 @@ fn warning_glyph(id: impl Into<gpui::ElementId>, message: String) -> gpui::State
 pub(super) fn conflict_slot(
     id: impl Into<gpui::ElementId>,
     message: Option<String>,
+    cx: &App,
 ) -> impl IntoElement {
     div()
         .flex_none()
         .size(px(16.0))
         .when_some(message, |slot, message| {
-            slot.child(warning_glyph(id, message))
+            slot.child(warning_glyph(id, message, cx))
         })
 }
 
 /// The same glyph for items that are not reserved a slot, such as alias chips.
-pub(super) fn conflict_glyph(id: impl Into<gpui::ElementId>, message: String) -> impl IntoElement {
-    warning_glyph(id, message)
+pub(super) fn conflict_glyph(
+    id: impl Into<gpui::ElementId>,
+    message: String,
+    cx: &App,
+) -> impl IntoElement {
+    warning_glyph(id, message, cx)
 }
 
 pub(super) fn key_badge(key: &str, cx: &App) -> impl IntoElement + use<> {
