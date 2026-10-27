@@ -9,6 +9,7 @@ yet included in a published package.
 
 - Open Settings from the Hayai group in a separate resizable window, with a themed titlebar, sidebar navigation and About pinned at the bottom.
 - Configure Windows login startup, launcher display placement, recent-item history and automatic update checking/downloading. Preferences save automatically and persist between launches.
+- Configure file-search entry recents, build/cache-folder filtering, scoped subfolder searches and folders-first browsing. The page includes Scry Search information and its setup guide.
 - Record and reset shortcuts for opening Hayai, the action panel, file search and settings. Conflicts appear beside the affected bindings with an explanation.
 - Browse third-party artwork and theme notices in About, with full license texts and source links. Packaged releases include these notices.
 

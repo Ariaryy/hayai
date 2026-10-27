@@ -245,14 +245,6 @@ pub fn keycap_icon(path: &'static str, size: f32, height: f32, cx: &App) -> gpui
     )
 }
 
-/// `Space` followed by a command's trigger, as the launcher shows it.
-pub(super) fn trigger_keys(trigger: &str, cx: &App) -> impl IntoElement + use<> {
-    h_flex()
-        .gap_1()
-        .child(key_badge("space", cx))
-        .child(key_badge(trigger, cx))
-}
-
 pub(super) fn key_badge(key: &str, cx: &App) -> impl IntoElement + use<> {
     let label: &str = match key {
         "ctrl" => "Ctrl",

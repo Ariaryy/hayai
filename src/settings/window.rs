@@ -10,6 +10,7 @@ use gpui_component::{Root, TitleBar, h_flex};
 mod appearance;
 mod commands;
 mod components;
+mod file_search;
 mod general;
 mod keybindings;
 mod licenses;

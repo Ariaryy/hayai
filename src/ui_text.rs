@@ -240,11 +240,20 @@ pub mod settings {
         "File search is powered by Scry Search, using its Windows index.";
     pub const FILE_GUIDE: &str = "File search setup and search syntax";
     pub const GUIDE: &str = "Setup guide";
-    pub const OPEN_FILE_SEARCH: &str = "Open file search";
-    pub const SHORTCUT: &str = "Shortcut";
-    pub const SHORTCUT_HELP: &str =
-        "Press it while the launcher is focused. Change it in Key bindings.";
-    pub const COMMAND_HELP: &str = "Type it after pressing Space. Change it in Commands.";
+    pub const FILE_FILTERING: &str = "Search behavior";
+    pub const FILE_BROWSING: &str = "Browsing";
+    pub const HIDE_NOISY_FOLDERS: &str = "Hide build and cache folders";
+    pub const HIDE_NOISY_FOLDERS_HELP: &str =
+        "Hide folders such as node_modules and .git unless named in your query.";
+    pub const SEARCH_SUBFOLDERS: &str = "Search subfolders";
+    pub const SEARCH_SUBFOLDERS_HELP: &str =
+        "Search inside nested folders when you enter a query within a folder.";
+    pub const SHOW_FILE_RECENTS: &str = "Show recent files on entry";
+    pub const SHOW_FILE_RECENTS_HELP: &str =
+        "Start with recent files. Otherwise, or when history is empty, show your home folder.";
+    pub const FOLDERS_FIRST: &str = "Folders first";
+    pub const FOLDERS_FIRST_HELP: &str =
+        "List folders before files when browsing. Search results keep their relevance order.";
     pub const MODIFIER_REQUIRED: &str = "Include Ctrl, Alt or Win so typing keeps working.";
     pub const RESERVED_KEY: &str =
         "This key is reserved for editing, navigation or closing windows.";
