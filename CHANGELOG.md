@@ -5,6 +5,8 @@ yet included in a published package.
 
 ## Unreleased
 
+## 0.2.0 - 2026-10-27
+
 ### Settings
 
 - Open Settings from the Hayai group in a separate resizable window, with a themed titlebar, sidebar navigation and About pinned at the bottom.
