@@ -19,9 +19,8 @@
 
 </div>
 
-Hayai brings app launching, indexed file search, and a
-calculator to a lightweight native window. Press `Alt+Space` from
-anywhere to get started; dismiss it back to the tray when you're done.
+Hayai brings app launching, indexed file search, and a calculator to a
+lightweight native window. Press `Alt+Space` from anywhere to get started.
 
 The name comes from 速い (*hayai*), Japanese for "fast."
 
@@ -29,15 +28,14 @@ The name comes from 速い (*hayai*), Japanese for "fast."
 
 | Feature | What you can do |
 | --- | --- |
-| App search | Fuzzy-search Start Menu shortcuts and packaged Microsoft Store apps. Recent launches appear first when the query is empty. |
-| File search | Search files through the first-party [Scry Search](https://github.com/Ariaryy/scry-search) index and its persistent Windows daemon. |
-| Calculator | Evaluate arithmetic, convert units and temperatures, use live currency rates, convert number bases, and work with clocks, timezones, and relative dates. |
-| Contextual actions | Open a result, reveal it in Explorer, copy its path, or run it as administrator where supported. |
-| Search history | Recall previous searches and calculations with `Up` when the query is empty. |
+| App search | Find and launch desktop and Microsoft Store apps. |
+| File search | Find files with the first-party [Scry Search](https://github.com/Ariaryy/scry-search) index. |
+| Calculator | Do arithmetic, convert units and currencies, and work with timezones and dates. |
+| Contextual actions | Reveal files in Explorer, copy paths, or launch apps as administrator. |
+| Customization | Choose your themes, keyboard shortcuts, command aliases and launcher preferences. |
 
-Hayai uses native Windows facilities for hotkeys, the tray, app discovery,
-icons, and focus handling. It has no browser runtime. Dismissing the window
-keeps it in the tray, ready to reopen without relaunching or rescanning.
+Hayai is built with Rust and GPUI, with no browser runtime. It stays in the
+tray between searches, ready when you need it.
 
 ## Install
 
@@ -46,88 +44,50 @@ Download the latest installer or portable ZIP from
 
 | Package | Setup |
 | --- | --- |
-| Installer | Installs Hayai, starts it at login, and bundles the matching Scry Search daemon and setup scripts. |
-| Portable ZIP | Extract the archive and run `hayai.exe`. No shortcuts or launch-at-login entry are installed. |
+| Installer | Install Hayai with the matching Scry Search package. |
+| Portable ZIP | Extract the archive and run `hayai.exe`. |
 
-App search and the calculator work without elevation. When you enter file
-mode, Hayai prompts you to install Scry Search if its daemon is not already
-running in the background. Select the installation action and press `Enter`;
-Windows requests elevation to install and start the per-user daemon.
+App search and the calculator work immediately. File search uses Scry Search;
+Hayai guides you through its setup, which requires Windows administrator approval.
 
 Hayai is not code-signed yet, so Windows SmartScreen may warn about downloaded
-builds. Verify that the file came from this repository's Releases page and, if
-needed, compare its SHA-256 hash with the included `SHA256SUMS.txt` before
-choosing **Run anyway**.
+builds. Use this repository's Releases page and verify downloads against the
+included `SHA256SUMS.txt`.
 
-The [installation guide](docs/users/install.md) covers upgrades, removal,
-portable use, and source builds.
+See the [installation guide](docs/users/install.md) for setup, upgrades and removal.
 
-## Usage
+## Try it
 
-### Search apps and calculate
-
-Type an app name to search applications. Calculator expressions are recognized
-automatically. Use `Up` and `Down` to select a result, then press `Enter` to
-launch an app or copy a calculator value.
-
-### Search files
-
-Press `Space`, then type `f` to enter file mode. The leading space activates
-Hayai's command router; ordinary queries continue to search apps or calculate.
-
-### Examples
-
-In these examples, `␠` represents a literal leading space. Do not type the
-`␠` symbol itself.
+Press `Alt+Space`, then type an app name or a calculation:
 
 ```text
 discord
-␠f annual report ext:pdf
 15 km to miles
 100 usd to inr
 3pm est to ist
 5 days from now
 ```
 
-See the [usage guide](docs/users/usage.md),
-[file-search guide](docs/users/file-search.md), and
-[action reference](docs/users/actions.md) for details.
+Press `Space`, then `f` to search files. Select a result with the arrow keys
+and press `Enter`, or open its actions with `Ctrl+K`.
 
-### Shortcuts
+Read the [user guide](docs/users/usage.md),
+[file-search guide](docs/users/file-search.md) and
+[action reference](docs/users/actions.md) for more.
 
-| Action | Shortcut |
-| --- | --- |
-| Open or toggle Hayai | `Alt+Space` |
-| Move selection | `Up` / `Down` |
-| Run the selected result | `Enter` |
-| Open contextual actions | `Ctrl+K` |
-| Dismiss actions or Hayai | `Esc` |
-| Toggle from the tray | Left-click the tray icon |
-| Open the Toggle/Quit tray menu | Right-click the tray icon |
+## Make it yours
 
-Press `Esc` or focus another window to return Hayai to the tray. When the
-action panel is open, `Up`, `Down`, and `Enter` apply to its actions, and
-`Esc` closes the panel first.
+Choose light and dark themes from Hayai, One Dark/One Light, Catppuccin,
+Tokyo Night and Gruvbox. Set your own shortcuts and command aliases, and
+choose how Hayai fits into your workflow.
+
+Open Settings with `Ctrl+,` while Hayai is focused.
 
 ## Development
 
-Installed Windows releases download stable updates in the background and apply
-them on request through a silent restart. Portable and development builds do not
-automatically update.
-
-Hayai keeps rendering and input on the UI thread. Native Windows work, Scry
-queries, currency refreshes, and icon decoding run outside the render path.
-A small `CommandProvider` registry connects app search, files, and the
-calculator to the launcher.
-
-Read the [architecture overview](docs/internal/architecture.md) and `AGENTS.md`
-before changing GPUI window lifecycle, focus, input propagation, or Win32 code.
-These areas depend on specific ordering and re-entrancy rules.
-
-For source-build instructions, see the
-[installation guide](docs/users/install.md). The
-[contribution guide](CONTRIBUTING.md) lists formatting, Clippy, tests, manual
-launcher checks, and the resource measurements required for runtime changes.
+For source builds, see the [installation guide](docs/users/install.md).
+The [architecture overview](docs/internal/architecture.md) explains the native
+runtime, search providers and window lifecycle.
 
 ## Contributing
 
@@ -137,4 +97,5 @@ issues as described in [SECURITY.md](SECURITY.md).
 
 ## License
 
-Hayai is available under the [MIT License](LICENSE).
+Hayai is available under the [MIT License](LICENSE). Bundled artwork and theme
+palettes retain their original licenses, listed in [third-party notices](THIRD_PARTY_NOTICES).
