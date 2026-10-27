@@ -41,9 +41,12 @@ pub mod actions {
 
 pub mod search {
     pub const FILES_PLACEHOLDER: &str = "Search files...";
+    pub const CALCULATOR_PLACEHOLDER: &str = "Calculate…";
+    pub const EXIT_CALCULATOR: &str = "Exit calculator";
     pub const APPS_PLACEHOLDER: &str = "Search apps or calculate...";
     pub const FOLDER_PLACEHOLDER: &str = "Search this folder...";
-    pub const COMMAND_PLACEHOLDER: &str = "Type a command, e.g. f for files";
+    pub const COMMAND_PLACEHOLDER: &str = "Type a command…";
+    pub const NO_COMMANDS: &str = "No matching commands";
     pub const UP_ONE_LEVEL: &str = "Up one level";
     pub const EXIT_FILE_SEARCH: &str = "Exit file search";
     pub const CANCEL_COMMAND: &str = "Cancel command";
@@ -139,6 +142,23 @@ pub mod keys {
     pub const BACKSPACE: &str = "Backspace";
 }
 pub mod settings {
+    pub const COMMANDS: &str = "Commands";
+    pub const ALIASES: &str = "Aliases";
+    pub const ALIASES_HELP: &str =
+        "Separate aliases with commas. Changes save on Enter or when you leave the field.";
+    pub const ROUTING_HELP: &str = "Press Space in the launcher, then type the shown trigger. Shared initials wait for the next distinguishing letter; Enter is not needed.";
+    pub const ALIAS_LIMIT: &str = "Use between one and eight aliases per command.";
+    pub const ALIAS_FORMAT: &str =
+        "Use letters, numbers or hyphens, starting with a letter (up to 32 characters), or =.";
+    pub const ALIAS_CONFLICT: &str =
+        "An alias cannot equal or contain another command's complete alias as a prefix.";
+    pub fn command_label(command: crate::command_router::Command) -> &'static str {
+        match command {
+            crate::command_router::Command::Files => FILE_SEARCH,
+            crate::command_router::Command::Settings => OPEN_SETTINGS,
+            crate::command_router::Command::Calculator => crate::ui_text::headings::CALCULATOR,
+        }
+    }
     pub const LOGIN: &str = "Launch at login";
     pub const LOGIN_HELP: &str = "Start Hayai in the tray when you sign in to Windows.";
     pub const DISPLAY: &str = "Open on display";
@@ -189,7 +209,7 @@ pub mod settings {
     pub const FILE_DESCRIPTION: &str =
         "File search is powered by Scry Search, using its Windows index.";
     pub const FILE_SEARCH_HELP: &str =
-        "Open file search directly, or type Space then f in the launcher.";
+        "Open file search directly, or use its trigger from Commands.";
     pub const FILE_GUIDE: &str = "File search setup and search syntax";
     pub const MODIFIER_REQUIRED: &str = "Include Ctrl, Alt or Win so typing keeps working.";
     pub const RESERVED_KEY: &str =

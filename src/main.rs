@@ -3,6 +3,7 @@
 mod apps;
 mod assets;
 mod calc;
+mod command_router;
 mod commands;
 mod files;
 mod history;

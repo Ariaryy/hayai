@@ -1,6 +1,7 @@
 use super::*;
 use std::time::Duration;
 
+mod commands;
 mod general;
 mod scrolling;
 
@@ -139,6 +140,7 @@ fn settings_window_gui_smoke() {
                     assert!(!cx.global::<SettingsGlobal>().saving);
                 });
                 general::check(&path, cx).await;
+                commands::check(handle, &view, &path, cx).await;
                 scrolling::check(handle, &view, cx).await;
                 for family in crate::theme::ThemeFamily::ALL {
                     for light in [false, true] {

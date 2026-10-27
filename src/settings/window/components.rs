@@ -90,35 +90,51 @@ pub(super) fn external_link(
 }
 
 pub fn key_badges(binding: &str, cx: &App) -> impl IntoElement + use<> {
-    let palette = crate::theme::settings_palette(cx);
     h_flex().gap_1().children(
         binding
             .split('-')
-            .map(|key| {
-                div()
-                    .h(px(22.0))
-                    .min_w(px(22.0))
-                    .px(px(6.0))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(4.0))
-                    .bg(palette.keycap)
-                    .text_color(palette.foreground)
-                    .text_size(px(11.0))
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(match key {
-                        "ctrl" => "Ctrl".into(),
-                        "alt" => "Alt".into(),
-                        "shift" => "Shift".into(),
-                        "super" | "cmd" | "win" => "Win".into(),
-                        "space" => "Space".into(),
-                        key => key.to_uppercase(),
-                    })
-            })
+            .map(|key| key_badge(key, cx))
             .collect::<Vec<_>>(),
     )
+}
+
+pub fn command_badges(trigger: &str, cx: &App) -> impl IntoElement + use<> {
+    h_flex()
+        .max_w_full()
+        .flex_wrap()
+        .gap_1()
+        .child(key_badge("space", cx))
+        .children(
+            trigger
+                .chars()
+                .map(|key| key_badge(&key.to_string(), cx))
+                .collect::<Vec<_>>(),
+        )
+}
+
+fn key_badge(key: &str, cx: &App) -> impl IntoElement + use<> {
+    let palette = crate::theme::settings_palette(cx);
+    div()
+        .h(px(22.0))
+        .min_w(px(22.0))
+        .px(px(6.0))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.0))
+        .bg(palette.keycap)
+        .text_color(palette.foreground)
+        .text_size(px(11.0))
+        .font_weight(FontWeight::MEDIUM)
+        .child(match key {
+            "ctrl" => "Ctrl".into(),
+            "alt" => "Alt".into(),
+            "shift" => "Shift".into(),
+            "super" | "cmd" | "win" => "Win".into(),
+            "space" => "Space".into(),
+            key => key.to_uppercase(),
+        })
 }
 
 pub(super) fn page(_: Page) -> gpui::Div {

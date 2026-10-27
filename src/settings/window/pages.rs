@@ -1,10 +1,11 @@
 use super::*;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Page {
     General,
     Appearance,
     KeyBindings,
+    Commands,
     FileSearch,
     About,
     Licenses,
@@ -16,6 +17,7 @@ impl Page {
             Self::General => text::GENERAL,
             Self::Appearance => text::APPEARANCE,
             Self::KeyBindings => text::KEYBINDINGS,
+            Self::Commands => text::COMMANDS,
             Self::FileSearch => text::FILE_SEARCH,
             Self::About => text::ABOUT,
             Self::Licenses => text::THIRD_PARTY_NOTICES,
@@ -26,6 +28,7 @@ impl Page {
             Self::General => icons::SETTINGS_GENERAL,
             Self::Appearance => icons::SETTINGS_APPEARANCE,
             Self::KeyBindings => icons::SETTINGS_KEYBOARD,
+            Self::Commands => icons::ARROW_RIGHT,
             Self::FileSearch => icons::SETTINGS_FILES,
             Self::About => icons::SETTINGS_ABOUT,
             Self::Licenses => icons::SETTINGS_ABOUT,
@@ -117,6 +120,7 @@ impl SettingsView {
             Page::General => self.general_page(cx),
             Page::Appearance => self.appearance_page(window, cx),
             Page::KeyBindings => self.keybindings_page(cx),
+            Page::Commands => self.commands_page(cx),
             Page::FileSearch => self.file_search_page(cx),
             Page::About => self.about_page(cx),
             Page::Licenses => self.licenses_page(cx),

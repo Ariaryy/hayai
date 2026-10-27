@@ -123,9 +123,19 @@ impl SettingsScroll {
 
 impl SettingsView {
     pub(super) fn navigate(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        // Moving focus emits Blur later. Flush edits before dropping their
+        // entities/subscriptions, or clicking the sidebar would lose a draft.
+        if self.page == Page::Commands && !self.commit_aliases(cx) {
+            return;
+        }
         self.cancel_recording();
         self.scrolling.reset();
         self.page = page;
+        self.alias_editor = if page == Page::Commands {
+            Some(super::commands::AliasEditor::new(window, cx))
+        } else {
+            None
+        };
         window.focus(&self.focus, cx);
         cx.notify();
     }

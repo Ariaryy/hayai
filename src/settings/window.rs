@@ -8,6 +8,7 @@ use gpui::{
 use gpui_component::{Root, TitleBar, h_flex};
 
 mod appearance;
+mod commands;
 mod components;
 mod general;
 mod keybindings;
@@ -21,8 +22,8 @@ mod scrolling;
 #[cfg(test)]
 mod tests;
 
-pub use components::key_badges;
 use components::{card, description, page, section, setting_row};
+pub use components::{command_badges, key_badges};
 pub use lifecycle::open;
 use pages::Page;
 pub use recording::capture_registered_shortcut;
@@ -34,6 +35,7 @@ pub(super) struct SettingsView {
     recording: Option<Shortcut>,
     validation: Option<String>,
     expanded_notice: Option<usize>,
+    alias_editor: Option<commands::AliasEditor>,
     scrolling: scrolling::SettingsScroll,
     _subscriptions: Vec<Subscription>,
 }
@@ -42,6 +44,11 @@ impl SettingsView {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let focus = cx.focus_handle();
         let subscriptions = Self::subscriptions(window, cx);
+        let view = cx.entity().downgrade();
+        window.on_window_should_close(cx, move |_, cx| {
+            view.update(cx, |view, cx| view.commit_aliases(cx))
+                .unwrap_or(true)
+        });
         Self {
             brand: crate::launcher::load_builtin_icon(icons::BRAND_PNG),
             page: Page::General,
@@ -49,6 +56,7 @@ impl SettingsView {
             recording: None,
             validation: None,
             expanded_notice: None,
+            alias_editor: None,
             scrolling: Default::default(),
             _subscriptions: subscriptions,
         }
@@ -124,6 +132,11 @@ impl Render for SettingsView {
             .text_color(palette.foreground)
             .child(
                 TitleBar::new()
+                    .on_close_window(cx.listener(|view, _, window, cx| {
+                        if view.commit_aliases(cx) {
+                            window.remove_window();
+                        }
+                    }))
                     .h(px(46.0))
                     .pl_0()
                     .bg(palette.canvas)
@@ -191,6 +204,7 @@ impl Render for SettingsView {
                                     Page::General,
                                     Page::Appearance,
                                     Page::KeyBindings,
+                                    Page::Commands,
                                     Page::FileSearch,
                                 ]
                                 .map(|page| self.navigation(page, cx)),
