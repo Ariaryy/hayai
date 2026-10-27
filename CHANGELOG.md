@@ -5,7 +5,15 @@ yet included in a published package.
 
 ## Unreleased
 
+### Launcher
+
+- The command picker has a Commands heading and a highlighted first row; Up and Down move through it and Enter opens the highlighted command.
+- Keycaps, the action panel and the footer share one keycap style with a faint outline, and text, icons and switches are centered on whole device pixels at every Windows scale.
+
 ### Settings
+
+- Settings pages use one spacing, radius and type scale, with grouped headings, a table layout for Commands, a redesigned About page, breadcrumb navigation and a larger switch that animates and is centered at every scale.
+- Hover and selected rows are derived from the surface they sit on, so they stay visible in light themes. Warnings and errors use per-theme colors and every theme is checked for legible contrast.
 
 - Shortcuts that share a key are no longer refused. Both are flagged with a warning icon and tooltip on the Key bindings page, and the launcher action is inactive until one changes.
 - Hide command suggestions with the Show command picker toggle in Commands. Triggers and aliases work either way, and with the picker hidden, text after Space that cannot become a command is searched normally.
