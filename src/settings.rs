@@ -1,5 +1,6 @@
 //! Preferences and lazy settings UI. Controls can display a queued draft;
 //! runtime settings publish after persistence and native registration succeed.
+mod file_search;
 mod general;
 mod persistence;
 mod preferences;
@@ -8,6 +9,7 @@ mod window;
 use gpui::{App, Global};
 use std::path::PathBuf;
 
+pub use file_search::FileSearch;
 pub use general::{DisplayTarget, General};
 pub use preferences::{Preferences, Shortcut};
 pub use window::{

@@ -12,6 +12,7 @@ use gpui::App;
 
 use crate::commands::{BackgroundSearch, CommandAction, CommandItem, CommandProvider, IconSource};
 use crate::native;
+use crate::settings::FileSearch;
 
 const MAX_RESULTS: u32 = 64;
 /// Fetch extra ranked candidates so filtering noisy directories can still
@@ -143,24 +144,28 @@ fn path_to_item(path: &Path) -> CommandItem {
 }
 
 /// Listing of the user's home folder, used as the file-mode empty-query
-/// fallback when there's no recents history yet (fresh install). Local
-/// directory read, not a daemon IPC round trip — cheap enough to run
-/// inline on the (synchronous) `search` path.
-fn directory_listing(dir: &Path, query: &str) -> Vec<CommandItem> {
+/// fallback when there's no recents history, or recents are hidden. All local
+/// directory reads and metadata checks run in the provider's background job.
+fn directory_listing(dir: &Path, query: &str, options: FileSearch) -> Vec<CommandItem> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return Vec::new();
     };
     let mut paths: Vec<PathBuf> = entries
         .flatten()
         .map(|entry| entry.path())
-        .filter(|path| !is_noisy_path(path, query))
+        .filter(|path| !options.hide_noisy_folders || !is_noisy_path(path, query))
         .collect();
 
     // Folders first, alphabetical within each group. This is intentionally a
     // non-recursive listing: Tab enters one level, while typed input invokes
     // the indexed descendant search below.
     paths.sort_by(|a, b| {
-        b.is_dir().cmp(&a.is_dir()).then_with(|| {
+        let folder_order = if options.folders_first {
+            b.is_dir().cmp(&a.is_dir())
+        } else {
+            std::cmp::Ordering::Equal
+        };
+        folder_order.then_with(|| {
             let a_name = a.file_name().map(|n| n.to_string_lossy().to_lowercase());
             let b_name = b.file_name().map(|n| n.to_string_lossy().to_lowercase());
             a_name.cmp(&b_name)
@@ -170,11 +175,11 @@ fn directory_listing(dir: &Path, query: &str) -> Vec<CommandItem> {
     paths.iter().map(|path| path_to_item(path)).collect()
 }
 
-fn home_dir_listing() -> Vec<CommandItem> {
+fn home_dir_listing(options: FileSearch) -> Vec<CommandItem> {
     let Ok(home) = std::env::var("USERPROFILE") else {
         return Vec::new();
     };
-    directory_listing(Path::new(&home), "")
+    directory_listing(Path::new(&home), "", options)
 }
 
 fn parse_scoped_query(query: &str) -> Option<(PathBuf, String)> {
@@ -187,6 +192,14 @@ fn scoped_scry_query(scope: &Path, remainder: &str) -> String {
     let scope = scope.to_string_lossy();
     let scope = scope.trim_end_matches('\\');
     format!("{scope}\\{}", remainder.replace(' ', "\\"))
+}
+
+fn matches_scope(parent: &Path, scope: &Path, subfolders: bool) -> bool {
+    if subfolders {
+        parent.starts_with(scope)
+    } else {
+        parent == scope
+    }
 }
 pub(crate) fn format_size(bytes: u64) -> String {
     const KB: u64 = 1024;
@@ -205,15 +218,22 @@ pub(crate) fn format_size(bytes: u64) -> String {
 
 pub struct FileSearchProvider {
     recents: Rc<RefCell<FileRecents>>,
+    options: FileSearch,
 }
 
 impl FileSearchProvider {
     pub fn new(recents: Rc<RefCell<FileRecents>>) -> Self {
-        Self { recents }
+        Self {
+            recents,
+            options: FileSearch::default(),
+        }
     }
 }
 
 impl CommandProvider for FileSearchProvider {
+    fn configure(&mut self, preferences: &crate::settings::Preferences) {
+        self.options = preferences.file_search;
+    }
     fn namespace(&self) -> &'static str {
         "files"
     }
@@ -230,7 +250,7 @@ impl CommandProvider for FileSearchProvider {
     /// paths or enumerate directories here: the background job validates these
     /// entries and supplies the home-folder fallback after compatibility checks.
     fn search(&self, query: &str) -> Vec<CommandItem> {
-        if !query.is_empty() {
+        if !query.is_empty() || !self.options.show_recents {
             return Vec::new();
         }
         self.recents
@@ -242,9 +262,14 @@ impl CommandProvider for FileSearchProvider {
     }
 
     fn background_search(&self, query: &str) -> Option<BackgroundSearch> {
-        let empty_recents = query
-            .is_empty()
-            .then(|| self.recents.borrow().recents().to_vec());
+        let options = self.options;
+        let empty_recents = query.is_empty().then(|| {
+            if options.show_recents {
+                self.recents.borrow().recents().to_vec()
+            } else {
+                Vec::new()
+            }
+        });
         let query = query.to_string();
         let scope = parse_scoped_query(&query);
         let browse_dir = scope
@@ -288,24 +313,25 @@ impl CommandProvider for FileSearchProvider {
                     .map(|path| path_to_item(path))
                     .collect();
                 return if items.is_empty() {
-                    home_dir_listing()
+                    home_dir_listing(options)
                 } else {
                     items
                 };
             }
             if let Some(dir) = browse_dir {
-                return directory_listing(&dir, &query);
+                return directory_listing(&dir, &query, options);
             }
             match native::scry_query(&scry_query, max_results) {
                 None => vec![unavailable_item()],
                 Some(mut hits) => {
                     hits.retain(|hit| {
                         let full_path = hit.parent.join(&hit.name);
-                        if is_noisy_path(&full_path, &query) {
+                        if options.hide_noisy_folders && is_noisy_path(&full_path, &query) {
                             return false;
                         }
                         if let Some((dir, _)) = &scope
-                            && (!full_path.starts_with(dir) || full_path == *dir)
+                            && (!matches_scope(&hit.parent, dir, options.search_subfolders)
+                                || full_path == *dir)
                         {
                             return false;
                         }
@@ -412,7 +438,7 @@ mod tests {
             PathBuf::from("hayai-preview-missing/newest.txt"),
             PathBuf::from("hayai-preview-missing/older.txt"),
         ];
-        let provider = FileSearchProvider::new(Rc::new(RefCell::new(FileRecents {
+        let mut provider = FileSearchProvider::new(Rc::new(RefCell::new(FileRecents {
             recents: paths.clone(),
         })));
         let preview = provider.search("");
@@ -421,6 +447,14 @@ mod tests {
             assert!(matches!(&item.action, CommandAction::OpenFile(actual) if actual == path));
         }
         assert!(provider.search("typed query").is_empty());
+        let mut preferences = crate::settings::Preferences::default();
+        preferences.file_search.show_recents = false;
+        provider.configure(&preferences);
+        assert!(provider.search("").is_empty());
+        assert_eq!(provider.recents.borrow().recents(), paths);
+        preferences.file_search.show_recents = true;
+        provider.configure(&preferences);
+        assert_eq!(provider.search("").len(), paths.len());
     }
 
     #[test]
@@ -430,5 +464,44 @@ mod tests {
         })));
         assert!(provider.search("").is_empty());
         assert!(provider.background_search("").is_some());
+    }
+
+    #[test]
+    fn scoped_search_can_match_direct_children_or_descendants() {
+        let scope = Path::new("scope");
+        assert!(matches_scope(scope, scope, false));
+        assert!(!matches_scope(&scope.join("nested"), scope, false));
+        assert!(matches_scope(&scope.join("nested"), scope, true));
+        assert!(!matches_scope(Path::new("elsewhere"), scope, true));
+    }
+
+    #[test]
+    fn browsing_respects_folder_order_and_build_folder_visibility() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("hayai-browse-{}-{nonce}", std::process::id()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::create_dir(root.join("z-folder")).unwrap();
+        std::fs::create_dir(root.join("node_modules")).unwrap();
+        std::fs::write(root.join("a-file"), "").unwrap();
+        let names = |options| {
+            directory_listing(&root, "", options)
+                .into_iter()
+                .map(|item| item.title)
+                .collect::<Vec<_>>()
+        };
+        let mut options = FileSearch::default();
+        assert_eq!(names(options), ["z-folder", "a-file"]);
+        options.folders_first = false;
+        assert_eq!(names(options), ["a-file", "z-folder"]);
+        options.hide_noisy_folders = false;
+        assert_eq!(names(options), ["a-file", "node_modules", "z-folder"]);
+        std::fs::remove_file(root.join("a-file")).unwrap();
+        std::fs::remove_dir(root.join("z-folder")).unwrap();
+        std::fs::remove_dir(root.join("node_modules")).unwrap();
+        std::fs::remove_dir(root).unwrap();
     }
 }

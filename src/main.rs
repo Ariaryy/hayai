@@ -77,6 +77,7 @@ fn main() {
             registry.register(AppsProvider::new(catalog));
             registry.register(FileSearchProvider::new(file_recents));
             registry.register(CalcProvider::new());
+            registry.configure(settings::preferences(cx));
             RegistryGlobal::install(cx, registry);
 
             drive_native_commands(cx, native_rx, native_runtime);

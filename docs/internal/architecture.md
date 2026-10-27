@@ -53,6 +53,14 @@ Windows Run entry instead of rewriting it on unrelated saves.
 `HAYAI_SETTINGS_PATH` isolates preferences for tests. No file watcher or polling
 is retained; external edits take effect at the next launch.
 
+Providers receive committed preferences at startup and after relevant saves.
+Configuration hooks only copy in-memory values; each background file search
+captures its own options. A changed file-search preference reruns the visible
+file query with its input and folder scope intact, invalidating older work.
+Hidden file searches are invalidated without starting replacement I/O; other
+providers keep their in-flight queries. Registry borrows end before window or
+entity updates, which can re-enter GPUI.
+
 Recent-item persistence captures a generation before queueing background writes.
 Disabling or clearing history advances that generation and pauses recording;
 a worker-only disk lock orders deletion against writes already in progress.

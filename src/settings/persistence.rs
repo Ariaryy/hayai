@@ -107,6 +107,7 @@ fn start_save(cx: &mut App) {
     let path = state.path.clone();
     let previous = state.preferences.clone();
     let picker_changed = previous.show_command_picker != next.show_command_picker;
+    let file_search_changed = previous.file_search != next.file_search;
     let theme_changed = previous.light != next.light
         || previous.theme_for(next.light) != next.theme_for(next.light);
     cx.spawn(async move |cx| {
@@ -138,6 +139,17 @@ fn start_save(cx: &mut App) {
                     }
                     if picker_changed {
                         crate::launcher::LauncherState::refresh_command_picker(cx);
+                    }
+                    if file_search_changed {
+                        if let Some(registry) = cx
+                            .try_global::<crate::plugins::RegistryGlobal>()
+                            .map(crate::plugins::RegistryGlobal::clone_handle)
+                        {
+                            registry
+                                .borrow_mut()
+                                .configure(crate::settings::preferences(cx));
+                        }
+                        crate::launcher::LauncherState::refresh_file_search(cx);
                     }
                 }
                 Err(error) => {

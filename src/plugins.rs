@@ -58,6 +58,12 @@ impl PluginRegistry {
         self.generation
     }
 
+    pub fn configure(&mut self, preferences: &crate::settings::Preferences) {
+        for provider in &mut self.providers {
+            provider.configure(preferences);
+        }
+    }
+
     pub fn invalidate(&mut self) {
         self.generation += 1;
     }

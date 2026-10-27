@@ -77,6 +77,11 @@ pub struct CommandItem {
 pub type BackgroundSearch = Box<dyn FnOnce() -> Vec<CommandItem> + Send>;
 
 pub trait CommandProvider {
+    /// Foreground configuration only: copy relevant preferences into provider
+    /// state. Do not perform I/O or call back into GPUI/the registry here.
+    /// Background jobs capture their own configuration when they are created.
+    fn configure(&mut self, _preferences: &crate::settings::Preferences) {}
+
     // Unused until a second provider makes namespace disambiguation useful.
     #[allow(dead_code)]
     fn namespace(&self) -> &'static str;

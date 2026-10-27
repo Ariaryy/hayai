@@ -25,6 +25,47 @@ pub struct LauncherState {
 }
 
 impl LauncherState {
+    pub fn refresh_file_search(cx: &mut App) {
+        let Some(state) = cx
+            .try_global::<LauncherGlobal>()
+            .map(LauncherGlobal::clone_handle)
+        else {
+            return;
+        };
+        let (handle, view, visible) = {
+            let state = state.borrow();
+            (state.window, state.view.clone(), state.visible)
+        };
+        if let (Some(handle), Some(view)) = (handle, view) {
+            let _ = handle.update(cx, |_, window, cx| {
+                view.update(cx, |view, cx| {
+                    if !view.file_mode {
+                        return;
+                    }
+                    view.cancel_wheel_animation();
+                    view.action_menu = None;
+                    view.pending_folder_footer = None;
+                    if visible {
+                        let query = view.build_query(&view.search_input.read(cx).value());
+                        view.list.update(cx, |list, cx| {
+                            perform_search_and_select_first(list, &query, window, cx)
+                        });
+                    } else {
+                        // Stop older jobs publishing with obsolete filtering, but
+                        // leave a hidden launcher idle until it is opened again.
+                        view.list
+                            .read(cx)
+                            .delegate()
+                            .registry
+                            .borrow_mut()
+                            .invalidate();
+                    }
+                    cx.notify();
+                })
+            });
+        }
+    }
+
     pub fn refresh_command_picker(cx: &mut App) {
         let Some(state) = cx
             .try_global::<LauncherGlobal>()

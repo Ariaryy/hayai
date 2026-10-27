@@ -58,6 +58,7 @@ impl Binding {
 pub struct Preferences {
     pub light: bool,
     pub general: super::General,
+    pub file_search: super::FileSearch,
     pub commands: crate::command_router::Aliases,
     pub show_command_picker: bool,
     light_theme: crate::theme::ThemeFamily,
@@ -70,6 +71,7 @@ impl Default for Preferences {
         Self {
             light: false,
             general: super::General::default(),
+            file_search: super::FileSearch::default(),
             commands: crate::command_router::Aliases::default(),
             show_command_picker: true,
             light_theme: crate::theme::ThemeFamily::default(),
@@ -206,6 +208,7 @@ impl Preferences {
         let mut result = Self {
             light,
             general: super::General::parse(&json["general"])?,
+            file_search: super::FileSearch::parse(&json["file_search"])?,
             commands: crate::command_router::Aliases::parse(&json["commands"])?,
             show_command_picker: match json["show_command_picker"] {
                 serde_json::Value::Null => true,
@@ -229,7 +232,7 @@ impl Preferences {
             .into_iter()
             .map(|action| (action.id().into(), self.binding(action).into()))
             .collect();
-        serde_json::json!({"version": 1, "appearance": if self.light { "light" } else { "dark" }, "themes": {"light": self.light_theme.id(), "dark": self.dark_theme.id()}, "general": self.general.encode(), "commands": self.commands.encode(), "show_command_picker": self.show_command_picker, "keybindings": bindings}).to_string()
+        serde_json::json!({"version": 1, "appearance": if self.light { "light" } else { "dark" }, "themes": {"light": self.light_theme.id(), "dark": self.dark_theme.id()}, "general": self.general.encode(), "file_search": self.file_search.encode(), "commands": self.commands.encode(), "show_command_picker": self.show_command_picker, "keybindings": bindings}).to_string()
     }
 }
 
