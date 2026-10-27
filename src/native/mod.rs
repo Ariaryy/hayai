@@ -51,10 +51,10 @@ pub use windows::{
     NativeRuntime, associated_apps, extract_icon_rgba, focus_launcher_after_approval,
     focus_launcher_window, hidden_launcher_frame_flush, hide_launcher_window, https_get,
     install_scry_daemon, launch_path, launch_path_as_admin, launcher_has_foreground,
-    launcher_monitor, list_apps_folder, local_now, local_now_seconds, open_with, open_with_app,
-    render_hidden_launcher_frame, reset_scry_search, scry_is_installed, scry_query,
-    set_launcher_hotkey, start_scry_daemon, suspend_scry_search, system_currency_code,
-    system_timezone_name, timezone_local_to_utc, timezone_utc_to_local,
+    launcher_monitor, leave_install_directory, list_apps_folder, local_now, local_now_seconds,
+    open_with, open_with_app, remove_tray_icon, render_hidden_launcher_frame, reset_scry_search,
+    scry_is_installed, scry_query, set_launcher_hotkey, start_scry_daemon, suspend_scry_search,
+    system_currency_code, system_timezone_name, timezone_local_to_utc, timezone_utc_to_local,
 };
 
 #[cfg(not(windows))]
@@ -107,6 +107,12 @@ pub fn hidden_launcher_frame_flush(_window: &gpui::Window) -> impl FnOnce() + us
 pub fn extract_icon_rgba(_path: &std::path::Path) -> Option<IconImage> {
     None
 }
+
+#[cfg(not(windows))]
+pub fn leave_install_directory() {}
+
+#[cfg(not(windows))]
+pub fn remove_tray_icon() {}
 
 #[cfg(not(windows))]
 pub fn launch_path(_path: &std::path::Path) {}
