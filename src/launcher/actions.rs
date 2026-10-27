@@ -34,6 +34,19 @@ pub(super) enum PrimaryAction {
 }
 
 impl PrimaryAction {
+    fn notification_command(self) -> Option<Self> {
+        match self {
+            Self::Updating
+            | Self::Checking
+            | Self::Starting
+            | Self::Restarting
+            | Self::Unavailable
+            | Self::None
+            | Self::Dismiss => None,
+            action => Some(action),
+        }
+    }
+
     pub(super) fn label(self) -> &'static str {
         match self {
             Self::Updating => text::actions::UPDATING,
@@ -72,7 +85,7 @@ impl PrimaryAction {
 pub(super) struct ActionMenu {
     pub(super) diagnostics_only: bool,
     pub(super) notification: bool,
-    pub(super) notification_action: &'static str,
+    pub(super) notification_action: Option<PrimaryAction>,
     pub(super) submenu: Option<OpenWithMenu>,
     pub(super) path: PathBuf,
     pub(super) is_dir: bool,
@@ -161,19 +174,24 @@ impl ActionMenu {
             && !self.path.extension().is_some_and(|ext| {
                 ext.eq_ignore_ascii_case("lnk") || ext.eq_ignore_ascii_case("url")
             });
+        // Progress is a status, not another operation to invoke. Dismiss has
+        // its own row below, so it must not also appear as the primary action.
+        let open_label = if self.notification {
+            self.notification_action
+                .and_then(PrimaryAction::notification_command)
+                .map(PrimaryAction::label)
+        } else if self.is_app {
+            Some(text::actions::MENU_OPEN_APPLICATION)
+        } else if self.is_dir {
+            Some(text::actions::MENU_OPEN_FOLDER)
+        } else {
+            Some(text::actions::OPEN)
+        };
         [
-            (!self.diagnostics_only).then_some((
-                MenuAction::Open,
-                if self.notification {
-                    self.notification_action
-                } else if self.is_app {
-                    text::actions::MENU_OPEN_APPLICATION
-                } else if self.is_dir {
-                    text::actions::MENU_OPEN_FOLDER
-                } else {
-                    text::actions::OPEN
-                },
-            )),
+            (!self.diagnostics_only)
+                .then_some(open_label)
+                .flatten()
+                .map(|label| (MenuAction::Open, label)),
             (self.notification && !self.diagnostics_only)
                 .then_some((MenuAction::DismissNotification, text::actions::DISMISS)),
             (self.notification || self.diagnostics_only).then_some((
@@ -213,11 +231,14 @@ pub(super) fn can_run_as_admin(path: &std::path::Path) -> bool {
 impl LauncherRoot {
     pub(super) fn selected_action_menu(&self, cx: &App) -> Option<ActionMenu> {
         let delegate = self.list.read(cx).delegate();
+        if self.waiting_for_command || delegate.show_about {
+            return None;
+        }
         if delegate.show_updates || delegate.show_scry_updates || delegate.needs_pinned_scry() {
             return Some(ActionMenu {
                 diagnostics_only: true,
                 notification: false,
-                notification_action: "",
+                notification_action: None,
                 submenu: None,
                 path: PathBuf::new(),
                 is_dir: false,
@@ -236,7 +257,7 @@ impl LauncherRoot {
             return Some(ActionMenu {
                 diagnostics_only: false,
                 notification: true,
-                notification_action: self.selected_primary_action(cx).label(),
+                notification_action: Some(self.selected_primary_action(cx)),
                 submenu: None,
                 path: PathBuf::new(),
                 is_dir: false,
@@ -252,7 +273,7 @@ impl LauncherRoot {
                 CommandAction::OpenFile(path) => Some(ActionMenu {
                     diagnostics_only: false,
                     notification: false,
-                    notification_action: "",
+                    notification_action: None,
                     submenu: None,
                     path: path.clone(),
                     is_dir: path.is_dir(),
@@ -263,7 +284,7 @@ impl LauncherRoot {
                 CommandAction::LaunchApplication(path) => Some(ActionMenu {
                     diagnostics_only: false,
                     notification: false,
-                    notification_action: "",
+                    notification_action: None,
                     submenu: None,
                     path: path.clone(),
                     is_dir: false,
@@ -278,7 +299,7 @@ impl LauncherRoot {
                 CommandAction::CheckForUpdates => Some(ActionMenu {
                     diagnostics_only: true,
                     notification: false,
-                    notification_action: "",
+                    notification_action: None,
                     submenu: None,
                     path: PathBuf::new(),
                     is_dir: false,

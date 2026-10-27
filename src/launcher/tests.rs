@@ -432,7 +432,7 @@ fn notification_actions_include_dismiss_without_file_operations() {
     let menu = super::ActionMenu {
         diagnostics_only: false,
         notification: true,
-        notification_action: "Restart to update",
+        notification_action: Some(super::PrimaryAction::RestartToUpdate),
         submenu: None,
         path: Default::default(),
         is_dir: false,
@@ -451,7 +451,7 @@ fn update_page_actions_only_copy_diagnostics() {
     let menu = super::ActionMenu {
         diagnostics_only: true,
         notification: false,
-        notification_action: "",
+        notification_action: None,
         submenu: None,
         path: Default::default(),
         is_dir: false,
@@ -463,6 +463,32 @@ fn update_page_actions_only_copy_diagnostics() {
         menu.actions().map(|(_, label)| label).collect::<Vec<_>>(),
         ["Copy diagnostic log"]
     );
+}
+
+#[test]
+fn notification_progress_is_status_not_an_action() {
+    for status in [
+        super::PrimaryAction::Updating,
+        super::PrimaryAction::Checking,
+        super::PrimaryAction::Starting,
+        super::PrimaryAction::Restarting,
+    ] {
+        let menu = super::ActionMenu {
+            diagnostics_only: false,
+            notification: true,
+            notification_action: Some(status),
+            submenu: None,
+            path: Default::default(),
+            is_dir: false,
+            is_app: false,
+            can_run_as_admin: false,
+            selected: 0,
+        };
+        assert_eq!(
+            menu.actions().map(|(_, label)| label).collect::<Vec<_>>(),
+            ["Dismiss", "Copy diagnostic log"]
+        );
+    }
 }
 
 #[test]
@@ -521,7 +547,7 @@ fn open_with_submenu_has_its_own_numbering_and_returns_to_parent() {
     let mut menu = super::ActionMenu {
         diagnostics_only: false,
         notification: false,
-        notification_action: "",
+        notification_action: None,
         submenu: Some(super::OpenWithMenu {
             request: 1,
             loading: true,
@@ -604,7 +630,7 @@ fn context_actions_follow_result_type_and_stay_compact() {
         let menu = super::ActionMenu {
             diagnostics_only: false,
             notification: false,
-            notification_action: "",
+            notification_action: None,
             submenu: None,
             path: root.join(name),
             is_dir,
@@ -620,7 +646,7 @@ fn context_actions_follow_result_type_and_stay_compact() {
     let packaged = super::ActionMenu {
         diagnostics_only: false,
         notification: false,
-        notification_action: "",
+        notification_action: None,
         submenu: None,
         path: "shell:AppsFolder/Publisher.App!App".into(),
         is_dir: false,

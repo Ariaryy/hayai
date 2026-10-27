@@ -15,7 +15,9 @@ pub(in crate::launcher) fn action_panel(
         .bottom(px(44.0))
         .w(px(224.0))
         .p_1()
-        .bg(cx.theme().popover)
+        // Reuse the theme canvas: its popover is close to list_hover in some
+        // palettes, which makes the current action hard to distinguish.
+        .bg(cx.theme().background)
         .border_1()
         .border_color(cx.theme().border)
         .rounded(px(8.0))
