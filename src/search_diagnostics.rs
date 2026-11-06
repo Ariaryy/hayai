@@ -196,6 +196,16 @@ pub fn record_search_completed(
     result_count: usize,
 ) {
     let duration_us = start.elapsed().as_micros().try_into().unwrap_or(u64::MAX);
+    record_search_duration(store, duration_us, candidate_count, result_count);
+}
+
+/// Record search completion with an explicit duration in microseconds.
+pub fn record_search_duration(
+    store: &SearchDiagnostics,
+    duration_us: u64,
+    candidate_count: usize,
+    result_count: usize,
+) {
     store.record(SearchDiagnostic {
         event: SearchEventKind::SearchCompleted,
         duration_us: Some(duration_us),
@@ -290,33 +300,27 @@ mod tests {
     #[test]
     fn slow_search_emitted_through_record_search_completed() {
         let store = make_store();
-        // Passing an Instant from far enough in the past (e.g. 20ms ago) ensures
-        // record_search_completed itself emits both SearchCompleted and SearchSlow.
-        let past = Instant::now()
-            .checked_sub(std::time::Duration::from_micros(
-                SLOW_SEARCH_THRESHOLD_US + 5_000,
-            ))
-            .unwrap();
-        record_search_completed(&store, past, 150, 4);
+        // Controlled duration exceeding the threshold guarantees deterministic SearchSlow emission
+        record_search_duration(&store, SLOW_SEARCH_THRESHOLD_US + 1_000, 150, 4);
         let snap = store.snapshot();
         assert_eq!(snap.len(), 2);
         assert_eq!(snap[0].event, SearchEventKind::SearchCompleted);
         assert_eq!(snap[1].event, SearchEventKind::SearchSlow);
         assert_eq!(snap[1].candidate_count, Some(150));
         assert_eq!(snap[1].result_count, Some(4));
-        assert!(snap[1].duration_us.unwrap() >= SLOW_SEARCH_THRESHOLD_US);
+        assert_eq!(snap[1].duration_us, Some(SLOW_SEARCH_THRESHOLD_US + 1_000));
     }
 
     #[test]
     fn fast_search_does_not_emit_slow_event() {
         let store = make_store();
-        // Recording with Instant::now() will measure < 10ms and not emit SearchSlow
-        record_search_completed(&store, Instant::now(), 5, 1);
+        // Controlled duration well below the threshold guarantees SearchSlow is never emitted,
+        // immune to scheduler delays.
+        record_search_duration(&store, 500, 5, 1);
         let snap = store.snapshot();
-        assert!(
-            snap.iter()
-                .any(|e| e.event == SearchEventKind::SearchCompleted)
-        );
+        assert_eq!(snap.len(), 1);
+        assert_eq!(snap[0].event, SearchEventKind::SearchCompleted);
+        assert_eq!(snap[0].duration_us, Some(500));
         assert!(!snap.iter().any(|e| e.event == SearchEventKind::SearchSlow));
     }
 
