@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Instant;
 
 use gpui::{App, AppContext, RenderImage};
 
@@ -115,8 +116,21 @@ impl Catalog {
         // The scan walks two directory trees and enumerates shell:AppsFolder
         // via COM — too slow for the startup path. Run it on the background
         // pool and publish the result when it lands.
+        crate::search_diagnostics::record_catalog_started(&crate::search_diagnostics::DIAGNOSTICS);
         cx.spawn(async move |cx| {
-            let apps = cx.background_spawn(async move { scan_apps() }).await;
+            let apps = cx
+                .background_spawn(async move {
+                    let scan_start = Instant::now();
+                    let scan = scan_apps();
+                    crate::search_diagnostics::record_catalog_completed(
+                        &crate::search_diagnostics::DIAGNOSTICS,
+                        scan_start,
+                        scan.discovered,
+                        scan.apps.len(),
+                    );
+                    scan.apps
+                })
+                .await;
             cx.update(|cx| {
                 cx.global::<CatalogGlobal>()
                     .clone_handle()
@@ -147,6 +161,9 @@ impl Catalog {
             return self.recent_indices();
         }
 
+        let search_start = Instant::now();
+        let candidate_count = self.apps.len();
+
         let mut scored: Vec<(i32, usize)> = self
             .apps
             .iter()
@@ -160,7 +177,16 @@ impl Catalog {
             b.0.cmp(&a.0)
                 .then_with(|| self.apps[a.1].name_lower.cmp(&self.apps[b.1].name_lower))
         });
-        scored.into_iter().map(|(_, index)| index).collect()
+        let results: Vec<usize> = scored.into_iter().map(|(_, index)| index).collect();
+
+        crate::search_diagnostics::record_search_completed(
+            &crate::search_diagnostics::DIAGNOSTICS,
+            search_start,
+            candidate_count,
+            results.len(),
+        );
+
+        results
     }
 
     /// Indices for the pre-typing view: recents first, then every remaining
@@ -326,11 +352,17 @@ impl Catalog {
 }
 
 /// Scan Start Menu shortcuts + `shell:AppsFolder` into a fresh app list.
+struct ScanResult {
+    apps: Vec<AppEntry>,
+    discovered: usize,
+}
+
 /// Pure I/O + COM — safe (and intended) to run on a background thread;
 /// `native::list_apps_folder` initializes COM on its calling thread itself.
-fn scan_apps() -> Vec<AppEntry> {
+fn scan_apps() -> ScanResult {
     let mut apps = Vec::new();
     let mut seen = HashSet::new();
+    let mut discovered = 0;
     for dir in start_menu_dirs() {
         walk(&dir, &mut |path| {
             let is_lnk = path
@@ -346,6 +378,7 @@ fn scan_apps() -> Vec<AppEntry> {
             if name.is_empty() {
                 return;
             }
+            discovered += 1;
             let name_lower = name.to_lowercase();
             // De-dup by name (the per-user and all-users Start Menus often
             // both contain the same shortcut).
@@ -368,6 +401,7 @@ fn scan_apps() -> Vec<AppEntry> {
         if name.is_empty() {
             continue;
         }
+        discovered += 1;
         let name_lower = name.to_lowercase();
         if seen.insert(name_lower.clone()) {
             apps.push(AppEntry {
@@ -379,7 +413,7 @@ fn scan_apps() -> Vec<AppEntry> {
     }
 
     apps.sort_by(|a, b| a.name_lower.cmp(&b.name_lower));
-    apps
+    ScanResult { apps, discovered }
 }
 
 fn start_menu_dirs() -> Vec<PathBuf> {
@@ -915,5 +949,35 @@ mod tests {
         assert_eq!(fuzzy_score("xcode", "c"), Some(1));
         // "studio code" vs "c": boundary after space (8) + 1 match = 9
         assert_eq!(fuzzy_score("studio code", "c"), Some(9));
+    }
+
+    #[test]
+    fn search_records_diagnostics_and_preserves_results() {
+        use super::*;
+        let catalog = Catalog {
+            apps: ["Alpha", "Beta"]
+                .into_iter()
+                .map(|name| AppEntry {
+                    name: name.into(),
+                    name_lower: name.to_lowercase(),
+                    path: name.into(),
+                })
+                .collect(),
+            icons: Default::default(),
+            icon_recency: Default::default(),
+            recents: vec![],
+        };
+        let before_count = crate::search_diagnostics::DIAGNOSTICS.snapshot().len();
+        let results = catalog.search("alpha");
+        assert_eq!(results.len(), 1);
+        let snap = crate::search_diagnostics::DIAGNOSTICS.snapshot();
+        assert!(snap.len() > before_count);
+        let completed = snap[before_count..]
+            .iter()
+            .find(|e| e.event == crate::search_diagnostics::SearchEventKind::SearchCompleted)
+            .expect("SearchCompleted event recorded");
+        assert_eq!(completed.candidate_count, Some(2));
+        assert_eq!(completed.result_count, Some(1));
+        assert!(completed.duration_us.is_some());
     }
 }
