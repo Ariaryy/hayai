@@ -5,6 +5,14 @@ yet included in a published package.
 
 ## Unreleased
 
+### Diagnostics
+
+- Include application catalog scanning and search timing in copied diagnostic
+  logs to aid in diagnosing launcher startup delays and slow query responses.
+  Logs report scan duration, entry counts before and after deduplication,
+  candidate and result counts, and slow search warnings without recording
+  queries, app names, file paths, or personal data.
+
 ## 0.2.0 - 2026-10-27
 
 ### Settings

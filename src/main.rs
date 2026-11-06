@@ -16,6 +16,7 @@ mod plugins;
 mod scroll;
 mod scry;
 mod scry_updates;
+mod search_diagnostics;
 mod settings;
 mod startup;
 mod theme;

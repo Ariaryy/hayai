@@ -365,16 +365,22 @@ impl LauncherRoot {
                         .is_some_and(|item| matches!(item.action, CommandAction::CheckForUpdates));
                 let scry = delegate.show_scry_updates
                     || delegate.selected_notification() == Some(UpdateNotification::Scry);
+                let search_log = crate::search_diagnostics::diagnostic_snapshot();
+                let hayai_log = format!(
+                    "{}\n=== Search Diagnostics ===\n{}",
+                    crate::updates::DIAGNOSTICS.snapshot(),
+                    search_log
+                );
                 let log = if combined {
                     format!(
                         "=== Hayai ===\n{}\n=== Scry Search ===\n{}",
-                        crate::updates::DIAGNOSTICS.snapshot(),
+                        hayai_log,
                         crate::scry_updates::diagnostic_snapshot()
                     )
                 } else if scry {
                     crate::scry_updates::diagnostic_snapshot()
                 } else {
-                    crate::updates::DIAGNOSTICS.snapshot()
+                    hayai_log
                 };
                 cx.write_to_clipboard(gpui::ClipboardItem::new_string(log));
             }
