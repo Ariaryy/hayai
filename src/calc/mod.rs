@@ -204,6 +204,7 @@ fn is_candidate(input: &str) -> bool {
             || constant_expression
             || lower.starts_with("in ")
             || lower.starts_with("now ")
+            || lower.starts_with("days ")
             || (c.is_ascii_alphabetic()
                 && (grammar::split_conversion(input).is_some()
                     || lower
@@ -555,6 +556,21 @@ mod tests {
     fn calendar_dates_and_named_clocks() {
         let provider = isolated_provider();
         for (query, expected) in [
+            ("1 jan 2000 + 30 days", "Monday, January 31, 2000"),
+            ("30 days after 1 jan 2026", "Saturday, January 31, 2026"),
+            ("1 jan 2026 to 10 nov 2026", "313 days"),
+            // 25 cannot be a month, so these read the same in any region.
+            ("25-12-26", "Friday, December 25, 2026"),
+            ("25/12/26 + 7 days", "Friday, January 1, 2027"),
+            ("25 dec 26", "Friday, December 25, 2026"),
+            (
+                "dec 25 26 at 9am utc to ist",
+                "December 25, 2026, 2:30 PM IST",
+            ),
+            (
+                "25/12/26 at 9am utc to ist",
+                "December 25, 2026, 2:30 PM IST",
+            ),
             ("noon ist to cst", "12:30 AM CST"),
             ("midnight utc to ist", "5:30 AM IST"),
             ("12:30pm + 1:30", "2:00 PM"),
@@ -562,6 +578,23 @@ mod tests {
         ] {
             assert!(provider.auto_claim(query), "{query}");
             assert_eq!(provider.search(query)[0].title, expected, "{query}");
+        }
+        // The exact count depends on today; dates.rs tests a fixed clock.
+        assert!(provider.auto_claim("days until 25 december"));
+        let countdown = provider.search("days until 25 december")[0]
+            .title
+            .to_string();
+        assert!(
+            countdown == "Today" || countdown.ends_with(" day") || countdown.ends_with(" days"),
+            "{countdown}"
+        );
+        for query in ["days until 31 feb", "31 feb 2026 + 3 days"] {
+            assert!(provider.auto_claim(query), "{query}");
+            assert_eq!(
+                provider.search(query)[0].title,
+                "Invalid date or time. Try another expression.",
+                "{query}"
+            );
         }
         // App names are not claimed as calculations.
         for query in ["days gone", "noon", "midnight commander"] {

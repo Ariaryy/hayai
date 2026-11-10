@@ -218,6 +218,7 @@ fn valid_date(year: i64, month: u32, day: u32) -> bool {
 pub fn is_time_query(input: &str) -> bool {
     let lower = input.trim().to_ascii_lowercase();
     parse_leading_clock(input).is_some()
+        || dates::is_date_query(&lower)
         || (input.trim_start().starts_with(|c: char| c.is_ascii_digit()) && lower.contains(" at "))
         || lower
             .strip_prefix("in ")
@@ -232,18 +233,16 @@ fn parse_zoned_clock(input: &str) -> Option<ParsedZonedClock> {
     let input = input.trim();
     let lower = input.to_ascii_lowercase();
     let (year, month, day, clock_input, explicit_date) = if let Some(at) = lower.find(" at ") {
-        let date = input[..at].split_whitespace().collect::<Vec<_>>();
-        if !(2..=3).contains(&date.len()) {
-            return None;
-        }
-        let day = date[0].trim_end_matches([',', '.']).parse::<u32>().ok()?;
-        let month = month_number(date[1].trim_end_matches([',', '.']))?;
-        let year = if let Some(year) = date.get(2) {
-            year.trim_end_matches([',', '.']).parse::<i32>().ok()?
-        } else {
-            native::local_now().0
-        };
-        (year, month, day, &input[at + 4..], true)
+        // Shares every date form with clockless dates ("dec 25", "25/12/26").
+        let current_year = i64::from(native::local_now().0);
+        let (year, month, day) = dates::parse_date(&input[..at], current_year)?;
+        (
+            i32::try_from(year).ok()?,
+            month,
+            day,
+            &input[at + 4..],
+            true,
+        )
     } else {
         let (year, month, day, _, _) = native::local_now();
         (year, month, day, input, false)
@@ -441,6 +440,7 @@ pub fn convert(input: &str) -> Option<EvalResult> {
         .or_else(|| parse_timezone_difference(input))
         .or_else(|| parse_timezone_conversion(input))
         .or_else(|| parse_date_arithmetic(input))
+        .or_else(|| dates::parse_date_math(input))
         .or_else(|| clock_literal(input))
 }
 
@@ -679,6 +679,7 @@ mod tests {
 
 mod calendar;
 use calendar::*;
+mod dates;
 mod zones;
 pub(super) use zones::target_prefix;
 use zones::*;

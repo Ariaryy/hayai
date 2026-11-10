@@ -141,7 +141,7 @@ pub(super) fn days_in_month(year: i64, month: u32) -> u32 {
     (next - days_from_civil(year, month, 1)) as u32
 }
 
-fn add_months(year: i64, month: u32, day: u32, months: i64) -> Option<(i64, u32, u32)> {
+pub(super) fn add_months(year: i64, month: u32, day: u32, months: i64) -> Option<(i64, u32, u32)> {
     if !valid_date(year, month, day) {
         return None;
     }

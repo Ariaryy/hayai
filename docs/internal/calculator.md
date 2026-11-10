@@ -75,6 +75,17 @@ conversion back to local time. Seconds survive calculation and formatting.
 Windows round-trip validation rejects nonexistent local times; ambiguous
 local hours use Windows' selected offset.
 
+Clockless calendar dates (`25 dec 2026 + 30 days`, `days until 25 dec`,
+date ranges) live in `time/dates.rs` and use whole calendar days without
+timezone rules. A date without a year is validated against the year it
+resolves to, so `days until 29 feb` finds the next leap year. Numeric dates
+are day first independent of the Windows region, falling back to month
+first only when day first is not a real date. Recognition requires a
+day-month pair, a valid numeric date, or an explicit `days until`/`since`/
+`between` prefix followed by a date, so app names such as `days gone` and
+arithmetic such as `45-12-26` are not claimed. Timezone phrases with
+`at` share the same date parser.
+
 Explicit abbreviations remain fixed offsets. Named places, supported IANA
 identities, and matching Windows zone names use Windows rules. Native lookup
 keeps at most four resolved definitions per thread for 60 seconds, avoiding

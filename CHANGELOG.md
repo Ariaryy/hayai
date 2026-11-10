@@ -11,6 +11,13 @@ yet included in a published package.
   `12:30 PM IST to CST`, `1:30 pm + 2` and `2 months ago at 5 pm` give the
   same results as `12:30PM IST to CST`, `1:30pm + 2` and
   `2 months ago at 5pm`.
+- Count days to and from dates (`days until 25 december`,
+  `days since 1 jan 2026`, `1 jan 2026 to 10 nov 2026`), move a date by a
+  duration (`1 jan 2026 + 30 days`, `2 weeks before 25 dec 2026`), and show
+  the weekday of a date such as `25 dec 2026`.
+- Accept numeric dates (`25-12-26`, `25/12/2026`) and two-digit years
+  (`25 dec 26`) in date calculations and timezone conversions. Numeric dates
+  are read day first.
 - Accept `noon` and `midnight` as clock times (`noon ist to cst`) and
   `+ 1:30` or `+ 1h30m` as clock offsets.
 - Add or subtract percentages of a value: `200 + 10%` is `220` and

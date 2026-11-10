@@ -66,6 +66,7 @@ discord
 100 usd to inr
 3pm est to ist
 5 days from now
+days until 25 december
 ```
 
 Press `Space`, then `f` to search files. Select a result with the arrow keys
