@@ -181,7 +181,7 @@ pub(super) fn parse_date_arithmetic_with_zone(
     let trimmed = input.trim();
     let lower = trimmed.to_lowercase();
     let (relative, at_time) = match lower.rsplit_once(" at ") {
-        Some((relative, clock)) => (relative, Some(parse_clock(clock.trim())?)),
+        Some((relative, clock)) => (relative, Some(parse_standalone_clock(clock)?)),
         None => (lower.as_str(), None),
     };
     let (duration_text, sign) = if let Some(value) = relative.strip_suffix(" from now") {

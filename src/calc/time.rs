@@ -149,19 +149,27 @@ fn parse_leading_clock(input: &str) -> Option<((u32, u32), &str)> {
         .unwrap_or(input.len());
     let first = &input[..first_end];
     let rest = input[first_end..].trim_start();
-    if let Some(clock) = parse_clock(first) {
-        return Some((clock, rest));
-    }
 
+    // Try a separated meridiem first: "12:30" is already a valid 24-hour
+    // clock, so accepting it alone would leave "pm" as part of the timezone
+    // or offset that follows ("12:30 pm ist to cst").
     let meridiem_end = rest
         .find(|c: char| c.is_whitespace() || matches!(c, '+' | '-'))
         .unwrap_or(rest.len());
     let meridiem = &rest[..meridiem_end];
-    if !matches!(meridiem.to_ascii_lowercase().as_str(), "am" | "pm") {
-        return None;
+    if matches!(meridiem.to_ascii_lowercase().as_str(), "am" | "pm")
+        && let Some(clock) = parse_clock(&format!("{first}{meridiem}"))
+    {
+        return Some((clock, rest[meridiem_end..].trim_start()));
     }
-    let clock = parse_clock(&format!("{first}{meridiem}"))?;
-    Some((clock, rest[meridiem_end..].trim_start()))
+    parse_clock(first).map(|clock| (clock, rest))
+}
+
+/// A complete clock with nothing after it, with or without a space before
+/// the meridiem ("5pm", "5 pm", "12:30 pm").
+fn parse_standalone_clock(input: &str) -> Option<(u32, u32)> {
+    let (clock, rest) = parse_leading_clock(input)?;
+    rest.is_empty().then_some(clock)
 }
 
 struct ParsedZonedClock {

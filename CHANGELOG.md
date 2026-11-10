@@ -5,6 +5,13 @@ yet included in a published package.
 
 ## Unreleased
 
+### Calculator
+
+- Accept a space before AM/PM in clock times with minutes, so
+  `12:30 PM IST to CST`, `1:30 pm + 2` and `2 months ago at 5 pm` give the
+  same results as `12:30PM IST to CST`, `1:30pm + 2` and
+  `2 months ago at 5pm`.
+
 ### Diagnostics
 
 - Include application catalog scanning and search timing in copied diagnostic

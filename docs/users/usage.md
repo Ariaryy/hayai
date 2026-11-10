@@ -54,9 +54,10 @@ rate date and marks expired cached rates when offline.
 Spaces between an amount and its unit are optional: `1C to F` and `1 C to F`,
 `5.5kg to lb` and `5.5 kg to lb`, `$100 to INR` and `$ 100 to INR` agree.
 Clock and duration spacing works the same way: `1pm+30min`, `1 pm + 30 min`,
-and `1 pm+30min` agree. Conversion keywords (`to`, `in`, `as`) remain separate
-words. Multiword currencies and places keep their spaces: `100 US dollars to
-Indian rupees`, `12pm New York to London`.
+and `1 pm+30min` agree, as do `12:30PM IST to CST` and `12:30 PM IST to CST`.
+Conversion keywords (`to`, `in`, `as`) remain separate words. Multiword
+currencies and places keep their spaces: `100 US dollars to Indian rupees`,
+`12pm New York to London`.
 
 Physical symbols preserve case: `1 Mb to MB` is `0.125 MB`, while `1 MB to Mb`
 is `8 Mb`. Legacy lowercase byte aliases (`kb`, `mb`, `gb`, `tb`) still mean

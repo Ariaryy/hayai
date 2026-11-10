@@ -493,6 +493,14 @@ mod tests {
             ("1C", "1 C"),
             ("1c", "1 c"),
             ("4pm+2h30min", "4 pm + 2 hours 30 minutes"),
+            // "12:30" alone is a valid 24-hour clock; the separated
+            // meridiem must still apply instead of joining the timezone.
+            ("12:30PM IST to CST", "12:30 PM IST to CST"),
+            ("12:30am", "12:30 am"),
+            ("1:30pm+2", "1:30 pm + 2"),
+            ("9:15am-45mins", "9:15 am - 45 mins"),
+            ("2 months ago at 5pm", "2 months ago at 5 pm"),
+            ("2 months ago at 12:30pm", "2 months ago at 12:30 pm"),
         ] {
             assert!(provider.auto_claim(joined), "{joined}");
             assert!(provider.auto_claim(spaced), "{spaced}");
@@ -502,6 +510,10 @@ mod tests {
                 "{joined}"
             );
         }
+        let spaced_clock = &provider.search("12:30 PM IST to CST")[0];
+        assert_eq!(spaced_clock.title, "1:00 AM CST");
+        assert_eq!(spaced_clock.subtitle.as_deref(), Some("12:30 PM IST"));
+        assert_eq!(provider.search("12:30 am")[0].title, "12:30 AM");
         assert_eq!(provider.search("1Mb to MB")[0].title, "0.125 MB");
         assert_eq!(provider.search("1MB to Mb")[0].title, "8 Mb");
     }
