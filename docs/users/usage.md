@@ -51,6 +51,9 @@ Percentages added to or subtracted from a value change it by that share:
 `200 + 10%` is `220`, `200 - 10%` is `180`, and `15% off 200` is `170`, while
 `10% of 200` is `20`. `6 x 7` multiplies when spaced.
 
+`noon` and `midnight` work as clock times (`noon ist to cst`), and clock
+offsets accept `+ 1:30` and `+ 1h30m`.
+
 Press `Enter` to copy a calculator result. Currency cards round for display;
 the clipboard keeps the engine value before currency display rounding. Rates
 are cached locally and refreshed outside the UI thread. The card shows the

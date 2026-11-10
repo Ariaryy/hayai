@@ -11,6 +11,8 @@ yet included in a published package.
   `12:30 PM IST to CST`, `1:30 pm + 2` and `2 months ago at 5 pm` give the
   same results as `12:30PM IST to CST`, `1:30pm + 2` and
   `2 months ago at 5pm`.
+- Accept `noon` and `midnight` as clock times (`noon ist to cst`) and
+  `+ 1:30` or `+ 1h30m` as clock offsets.
 - Add or subtract percentages of a value: `200 + 10%` is `220` and
   `200 - 10%` is `180`. Also accept `15% off 200` and spaced `6 x 7`.
 - Read lowercase `mbps` as megabits per second, as in internet speeds, instead

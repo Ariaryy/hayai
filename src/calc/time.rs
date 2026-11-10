@@ -98,8 +98,14 @@ pub fn timezone_labels(input: &str) -> Option<(String, String)> {
 /// 24-hour `(hour, minute)`. Requires a colon or an am/pm suffix — a bare
 /// number like `"5"` is deliberately rejected so this never collides with
 /// plain arithmetic (`"5 + 3"` must stay a calculator expression).
+/// `noon` and `midnight` name 12:00 PM and 12:00 AM.
 fn parse_clock(token: &str) -> Option<(u32, u32)> {
     let lower = token.to_lowercase();
+    match lower.as_str() {
+        "noon" => return Some((12, 0)),
+        "midnight" => return Some((0, 0)),
+        _ => {}
+    }
     let (digits, meridiem) = if let Some(d) = lower.strip_suffix("am") {
         (d, Some(false))
     } else if let Some(d) = lower.strip_suffix("pm") {
@@ -315,6 +321,14 @@ fn parse_clock_arithmetic(input: &str) -> Option<EvalResult> {
     let rest = rest.trim();
     let offset_seconds = if let Ok(hours) = rest.parse::<f64>() {
         hours * 3600.0
+    } else if let Some((hours, minutes)) = rest.split_once(':') {
+        // "+ 1:30" is an hours:minutes duration, not a clock time.
+        let hours: u32 = hours.parse().ok()?;
+        let minutes: u32 = minutes.parse().ok()?;
+        if minutes >= 60 {
+            return None;
+        }
+        f64::from(hours) * 3600.0 + f64::from(minutes) * 60.0
     } else {
         let duration = parse_duration(rest)?;
         if duration.months != 0 {

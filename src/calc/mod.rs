@@ -552,6 +552,24 @@ mod tests {
     }
 
     #[test]
+    fn calendar_dates_and_named_clocks() {
+        let provider = isolated_provider();
+        for (query, expected) in [
+            ("noon ist to cst", "12:30 AM CST"),
+            ("midnight utc to ist", "5:30 AM IST"),
+            ("12:30pm + 1:30", "2:00 PM"),
+            ("12:30pm + 1h30m", "2:00 PM"),
+        ] {
+            assert!(provider.auto_claim(query), "{query}");
+            assert_eq!(provider.search(query)[0].title, expected, "{query}");
+        }
+        // App names are not claimed as calculations.
+        for query in ["days gone", "noon", "midnight commander"] {
+            assert!(!provider.auto_claim(query), "{query}");
+        }
+    }
+
+    #[test]
     fn invalid_time_requests_cannot_fall_through() {
         let provider = isolated_provider();
         for query in [

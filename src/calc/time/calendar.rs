@@ -116,7 +116,8 @@ pub(super) fn parse_duration(input: &str) -> Option<DurationParts> {
                 parts.has_clock = true;
                 let factor = match unit.as_str() {
                     "hour" | "hours" | "hr" | "hrs" | "h" => 3600.0,
-                    "minute" | "minutes" | "min" | "mins" => 60.0,
+                    // Months are "mo"; a bare "m" in a duration ("1h30m") is minutes.
+                    "minute" | "minutes" | "min" | "mins" | "m" => 60.0,
                     "second" | "seconds" | "sec" | "secs" | "s" => 1.0,
                     _ => return None,
                 };
