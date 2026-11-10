@@ -528,8 +528,18 @@ mod tests {
             ("100 MBps to Mbps", "800 Mbps"),
             ("100 Mbit/s to MB/s", "12.5 MB / s"),
             ("1 Gbit to Mbit", "1000 megabits"),
+            ("1 sq km to sq mi", "0.3861021585 mi^2"),
+            ("1 sq ft to sq m", "0.09290304 m^2"),
             ("5 ft 10 in to cm", "177.8 cm"),
             ("5ft 10in to cm", "177.8 cm"),
+            ("200 + 10%", "220"),
+            ("200 - 10%", "180"),
+            ("200+10%", "220"),
+            ("1 km + 10%", "1.1 km"),
+            ("15% off 200", "170"),
+            ("10% of 200", "20"),
+            ("6 x 7", "42"),
+            ("2 X (3 + 4)", "14"),
         ] {
             assert!(provider.auto_claim(query), "{query}");
             assert_eq!(provider.search(query)[0].title, expected, "{query}");
@@ -538,6 +548,7 @@ mod tests {
             provider.search("5 ft 10 in to cm")[0].subtitle.as_deref(),
             Some("5 ft 10 in")
         );
+        assert_eq!(provider.search("0x7 + 1")[0].title, "0x8");
     }
 
     #[test]

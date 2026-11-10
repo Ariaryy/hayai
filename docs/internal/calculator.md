@@ -24,6 +24,9 @@ Word operators require a right operand, while completed postfix percentages
 and factorials remain valid. Unit completions use the engine's registry plus
 Hayai aliases, rather than another conversion-factor table. The
 picometer/PM collision is resolved by an explicit physical length target.
+A final plain percentage after `+`/`-` (`200 + 10%`) is rewritten as a change
+of its left side, as on common calculators; the engine alone reads `10%` as
+`0.1`. Other percentages (`10% of 200`, `20%`) keep the engine's meaning.
 Lowercase `mbps` is megabits per second, unlike the engine's millibits.
 Input length, nesting, output size, and a shared cooperative engine deadline
 bound evaluation. Recursive aggregates and comparisons share that deadline.

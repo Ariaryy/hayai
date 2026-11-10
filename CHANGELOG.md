@@ -11,9 +11,11 @@ yet included in a published package.
   `12:30 PM IST to CST`, `1:30 pm + 2` and `2 months ago at 5 pm` give the
   same results as `12:30PM IST to CST`, `1:30pm + 2` and
   `2 months ago at 5pm`.
+- Add or subtract percentages of a value: `200 + 10%` is `220` and
+  `200 - 10%` is `180`. Also accept `15% off 200` and spaced `6 x 7`.
 - Read lowercase `mbps` as megabits per second, as in internet speeds, instead
-  of millibits; accept `MBps`, `Mbit/s` and `Mbit` data units, and heights
-  such as `5 ft 10 in to cm`.
+  of millibits; accept `MBps`, `Mbit/s` and `Mbit` data units, the `sq` prefix
+  (`1 sq km to sq mi`), and heights such as `5 ft 10 in to cm`.
 
 ### Diagnostics
 

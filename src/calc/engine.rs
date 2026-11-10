@@ -86,6 +86,13 @@ fn evaluate_inner(
         return None;
     }
 
+    if let Some(rewritten) = percentage_change(trimmed)
+        && let Some(mut result) = evaluate_inner(&rewritten, rates, budget, depth + 1)
+    {
+        result.expression = trimmed.to_string();
+        return Some(result);
+    }
+
     if let Some(result) = evaluate_aggregate(trimmed, rates, budget, depth + 1) {
         return Some(result);
     }
@@ -99,7 +106,8 @@ fn evaluate_inner(
     }
 
     let temperature = super::units::temperature_expression(trimmed);
-    let normalized = normalize_syntax(temperature.as_deref().unwrap_or(trimmed));
+    let spaced = spaced_multiplication(temperature.as_deref().unwrap_or(trimmed));
+    let normalized = normalize_syntax(&spaced);
     let mut context = fend_core::Context::new();
     context.disable_rng();
     if let Some(rates) = rates {
@@ -291,6 +299,73 @@ fn parse_number_sign(output: &str) -> Option<std::cmp::Ordering> {
     })
 }
 
+fn plain_number(text: &str) -> bool {
+    let text = text.trim();
+    !text.is_empty()
+        && text.bytes().any(|b| b.is_ascii_digit())
+        && text.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+        && text.bytes().filter(|b| *b == b'.').count() <= 1
+}
+
+/// Calculators and search engines read "200 + 10%" as 200 increased by 10%
+/// (220) and "15% off 200" as 170; the engine alone reads "10%" as 0.1.
+/// Only a final plain percentage is rewritten, so "10% of 200", "20%", and
+/// "10 mod 3" keep their meaning. The base keeps its units ("1 km + 10%").
+fn percentage_change(input: &str) -> Option<String> {
+    let lower = input.to_ascii_lowercase();
+    if let Some((percent, base)) = lower.split_once("% off ") {
+        return (plain_number(percent) && !base.trim().is_empty()).then(|| {
+            format!(
+                "({}) * (100 - {}) / 100",
+                &input[lower.len() - base.len()..],
+                percent.trim()
+            )
+        });
+    }
+    let body = input.strip_suffix('%')?.trim_end();
+    let start = body
+        .rfind(|c: char| !(c.is_ascii_digit() || c == '.'))
+        .map_or(0, |index| index + 1);
+    let percent = &body[start..];
+    if !plain_number(percent) {
+        return None;
+    }
+    let before = body[..start].trim_end();
+    let operator = before.chars().last().filter(|c| matches!(c, '+' | '-'))?;
+    let base = before[..before.len() - 1].trim_end();
+    // A dangling operator or exponent ("2 * +10%", "1e+5%") is not a base.
+    let exponent = base.ends_with(['e', 'E'])
+        && base[..base.len() - 1].ends_with(|c: char| c.is_ascii_digit());
+    if base.is_empty() || exponent || base.ends_with(['+', '-', '*', '/', '^', '(', '%']) {
+        return None;
+    }
+    Some(format!("({base}) * (100 {operator} {percent}) / 100"))
+}
+
+/// "6 x 7" as multiplication. The spaces are required: "0x7" is hex and a
+/// bare "x" may be an identifier.
+fn spaced_multiplication(input: &str) -> Cow<'_, str> {
+    let lower = input.to_ascii_lowercase();
+    if !lower.contains(" x ") {
+        return Cow::Borrowed(input);
+    }
+    let mut output = String::with_capacity(input.len());
+    let mut last = 0;
+    for (index, _) in lower.match_indices(" x ") {
+        let before = input[..index].trim_end();
+        let after = input[index + 3..].trim_start();
+        if before.ends_with(|c: char| c.is_ascii_digit() || c == ')')
+            && after.starts_with(|c: char| c.is_ascii_digit() || matches!(c, '(' | '.'))
+        {
+            output.push_str(&input[last..index]);
+            output.push_str(" * ");
+            last = index + 3;
+        }
+    }
+    output.push_str(&input[last..]);
+    Cow::Owned(output)
+}
+
 /// Translate familiar calculator words that the engine deliberately leaves
 /// to front ends. Replacements only apply to complete ASCII words, so unit
 /// names and function identifiers are unaffected.
@@ -300,7 +375,16 @@ fn normalize_syntax(input: &str) -> Cow<'_, str> {
             super::units::canonical_word(word).is_some()
                 || matches!(
                     word.to_ascii_lowercase().as_str(),
-                    "add" | "plus" | "minus" | "mul" | "div" | "mod" | "modulo" | "pow" | "power"
+                    "add"
+                        | "plus"
+                        | "minus"
+                        | "mul"
+                        | "div"
+                        | "mod"
+                        | "modulo"
+                        | "pow"
+                        | "power"
+                        | "sq"
                 )
         });
     if !needs_rewrite {
@@ -320,6 +404,8 @@ fn normalize_syntax(input: &str) -> Cow<'_, str> {
             "div" => "/",
             "mod" | "modulo" => "%",
             "pow" | "power" => "^",
+            // "1 sq km to sq mi"; the engine understands "square km".
+            "sq" => "square",
             _ => super::units::canonical_word(word).unwrap_or(word.as_str()),
         };
         output.push_str(replacement);

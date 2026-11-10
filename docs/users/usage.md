@@ -44,7 +44,12 @@ keyword uses the same leading-space command router when needed.
 1pm + 5
 3pm est to ist
 2 weeks ago
+200 + 10%
 ```
+
+Percentages added to or subtracted from a value change it by that share:
+`200 + 10%` is `220`, `200 - 10%` is `180`, and `15% off 200` is `170`, while
+`10% of 200` is `20`. `6 x 7` multiplies when spaced.
 
 Press `Enter` to copy a calculator result. Currency cards round for display;
 the clipboard keeps the engine value before currency display rounding. Rates
@@ -64,8 +69,9 @@ is `8 Mb`. Legacy lowercase byte aliases (`kb`, `mb`, `gb`, `tb`) still mean
 bytes; use `b`, `Mb`, `Gb`, `Tb` or full bit names for bits. Data rates
 follow internet usage instead: `mbps`, `Mbps` and `Mbit/s` are megabits per
 second, while `MBps` and `MB/s` are megabytes per second, so
-`100 mbps to MB/s` gives 12.5 megabytes per second. `C` denotes Celsius; a
-bare `c` denotes the speed of light. In an explicit temperature
+`100 mbps to MB/s` gives 12.5 megabytes per second. `sq` abbreviates
+`square` (`1 sq km to sq mi`). `C` denotes Celsius; a bare `c` denotes the
+speed of light. In an explicit temperature
 pair such as `1c to f`, the target makes the temperature meaning clear.
 `k`/`K` means thousands only after an amount in a conversion (`5k km to miles`),
 not in ordinary arithmetic or time offsets.
