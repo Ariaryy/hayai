@@ -55,14 +55,17 @@ Spaces between an amount and its unit are optional: `1C to F` and `1 C to F`,
 `5.5kg to lb` and `5.5 kg to lb`, `$100 to INR` and `$ 100 to INR` agree.
 Clock and duration spacing works the same way: `1pm+30min`, `1 pm + 30 min`,
 and `1 pm+30min` agree, as do `12:30PM IST to CST` and `12:30 PM IST to CST`.
-Conversion keywords (`to`, `in`, `as`) remain separate words. Multiword
-currencies and places keep their spaces: `100 US dollars to Indian rupees`,
-`12pm New York to London`.
+Conversion keywords (`to`, `in`, `as`) remain separate words, except in
+heights such as `5 ft 10 in to cm`. Multiword currencies and places keep
+their spaces: `100 US dollars to Indian rupees`, `12pm New York to London`.
 
 Physical symbols preserve case: `1 Mb to MB` is `0.125 MB`, while `1 MB to Mb`
 is `8 Mb`. Legacy lowercase byte aliases (`kb`, `mb`, `gb`, `tb`) still mean
-bytes; use `b`, `Mb`, `Gb`, `Tb` or full bit names for bits. `C` denotes
-Celsius; a bare `c` denotes the speed of light. In an explicit temperature
+bytes; use `b`, `Mb`, `Gb`, `Tb` or full bit names for bits. Data rates
+follow internet usage instead: `mbps`, `Mbps` and `Mbit/s` are megabits per
+second, while `MBps` and `MB/s` are megabytes per second, so
+`100 mbps to MB/s` gives 12.5 megabytes per second. `C` denotes Celsius; a
+bare `c` denotes the speed of light. In an explicit temperature
 pair such as `1c to f`, the target makes the temperature meaning clear.
 `k`/`K` means thousands only after an amount in a conversion (`5k km to miles`),
 not in ordinary arithmetic or time offsets.

@@ -24,6 +24,7 @@ Word operators require a right operand, while completed postfix percentages
 and factorials remain valid. Unit completions use the engine's registry plus
 Hayai aliases, rather than another conversion-factor table. The
 picometer/PM collision is resolved by an explicit physical length target.
+Lowercase `mbps` is megabits per second, unlike the engine's millibits.
 Input length, nesting, output size, and a shared cooperative engine deadline
 bound evaluation. Recursive aggregates and comparisons share that deadline.
 

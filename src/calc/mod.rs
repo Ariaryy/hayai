@@ -519,6 +519,28 @@ mod tests {
     }
 
     #[test]
+    fn everyday_units_and_percentages() {
+        let provider = isolated_provider();
+        for (query, expected) in [
+            // Lowercase "mbps" is how internet speeds are written: megabits.
+            ("100 mbps to MB/s", "12.5 MB / s"),
+            ("100 Mbps to MBps", "12.5 MB / s"),
+            ("100 MBps to Mbps", "800 Mbps"),
+            ("100 Mbit/s to MB/s", "12.5 MB / s"),
+            ("1 Gbit to Mbit", "1000 megabits"),
+            ("5 ft 10 in to cm", "177.8 cm"),
+            ("5ft 10in to cm", "177.8 cm"),
+        ] {
+            assert!(provider.auto_claim(query), "{query}");
+            assert_eq!(provider.search(query)[0].title, expected, "{query}");
+        }
+        assert_eq!(
+            provider.search("5 ft 10 in to cm")[0].subtitle.as_deref(),
+            Some("5 ft 10 in")
+        );
+    }
+
+    #[test]
     fn invalid_time_requests_cannot_fall_through() {
         let provider = isolated_provider();
         for query in [

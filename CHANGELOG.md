@@ -11,6 +11,9 @@ yet included in a published package.
   `12:30 PM IST to CST`, `1:30 pm + 2` and `2 months ago at 5 pm` give the
   same results as `12:30PM IST to CST`, `1:30pm + 2` and
   `2 months ago at 5pm`.
+- Read lowercase `mbps` as megabits per second, as in internet speeds, instead
+  of millibits; accept `MBps`, `Mbit/s` and `Mbit` data units, and heights
+  such as `5 ft 10 in to cm`.
 
 ### Diagnostics
 
