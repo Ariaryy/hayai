@@ -30,7 +30,7 @@ The name comes from 速い (*hayai*), Japanese for "fast."
 | --- | --- |
 | App search | Find and launch desktop and Microsoft Store apps. |
 | File search | Find files with the first-party [Scry Search](https://github.com/Ariaryy/scry-search) index. |
-| Calculator | Do arithmetic, convert units and currencies, and work with timezones and dates. |
+| Calculator | Do arithmetic, convert units, currencies and timezones, and count days between dates. |
 | Contextual actions | Reveal files in Explorer, copy paths, or launch apps as administrator. |
 | Customization | Choose your themes, keyboard shortcuts, command aliases and launcher preferences. |
 
@@ -65,6 +65,7 @@ discord
 15 km to miles
 100 usd to inr
 3pm est to ist
+time in tokyo
 5 days from now
 days until 25 december
 ```

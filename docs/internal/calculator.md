@@ -86,7 +86,13 @@ day-month pair, a valid numeric date, or an explicit `days until`/`since`/
 arithmetic such as `45-12-26` are not claimed. Timezone phrases with
 `at` share the same date parser.
 
-Explicit abbreviations remain fixed offsets. Named places, supported IANA
+Explicit abbreviations and `utc±H[:MM]` offsets remain fixed offsets;
+ambiguous abbreviations take their common English meaning (`IST` India,
+`CST`/`AST` North America, `BST` Britain). The city table holds only major
+places. Several cities may share a Windows key; the first one for a key
+labels the system timezone. Current-time phrases (`time in tokyo`) are
+claimed only when the place resolves, so app names such as `screen time`
+still reach the app provider. Named places, supported IANA
 identities, and matching Windows zone names use Windows rules. Native lookup
 keeps at most four resolved definitions per thread for 60 seconds, avoiding
 repeated enumeration without retaining the entire zone database or polling.

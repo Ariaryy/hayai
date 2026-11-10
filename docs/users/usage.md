@@ -94,9 +94,17 @@ pair such as `1c to f`, the target makes the temperature meaning clear.
 not in ordinary arithmetic or time offsets.
 
 Named places follow Windows daylight-saving rules, including supported IANA
-names such as `America/New_York`; explicit abbreviations such as `EST` retain
-their fixed offsets. Months and whole days use the local calendar, while
-hours, minutes and seconds are elapsed durations: `in 1 day` and `in 24 hours`
+names such as `America/New_York`, major cities, single-timezone countries
+(`japan`, `uk`), and the US zone names `pacific`/`PT`, `eastern`/`ET`,
+`central`/`CT`, and `mountain`/`MT`. `usa` and `america` mean US Eastern
+time. Explicit abbreviations such as `EST` retain their fixed offsets, as do
+`utc+3`, `gmt-8`, and `utc+5:30`. A date may lead the clock with or without
+`at` (`25-12-26 9am utc to ist`). `3pm in tokyo` shows the local 3 PM in
+Tokyo, and `time in tokyo`, `now in tokyo`, or `tokyo time` show the current
+time there.
+
+Months and whole days use the local calendar, while hours, minutes and
+seconds are elapsed durations: `in 1 day` and `in 24 hours`
 can differ across DST. Fractional days contribute elapsed hours. Seconds are
 retained, and clock arithmetic shows a day change when it crosses midnight.
 Invalid dates, nonexistent local times, and offsets outside the supported

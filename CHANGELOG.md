@@ -20,6 +20,16 @@ yet included in a published package.
   are read day first.
 - Accept `noon` and `midnight` as clock times (`noon ist to cst`) and
   `+ 1:30` or `+ 1h30m` as clock offsets.
+- Show the current time in a place (`time in tokyo`, `tokyo time`) and the
+  local time elsewhere (`3pm in tokyo`), and allow a date before the clock
+  without `at` (`25-12-26 9am utc to ist`).
+- Convert UTC offsets (`utc+3`, `gmt-8`, `utc+5:30`) and more timezone
+  abbreviations, including `HKT`, `EEST`, `NZDT`, `HST`, `AKST`, `AST`,
+  `AWST`, `ACST`, `PKT`, `NPT`, `WIB`, `SAST`, `EAT` and `BRT`.
+- Recognize `pacific`/`PT`, `eastern`/`ET`, `central`/`CT` and
+  `mountain`/`MT` with daylight saving, plus more major cities and the
+  countries `japan`, `uk` and `usa`. These no longer show a partial-name
+  preview that looked like a result.
 - Add or subtract percentages of a value: `200 + 10%` is `220` and
   `200 - 10%` is `180`. Also accept `15% off 200` and spaced `6 x 7`.
 - Read lowercase `mbps` as megabits per second, as in internet speeds, instead

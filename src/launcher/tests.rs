@@ -706,6 +706,19 @@ fn spaces_binary_operators_without_splitting_unary_signs() {
 }
 
 #[test]
+fn keeps_utc_offsets_together() {
+    assert_eq!(
+        format_expression_for_display("12:00 PM UTC+5:30"),
+        "12:00 PM UTC+5:30"
+    );
+    assert_eq!(
+        format_result_for_display("3:00 AM GMT-8"),
+        "3:00\u{a0}AM GMT-8"
+    );
+    assert_eq!(format_expression_for_display("12+2"), "12 + 2");
+}
+
+#[test]
 fn expands_and_pluralizes_duration_units() {
     assert_eq!(
         format_expression_for_display("12 hr from now"),

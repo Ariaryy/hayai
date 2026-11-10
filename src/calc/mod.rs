@@ -205,6 +205,7 @@ fn is_candidate(input: &str) -> bool {
             || lower.starts_with("in ")
             || lower.starts_with("now ")
             || lower.starts_with("days ")
+            || lower.ends_with(" time")
             || (c.is_ascii_alphabetic()
                 && (grammar::split_conversion(input).is_some()
                     || lower
