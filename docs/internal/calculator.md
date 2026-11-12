@@ -84,10 +84,14 @@ first only when day first is not a real date. Recognition requires a
 day-month pair, a valid numeric date, or an explicit `days until`/`since`/
 `between` prefix followed by a date, so app names such as `days gone` and
 arithmetic such as `45-12-26` are not claimed. Timezone phrases with
-`at` share the same date parser.
+`at` share the same date parser. The first-character gate rejects letters,
+so a month-first start (`nov 19 11pm ET`) is claimed only by a valid
+answer or by a digit after the date (a clock still being typed), which
+keeps file names such as `june 2026 budget` in search.
 
-Explicit abbreviations and `utc±H[:MM]` offsets remain fixed offsets;
-ambiguous abbreviations take their common English meaning (`IST` India,
+Explicit abbreviations and `utc±H[:MM]` offsets (also written sign first,
+`+5:30 gmt`) remain fixed offsets; ambiguous abbreviations take their
+common English meaning (`IST` India,
 `CST`/`AST` North America, `BST` Britain). The city table holds only major
 places. Several cities may share a Windows key; the first one for a key
 labels the system timezone. Current-time phrases (`time in tokyo`) are

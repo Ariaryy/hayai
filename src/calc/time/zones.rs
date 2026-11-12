@@ -535,13 +535,18 @@ fn compact_place(name: &str) -> String {
         .collect()
 }
 
-/// "utc+3", "gmt-8", "utc+5:30", "utc+0530", or "gmt + 5:45" (spaces are
-/// already removed) as a fixed offset in minutes and its display name.
-/// Real offsets span UTC-12 to UTC+14.
+/// "utc+3", "gmt-8", "utc+5:30", "utc+0530", "gmt + 5:45", or the sign first
+/// as in "+5:30 gmt" (spaces are already removed) as a fixed offset in minutes
+/// and its display name. Real offsets span UTC-12 to UTC+14.
 fn utc_offset(compact: &str) -> Option<(i32, String)> {
-    let (prefix, rest) = ["utc", "gmt"]
-        .iter()
-        .find_map(|prefix| Some((*prefix, compact.strip_prefix(prefix)?)))?;
+    let (prefix, rest) = ["utc", "gmt"].iter().find_map(|prefix| {
+        let rest = compact.strip_prefix(prefix).or_else(|| {
+            compact
+                .strip_suffix(prefix)
+                .filter(|rest| rest.starts_with(['+', '-']))
+        })?;
+        Some((*prefix, rest))
+    })?;
     let sign = match rest.chars().next()? {
         '+' => 1,
         '-' => -1,

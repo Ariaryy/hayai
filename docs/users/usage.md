@@ -43,6 +43,7 @@ keyword uses the same leading-space command router when needed.
 0xff to decimal
 1pm + 5
 3pm est to ist
+nov 19 11pm ET
 2 weeks ago
 days until 25 december
 1 jan 2026 + 30 days
@@ -98,10 +99,11 @@ names such as `America/New_York`, major cities, single-timezone countries
 (`japan`, `uk`), and the US zone names `pacific`/`PT`, `eastern`/`ET`,
 `central`/`CT`, and `mountain`/`MT`. `usa` and `america` mean US Eastern
 time. Explicit abbreviations such as `EST` retain their fixed offsets, as do
-`utc+3`, `gmt-8`, and `utc+5:30`. A date may lead the clock with or without
-`at` (`25-12-26 9am utc to ist`). `3pm in tokyo` shows the local 3 PM in
-Tokyo, and `time in tokyo`, `now in tokyo`, or `tokyo time` show the current
-time there.
+`utc+3`, `gmt-8`, and `utc+5:30`, also written sign first as `+5:30 gmt`.
+A date may lead the clock with or without `at`, day or month first
+(`25-12-26 9am utc to ist`, `nov 19 11pm ET`). `3pm in tokyo` shows the
+local 3 PM in Tokyo, and `time in tokyo`, `now in tokyo`, or `tokyo time`
+show the current time there.
 
 Months and whole days use the local calendar, while hours, minutes and
 seconds are elapsed durations: `in 1 day` and `in 24 hours`

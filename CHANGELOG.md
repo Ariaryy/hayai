@@ -22,10 +22,12 @@ yet included in a published package.
   `+ 1:30` or `+ 1h30m` as clock offsets.
 - Show the current time in a place (`time in tokyo`, `tokyo time`) and the
   local time elsewhere (`3pm in tokyo`), and allow a date before the clock
-  without `at` (`25-12-26 9am utc to ist`).
-- Convert UTC offsets (`utc+3`, `gmt-8`, `utc+5:30`) and more timezone
-  abbreviations, including `HKT`, `EEST`, `NZDT`, `HST`, `AKST`, `AST`,
-  `AWST`, `ACST`, `PKT`, `NPT`, `WIB`, `SAST`, `EAT` and `BRT`.
+  without `at`, day or month first (`25-12-26 9am utc to ist`,
+  `nov 19 11pm ET`).
+- Convert UTC offsets (`utc+3`, `gmt-8`, `utc+5:30`, or sign first as
+  `+5:30 gmt`) and more timezone abbreviations, including `HKT`, `EEST`,
+  `NZDT`, `HST`, `AKST`, `AST`, `AWST`, `ACST`, `PKT`, `NPT`, `WIB`, `SAST`,
+  `EAT` and `BRT`.
 - Recognize `pacific`/`PT`, `eastern`/`ET`, `central`/`CT` and
   `mountain`/`MT` with daylight saving, plus more major cities and the
   countries `japan`, `uk` and `usa`. These no longer show a partial-name

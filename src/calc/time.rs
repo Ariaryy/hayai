@@ -194,7 +194,10 @@ struct ParsedZonedClock {
 }
 
 fn month_number(token: &str) -> Option<u32> {
-    let lower = token.to_ascii_lowercase();
+    if token.len() < 3 {
+        return None;
+    }
+    // Allocation-free: the launcher's candidate gate calls this per keystroke.
     [
         "january",
         "february",
@@ -210,8 +213,25 @@ fn month_number(token: &str) -> Option<u32> {
         "december",
     ]
     .iter()
-    .position(|month| month.starts_with(&lower) && lower.len() >= 3)
+    .position(|month| {
+        month
+            .get(..token.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(token))
+    })
     .map(|index| index as u32 + 1)
+}
+
+/// "nov 19 …": a month name, then a word starting with a digit. Only a cheap
+/// gate so month-first dates reach evaluation like "19 nov" does; whether the
+/// query is really a date is decided there.
+pub fn starts_with_month_day(input: &str) -> bool {
+    let mut words = input.split_whitespace();
+    words
+        .next()
+        .is_some_and(|month| month_number(month).is_some())
+        && words
+            .next()
+            .is_some_and(|day| day.starts_with(|c: char| c.is_ascii_digit()))
 }
 
 fn valid_date(year: i64, month: u32, day: u32) -> bool {
@@ -605,6 +625,11 @@ mod tests {
             ("12pm utc+5:45 to utc", "6:15 AM UTC"),
             ("12pm ist to utc + 3", "9:30 AM UTC+3"),
             ("12:30 pm utc-3:30 to utc", "4:00 PM UTC"),
+            // The sign may also come before the zone name.
+            ("12pm +5:30 gmt to utc", "6:30 AM UTC"),
+            ("12pm +5:30 utc to utc", "6:30 AM UTC"),
+            ("12pm -4 utc to utc", "4:00 PM UTC"),
+            ("12pm utc to +3 gmt", "3:00 PM GMT+3"),
         ] {
             assert_eq!(convert(query).unwrap().value, expected, "{query}");
         }
@@ -612,6 +637,12 @@ mod tests {
             convert("12pm utc+5:30 to utc").unwrap().expression,
             "12:00 PM UTC+5:30"
         );
+        assert_eq!(
+            convert("12pm +5:30 GMT to utc").unwrap().expression,
+            "12:00 PM GMT+5:30"
+        );
+        // Without a zone name, "+5:30" stays an offset added to the clock.
+        assert_eq!(convert("11pm +5:30").unwrap().value, "4:30 AM (+1 day)");
         assert_eq!(convert("utc+3 to ist").unwrap().value, "2 hr 30 min ahead");
         for query in [
             "12pm utc+15 to ist",

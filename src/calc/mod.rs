@@ -319,8 +319,21 @@ impl CommandProvider for CalcProvider {
     /// names still fall through to the app provider.
     fn auto_claim(&self, query: &str) -> bool {
         let trimmed = query.trim();
-        if trimmed.is_empty() || !is_candidate(trimmed) {
+        if trimmed.is_empty() {
             return false;
+        }
+        if !is_candidate(trimmed) {
+            // "nov 19 11pm et" reads like "19 nov 11pm et", but a leading
+            // month word is also common in file names ("june 2026 budget"),
+            // so only an answer claims it, or a clock being typed after the
+            // date ("nov 19 11:0"), which keeps the row from flickering.
+            return trimmed.len() <= 4096
+                && time::starts_with_month_day(trimmed)
+                && (trimmed
+                    .split_whitespace()
+                    .nth(2)
+                    .is_some_and(|word| word.starts_with(|c: char| c.is_ascii_digit()))
+                    || self.evaluated(trimmed).result.is_some());
         }
         let evaluated = self.evaluated(trimmed);
         evaluated.result.is_some()
@@ -601,6 +614,71 @@ mod tests {
         for query in ["days gone", "noon", "midnight commander"] {
             assert!(!provider.auto_claim(query), "{query}");
         }
+    }
+
+    #[test]
+    fn month_first_dates_are_claimed_like_day_first_ones() {
+        let provider = isolated_provider();
+        for query in [
+            "dec 25 9am utc to ist",
+            "Dec 25 9am UTC",
+            "nov 19",
+            "november 19 2026",
+        ] {
+            assert!(provider.auto_claim(query), "{query}");
+        }
+        assert_eq!(
+            provider.search("dec 25 2026 9am utc to ist")[0].title,
+            "December 25, 2026, 2:30 PM IST"
+        );
+        assert_eq!(
+            provider.search("nov 19 2026 11pm +5:30 GMT to utc")[0].title,
+            "November 19, 2026, 5:30 PM UTC"
+        );
+        // File and app names that start with a month stay a search.
+        for query in [
+            "may",
+            "march of the penguins",
+            "june notes 2",
+            "mayday 5",
+            "october 2 notes",
+            "june 2026 budget",
+            "nov 31",
+        ] {
+            assert!(!provider.auto_claim(query), "{query}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn month_first_dates_with_a_generic_zone() {
+        let provider = isolated_provider();
+        for query in [
+            "nov 19 11pm ET",
+            "nov 19 11:00pm ET",
+            "nov 19 11:00 PM ET",
+            "nov 19 11PM ET",
+            "nov 19 11pm +5:30 GMT",
+            "nov 19 11pm +5:30 UTC",
+            "nov 19 11pm GMT+5:30",
+        ] {
+            assert!(provider.auto_claim(query), "{query}");
+            let result = &provider.search(query)[0];
+            assert!(
+                !matches!(result.action, CommandAction::EmptyState),
+                "{query}: {}",
+                result.title
+            );
+        }
+        assert_eq!(
+            provider.search("nov 19 11pm ET")[0].subtitle.as_deref(),
+            Some("11:00 PM EST")
+        );
+        assert!(
+            provider.search("nov 19 11pm ET to IST")[0]
+                .title
+                .ends_with("9:30 AM IST")
+        );
     }
 
     #[test]
