@@ -256,7 +256,7 @@ const CITY_ZONES: &[CityZone] = &[
         daylight_abbreviation: "KST",
     },
     CityZone {
-        aliases: &["sydney", "melbourne", "canberra", "australia"],
+        aliases: &["sydney", "melbourne", "canberra", "australia", "aet"],
         windows_key: "AUS Eastern Standard Time",
         identity: "Australia/Sydney",
         standard_offset: 600,
@@ -264,7 +264,7 @@ const CITY_ZONES: &[CityZone] = &[
         daylight_abbreviation: "AEDT",
     },
     CityZone {
-        aliases: &["auckland", "newzealand"],
+        aliases: &["auckland", "newzealand", "nzt"],
         windows_key: "New Zealand Standard Time",
         identity: "Pacific/Auckland",
         standard_offset: 720,
@@ -292,7 +292,7 @@ const CITY_ZONES: &[CityZone] = &[
         daylight_abbreviation: "WEST",
     },
     CityZone {
-        aliases: &["honolulu", "hawaii"],
+        aliases: &["honolulu", "hawaii", "ht"],
         windows_key: "Hawaiian Standard Time",
         identity: "Pacific/Honolulu",
         standard_offset: -600,
@@ -300,7 +300,7 @@ const CITY_ZONES: &[CityZone] = &[
         daylight_abbreviation: "HST",
     },
     CityZone {
-        aliases: &["anchorage", "alaska"],
+        aliases: &["anchorage", "alaska", "akt"],
         windows_key: "Alaskan Standard Time",
         identity: "America/Anchorage",
         standard_offset: -540,

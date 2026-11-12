@@ -701,6 +701,9 @@ mod tests {
             ("australia", "10:00 PM AEST"),
             ("lisbon", "1:00 PM WEST"),
             ("dublin", "1:00 PM IST"),
+            ("aet", "10:00 PM AEST"),
+            ("akt", "4:00 AM AKDT"),
+            ("ht", "2:00 AM HST"),
         ] {
             assert_eq!(
                 convert(&format!("1 jul 2026 12pm utc to {place}"))
@@ -709,6 +712,25 @@ mod tests {
                 format!("July 1, 2026, {expected}"),
                 "{place}"
             );
+        }
+        // Generic names switch to daylight time on their own.
+        for (query, expected) in [
+            (
+                "1 jan 2027 12pm utc to aet",
+                "January 1, 2027, 11:00 PM AEDT",
+            ),
+            (
+                "1 jan 2027 9am utc to nzt",
+                "January 1, 2027, 10:00 PM NZDT",
+            ),
+            ("1 jul 2026 9am utc to nzt", "July 1, 2026, 9:00 PM NZST"),
+            (
+                "1 jan 2027 12pm utc to akt",
+                "January 1, 2027, 3:00 AM AKST",
+            ),
+            ("1 jan 2027 12pm utc to ht", "January 1, 2027, 2:00 AM HST"),
+        ] {
+            assert_eq!(convert(query).unwrap().value, expected, "{query}");
         }
     }
 

@@ -96,8 +96,9 @@ not in ordinary arithmetic or time offsets.
 
 Named places follow Windows daylight-saving rules, including supported IANA
 names such as `America/New_York`, major cities, single-timezone countries
-(`japan`, `uk`), and the US zone names `pacific`/`PT`, `eastern`/`ET`,
-`central`/`CT`, and `mountain`/`MT`. `usa` and `america` mean US Eastern
+(`japan`, `uk`), the US zone names `pacific`/`PT`, `eastern`/`ET`,
+`central`/`CT`, and `mountain`/`MT`, and `AET` (Sydney), `NZT` (Auckland),
+`AKT` (Alaska), and `HT` (Hawaii). `usa` and `america` mean US Eastern
 time. Explicit abbreviations such as `EST` retain their fixed offsets, as do
 `utc+3`, `gmt-8`, and `utc+5:30`, also written sign first as `+5:30 gmt`.
 A date may lead the clock with or without `at`, day or month first

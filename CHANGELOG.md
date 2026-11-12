@@ -29,9 +29,9 @@ yet included in a published package.
   `NZDT`, `HST`, `AKST`, `AST`, `AWST`, `ACST`, `PKT`, `NPT`, `WIB`, `SAST`,
   `EAT` and `BRT`.
 - Recognize `pacific`/`PT`, `eastern`/`ET`, `central`/`CT` and
-  `mountain`/`MT` with daylight saving, plus more major cities and the
-  countries `japan`, `uk` and `usa`. These no longer show a partial-name
-  preview that looked like a result.
+  `mountain`/`MT` with daylight saving, as well as `AET`, `NZT`, `AKT` and
+  `HT`, plus more major cities and the countries `japan`, `uk` and `usa`.
+  These no longer show a partial-name preview that looked like a result.
 - Add or subtract percentages of a value: `200 + 10%` is `220` and
   `200 - 10%` is `180`. Also accept `15% off 200` and spaced `6 x 7`.
 - Read lowercase `mbps` as megabits per second, as in internet speeds, instead
