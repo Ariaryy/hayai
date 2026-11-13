@@ -89,8 +89,10 @@ so a month-first start (`nov 19 11pm ET`) is claimed only by a complete
 answer (not a preview of a half-typed word) or by a clock being typed after
 the date. A digit counts only after the longest date, so the year in
 `nov 19 2026 notes` is not read as a clock; file names stay in search.
-`noon`/`midnight` pass the gate only before an operator or a known zone,
-so `midnight commander` is never evaluated as a clock.
+A leading `noon`/`midnight` is claimed only before an operator, a known
+place (which may have several words, up to `to`/`in`/`as`), or a keyword and
+a known place. That rule decides such queries alone, so `midnight commander`
+and `midnight in the garden` stay in search despite the generic ` in ` gate.
 
 Explicit abbreviations and `utc±H[:MM]` offsets (also written sign first,
 `+5:30 gmt`) remain fixed offsets; ambiguous abbreviations take their

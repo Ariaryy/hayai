@@ -206,7 +206,8 @@ fn is_candidate(input: &str) -> bool {
             || lower.starts_with("now ")
             || lower.starts_with("days ")
             || lower.ends_with(" time")
-            || (matches!(c, 'n' | 'N' | 'm' | 'M') && time::named_clock_with_syntax(&lower))
+            || (matches!(c, 'n' | 'N' | 'm' | 'M')
+                && time::named_clock_syntax(&lower) == Some(true))
             || (c.is_ascii_alphabetic()
                 && (grammar::split_conversion(input).is_some()
                     || lower
@@ -320,7 +321,7 @@ impl CommandProvider for CalcProvider {
     /// names still fall through to the app provider.
     fn auto_claim(&self, query: &str) -> bool {
         let trimmed = query.trim();
-        if trimmed.is_empty() {
+        if trimmed.is_empty() || time::named_clock_syntax(trimmed) == Some(false) {
             return false;
         }
         if !is_candidate(trimmed) {
@@ -722,6 +723,32 @@ mod tests {
         }
         assert!(provider.auto_claim("noon ist"));
         assert!(provider.auto_claim("Midnight UTC"));
+        // Multiword places keep their spaces, as everywhere else.
+        for (spaced, compact) in [
+            ("noon new delhi", "noon newdelhi"),
+            ("Noon New Delhi", "noon newdelhi"),
+            ("midnight sao paulo", "midnight saopaulo"),
+            ("noon new york to london", "noon newyork to london"),
+        ] {
+            assert!(provider.auto_claim(spaced), "{spaced}");
+            assert!(provider.auto_claim(compact), "{compact}");
+            assert_eq!(
+                provider.search(spaced)[0].title,
+                provider.search(compact)[0].title,
+                "{spaced}"
+            );
+        }
+        // A keyword being typed after the place keeps the row steady.
+        for query in [
+            "noon in tokyo",
+            "midnight in new york",
+            "noon to ist",
+            "noon utc t",
+            "midnight sao paulo t",
+        ] {
+            assert!(provider.auto_claim(query), "{query}");
+        }
+        // Names that only start like a clock stay searches.
         for query in [
             "noon",
             "midnight",
@@ -729,6 +756,9 @@ mod tests {
             "noon notes 2",
             "noonday 5",
             "midnightist",
+            "noon new music",
+            "midnight in the garden",
+            "noon to the moon",
         ] {
             assert!(!provider.auto_claim(query), "{query}");
         }

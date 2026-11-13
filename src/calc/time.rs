@@ -272,25 +272,54 @@ pub fn month_first_clock_started(input: &str) -> bool {
         })
 }
 
-/// "noon + 1", "midnight utc": a named clock followed by clock syntax, an
-/// operator or a known zone. App names such as "midnight commander" are not.
-pub fn named_clock_with_syntax(input: &str) -> bool {
+/// For input starting with "noon" or "midnight", whether clock syntax
+/// follows: an operator ("noon+1"), a known place ("noon new delhi", which
+/// may run up to a conversion keyword), or a keyword and a known place
+/// ("noon in tokyo"). `None` when the input does not start with either name.
+/// This decides such input alone, so "midnight in the garden" is not claimed
+/// through its " in ".
+pub fn named_clock_syntax(input: &str) -> Option<bool> {
     let input = input.trim();
-    let Some(rest) = ["noon", "midnight"].iter().find_map(|name| {
+    let rest = ["noon", "midnight"].iter().find_map(|name| {
         input
             .get(..name.len())
             .filter(|prefix| prefix.eq_ignore_ascii_case(name))
             .map(|_| &input[name.len()..])
-    }) else {
-        return false;
+    })?;
+    if rest.trim_start().starts_with(['+', '-']) {
+        return Some(true);
+    }
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None; // "noonday", "midnightist"
+    }
+    let rest = rest.trim_start();
+    let keyword = rest.split_whitespace().find(|word| {
+        ["to", "in", "as"]
+            .iter()
+            .any(|keyword| word.eq_ignore_ascii_case(keyword))
+    });
+    // Byte offset of the keyword inside `rest`; it is a subslice of it.
+    let (place, target) = match keyword {
+        Some(word) => {
+            let start = word.as_ptr() as usize - rest.as_ptr() as usize;
+            (rest[..start].trim(), rest[start + word.len()..].trim())
+        }
+        None => (rest, ""),
     };
-    // Operators may touch the name ("noon+1"); a zone is a separate word.
-    rest.trim_start().starts_with(['+', '-'])
-        || (rest.starts_with(char::is_whitespace)
-            && rest
-                .split_whitespace()
-                .next()
-                .is_some_and(|zone| resolve_zone(zone).is_some()))
+    if place.is_empty() {
+        return Some(!target.is_empty() && resolve_zone(target).is_some());
+    }
+    // A keyword still being typed ("noon utc t") keeps the place claimed.
+    let place = match place.rsplit_once(char::is_whitespace) {
+        Some((before, last))
+            if resolve_zone(place).is_none()
+                && ["t", "i", "a"].iter().any(|k| last.eq_ignore_ascii_case(k)) =>
+        {
+            before.trim_end()
+        }
+        _ => place,
+    };
+    Some(resolve_zone(place).is_some())
 }
 
 fn valid_date(year: i64, month: u32, day: u32) -> bool {
