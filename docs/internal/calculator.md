@@ -85,9 +85,10 @@ day-month pair, a valid numeric date, or an explicit `days until`/`since`/
 `between` prefix followed by a date, so app names such as `days gone` and
 arithmetic such as `45-12-26` are not claimed. Timezone phrases with
 `at` share the same date parser. The first-character gate rejects letters,
-so a month-first start (`nov 19 11pm ET`) is claimed only by a valid
-answer or by a digit after the date (a clock still being typed), which
-keeps file names such as `june 2026 budget` in search.
+so a month-first start (`nov 19 11pm ET`) is claimed only by a complete
+answer (not a preview of a half-typed word) or by a clock being typed after
+the date. A digit counts only after the longest date, so the year in
+`nov 19 2026 notes` is not read as a clock; file names stay in search.
 
 Explicit abbreviations and `utc±H[:MM]` offsets (also written sign first,
 `+5:30 gmt`) remain fixed offsets; ambiguous abbreviations take their

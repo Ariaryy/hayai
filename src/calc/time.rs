@@ -234,6 +234,44 @@ pub fn starts_with_month_day(input: &str) -> bool {
             .is_some_and(|day| day.starts_with(|c: char| c.is_ascii_digit()))
 }
 
+/// "nov 19 2026 1": a clock is being typed after a month-first date. A digit
+/// counts only after the longest date, so the year in "nov 19 2026 notes"
+/// belongs to the date rather than starting a clock. After a shorter date,
+/// the rest must read as a clock: "nov 19 11 pm" (not 19 Nov 2011), or the
+/// half-typed "nov 19 11 p".
+pub fn month_first_clock_started(input: &str) -> bool {
+    let input = input.trim();
+    let (current_year, ..) = native::local_now();
+    // Ends of the first three words that are followed by more text.
+    let mut word_ends = [0; 3];
+    let mut count = 0;
+    let mut in_word = false;
+    for (index, character) in input.char_indices() {
+        if character.is_whitespace() && in_word {
+            word_ends[count] = index;
+            count += 1;
+            if count == word_ends.len() {
+                break;
+            }
+        }
+        in_word = !character.is_whitespace();
+    }
+    let mut dated = word_ends[..count]
+        .iter()
+        .rev()
+        .filter(|&&end| dates::parse_date(&input[..end], i64::from(current_year)).is_some())
+        .map(|&end| input[end..].trim_start());
+    let Some(after_longest) = dated.next() else {
+        return false;
+    };
+    after_longest.starts_with(|c: char| c.is_ascii_digit())
+        || dated.any(|rest| {
+            parse_leading_clock(rest).is_some()
+                || (rest.ends_with(['a', 'p', 'A', 'P'])
+                    && parse_leading_clock(&format!("{rest}m")).is_some())
+        })
+}
+
 fn valid_date(year: i64, month: u32, day: u32) -> bool {
     (1..=9999).contains(&year)
         && (1..=12).contains(&month)

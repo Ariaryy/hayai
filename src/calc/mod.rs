@@ -323,17 +323,22 @@ impl CommandProvider for CalcProvider {
             return false;
         }
         if !is_candidate(trimmed) {
+            if trimmed.len() > 4096 {
+                return false;
+            }
             // "nov 19 11pm et" reads like "19 nov 11pm et", but a leading
             // month word is also common in file names ("june 2026 budget"),
             // so only an answer claims it, or a clock being typed after the
             // date ("nov 19 11:0"), which keeps the row from flickering.
-            return trimmed.len() <= 4096
-                && time::starts_with_month_day(trimmed)
-                && (trimmed
-                    .split_whitespace()
-                    .nth(2)
-                    .is_some_and(|word| word.starts_with(|c: char| c.is_ascii_digit()))
-                    || self.evaluated(trimmed).result.is_some());
+            // A preview of a half-typed word ("nov 19 2026 no") is not an
+            // answer, or file names would flash a result while being typed.
+            if time::starts_with_month_day(trimmed) {
+                return time::month_first_clock_started(trimmed) || {
+                    let evaluated = self.evaluated(trimmed);
+                    evaluated.result.is_some() && evaluated.source.is_none()
+                };
+            }
+            return false;
         }
         let evaluated = self.evaluated(trimmed);
         evaluated.result.is_some()
@@ -644,8 +649,15 @@ mod tests {
             "october 2 notes",
             "june 2026 budget",
             "nov 31",
+            // The year is part of the date, not the start of a clock.
+            "nov 19 2026 notes",
+            "dec 25 2026 photos",
         ] {
             assert!(!provider.auto_claim(query), "{query}");
+        }
+        // A clock being typed after a dated prefix still keeps the row.
+        for query in ["nov 19 2026 1", "nov 19 2026 11:0", "nov 19 11:0"] {
+            assert!(provider.auto_claim(query), "{query}");
         }
     }
 
