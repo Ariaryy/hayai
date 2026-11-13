@@ -43,8 +43,31 @@ keyword uses the same leading-space command router when needed.
 0xff to decimal
 1pm + 5
 3pm est to ist
+nov 19 11pm ET
 2 weeks ago
+days until 25 december
+1 jan 2026 + 30 days
+200 + 10%
 ```
+
+Percentages added to or subtracted from a value change it by that share:
+`200 + 10%` is `220`, `200 - 10%` is `180`, and `15% off 200` is `170`, while
+`10% of 200` is `20`. `6 x 7` multiplies when spaced.
+
+Dates may be written as `25 dec 2026`, `December 25, 2026`, `2026-12-25`, or
+all-numeric as `25-12-26`, `25/12/2026`, or `25.12.26`. Four-digit years
+work in every form (`25 dec 1900`, `15/08/1947`), and two-digit years mean
+1950–2049 (`26` is 2026, `98` is 1998). Numeric dates are always read day
+first; a date that only makes sense month first (`12/25/26`) is read that way.
+A numeric date that is a real date is treated as a date, not as subtraction
+or division.
+
+A date alone shows its weekday. Durations move it (`1 jan 2026 + 30 days`,
+`2 weeks before 25 dec 2026`), and two dates give the days between them
+(`1 jan 2026 to 10 nov 2026`, `15 aug 2000 to now`). `days until 25 december`
+and `days since 1 jan` count to the next or from the most recent occurrence
+when the year is omitted. `noon` and `midnight` work as clock times
+(`noon ist to cst`), and clock offsets accept `+ 1:30` and `+ 1h30m`.
 
 Press `Enter` to copy a calculator result. Currency cards round for display;
 the clipboard keeps the engine value before currency display rounding. Rates
@@ -54,22 +77,37 @@ rate date and marks expired cached rates when offline.
 Spaces between an amount and its unit are optional: `1C to F` and `1 C to F`,
 `5.5kg to lb` and `5.5 kg to lb`, `$100 to INR` and `$ 100 to INR` agree.
 Clock and duration spacing works the same way: `1pm+30min`, `1 pm + 30 min`,
-and `1 pm+30min` agree. Conversion keywords (`to`, `in`, `as`) remain separate
-words. Multiword currencies and places keep their spaces: `100 US dollars to
-Indian rupees`, `12pm New York to London`.
+and `1 pm+30min` agree, as do `12:30PM IST to CST` and `12:30 PM IST to CST`.
+Conversion keywords (`to`, `in`, `as`) remain separate words, except in
+heights such as `5 ft 10 in to cm`. Multiword currencies and places keep
+their spaces: `100 US dollars to Indian rupees`, `12pm New York to London`.
 
 Physical symbols preserve case: `1 Mb to MB` is `0.125 MB`, while `1 MB to Mb`
 is `8 Mb`. Legacy lowercase byte aliases (`kb`, `mb`, `gb`, `tb`) still mean
-bytes; use `b`, `Mb`, `Gb`, `Tb` or full bit names for bits. `C` denotes
-Celsius; a bare `c` denotes the speed of light. In an explicit temperature
+bytes; use `b`, `Mb`, `Gb`, `Tb` or full bit names for bits. Data rates
+follow internet usage instead: `mbps`, `Mbps` and `Mbit/s` are megabits per
+second, while `MBps` and `MB/s` are megabytes per second, so
+`100 mbps to MB/s` gives 12.5 megabytes per second. `sq` abbreviates
+`square` (`1 sq km to sq mi`). `C` denotes Celsius; a bare `c` denotes the
+speed of light. In an explicit temperature
 pair such as `1c to f`, the target makes the temperature meaning clear.
 `k`/`K` means thousands only after an amount in a conversion (`5k km to miles`),
 not in ordinary arithmetic or time offsets.
 
 Named places follow Windows daylight-saving rules, including supported IANA
-names such as `America/New_York`; explicit abbreviations such as `EST` retain
-their fixed offsets. Months and whole days use the local calendar, while
-hours, minutes and seconds are elapsed durations: `in 1 day` and `in 24 hours`
+names such as `America/New_York`, major cities, single-timezone countries
+(`japan`, `uk`), the US zone names `pacific`/`PT`, `eastern`/`ET`,
+`central`/`CT`, and `mountain`/`MT`, and `AET` (Sydney), `NZT` (Auckland),
+`AKT` (Alaska), and `HT` (Hawaii). `usa` and `america` mean US Eastern
+time. Explicit abbreviations such as `EST` retain their fixed offsets, as do
+`utc+3`, `gmt-8`, and `utc+5:30`, also written sign first as `+5:30 gmt`.
+A date may lead the clock with or without `at`, day or month first
+(`25-12-26 9am utc to ist`, `nov 19 11pm ET`). `3pm in tokyo` shows the
+local 3 PM in Tokyo, and `time in tokyo`, `now in tokyo`, or `tokyo time`
+show the current time there.
+
+Months and whole days use the local calendar, while hours, minutes and
+seconds are elapsed durations: `in 1 day` and `in 24 hours`
 can differ across DST. Fractional days contribute elapsed hours. Seconds are
 retained, and clock arithmetic shows a day change when it crosses midnight.
 Invalid dates, nonexistent local times, and offsets outside the supported

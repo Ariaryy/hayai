@@ -88,6 +88,14 @@ pub fn timezone_labels(input: &str) -> Option<(String, String)> {
         let (_, target_offset) = zone_from_utc(&target, utc)?;
         return Some((source.label(source_offset), target.label(target_offset)));
     }
+    if let Some(place) = current_time_zone(input) {
+        let utc = utc_now()?;
+        let source = resolve_zone(SYSTEM_TIMEZONE)?;
+        let target = resolve_zone(&place)?;
+        let (_, source_offset) = zone_from_utc(&source, utc)?;
+        let (_, target_offset) = zone_from_utc(&target, utc)?;
+        return Some((source.label(source_offset), target.label(target_offset)));
+    }
     let (from, to, from_offset, to_offset) = timezone_tokens(input)?;
     let source = resolve_zone(&from)?;
     let target = resolve_zone(&to)?;
@@ -98,8 +106,14 @@ pub fn timezone_labels(input: &str) -> Option<(String, String)> {
 /// 24-hour `(hour, minute)`. Requires a colon or an am/pm suffix — a bare
 /// number like `"5"` is deliberately rejected so this never collides with
 /// plain arithmetic (`"5 + 3"` must stay a calculator expression).
+/// `noon` and `midnight` name 12:00 PM and 12:00 AM.
 fn parse_clock(token: &str) -> Option<(u32, u32)> {
     let lower = token.to_lowercase();
+    match lower.as_str() {
+        "noon" => return Some((12, 0)),
+        "midnight" => return Some((0, 0)),
+        _ => {}
+    }
     let (digits, meridiem) = if let Some(d) = lower.strip_suffix("am") {
         (d, Some(false))
     } else if let Some(d) = lower.strip_suffix("pm") {
@@ -149,19 +163,27 @@ fn parse_leading_clock(input: &str) -> Option<((u32, u32), &str)> {
         .unwrap_or(input.len());
     let first = &input[..first_end];
     let rest = input[first_end..].trim_start();
-    if let Some(clock) = parse_clock(first) {
-        return Some((clock, rest));
-    }
 
+    // Try a separated meridiem first: "12:30" is already a valid 24-hour
+    // clock, so accepting it alone would leave "pm" as part of the timezone
+    // or offset that follows ("12:30 pm ist to cst").
     let meridiem_end = rest
         .find(|c: char| c.is_whitespace() || matches!(c, '+' | '-'))
         .unwrap_or(rest.len());
     let meridiem = &rest[..meridiem_end];
-    if !matches!(meridiem.to_ascii_lowercase().as_str(), "am" | "pm") {
-        return None;
+    if matches!(meridiem.to_ascii_lowercase().as_str(), "am" | "pm")
+        && let Some(clock) = parse_clock(&format!("{first}{meridiem}"))
+    {
+        return Some((clock, rest[meridiem_end..].trim_start()));
     }
-    let clock = parse_clock(&format!("{first}{meridiem}"))?;
-    Some((clock, rest[meridiem_end..].trim_start()))
+    parse_clock(first).map(|clock| (clock, rest))
+}
+
+/// A complete clock with nothing after it, with or without a space before
+/// the meridiem ("5pm", "5 pm", "12:30 pm").
+fn parse_standalone_clock(input: &str) -> Option<(u32, u32)> {
+    let (clock, rest) = parse_leading_clock(input)?;
+    rest.is_empty().then_some(clock)
 }
 
 struct ParsedZonedClock {
@@ -172,7 +194,10 @@ struct ParsedZonedClock {
 }
 
 fn month_number(token: &str) -> Option<u32> {
-    let lower = token.to_ascii_lowercase();
+    if token.len() < 3 {
+        return None;
+    }
+    // Allocation-free: the launcher's candidate gate calls this per keystroke.
     [
         "january",
         "february",
@@ -188,8 +213,113 @@ fn month_number(token: &str) -> Option<u32> {
         "december",
     ]
     .iter()
-    .position(|month| month.starts_with(&lower) && lower.len() >= 3)
+    .position(|month| {
+        month
+            .get(..token.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(token))
+    })
     .map(|index| index as u32 + 1)
+}
+
+/// "nov 19 …": a month name, then a word starting with a digit. Only a cheap
+/// gate so month-first dates reach evaluation like "19 nov" does; whether the
+/// query is really a date is decided there.
+pub fn starts_with_month_day(input: &str) -> bool {
+    let mut words = input.split_whitespace();
+    words
+        .next()
+        .is_some_and(|month| month_number(month).is_some())
+        && words
+            .next()
+            .is_some_and(|day| day.starts_with(|c: char| c.is_ascii_digit()))
+}
+
+/// "nov 19 2026 1": a clock is being typed after a month-first date. A digit
+/// counts only after the longest date, so the year in "nov 19 2026 notes"
+/// belongs to the date rather than starting a clock. After a shorter date,
+/// the rest must read as a clock: "nov 19 11 pm" (not 19 Nov 2011), or the
+/// half-typed "nov 19 11 p".
+pub fn month_first_clock_started(input: &str) -> bool {
+    let input = input.trim();
+    let (current_year, ..) = native::local_now();
+    // Ends of the first three words that are followed by more text.
+    let mut word_ends = [0; 3];
+    let mut count = 0;
+    let mut in_word = false;
+    for (index, character) in input.char_indices() {
+        if character.is_whitespace() && in_word {
+            word_ends[count] = index;
+            count += 1;
+            if count == word_ends.len() {
+                break;
+            }
+        }
+        in_word = !character.is_whitespace();
+    }
+    let mut dated = word_ends[..count]
+        .iter()
+        .rev()
+        .filter(|&&end| dates::parse_date(&input[..end], i64::from(current_year)).is_some())
+        .map(|&end| input[end..].trim_start());
+    let Some(after_longest) = dated.next() else {
+        return false;
+    };
+    after_longest.starts_with(|c: char| c.is_ascii_digit())
+        || dated.any(|rest| {
+            parse_leading_clock(rest).is_some()
+                || (rest.ends_with(['a', 'p', 'A', 'P'])
+                    && parse_leading_clock(&format!("{rest}m")).is_some())
+        })
+}
+
+/// For input starting with "noon" or "midnight", whether clock syntax
+/// follows: an operator ("noon+1"), a known place ("noon new delhi", which
+/// may run up to a conversion keyword), or a keyword and a known place
+/// ("noon in tokyo"). `None` when the input does not start with either name.
+/// This decides such input alone, so "midnight in the garden" is not claimed
+/// through its " in ".
+pub fn named_clock_syntax(input: &str) -> Option<bool> {
+    let input = input.trim();
+    let rest = ["noon", "midnight"].iter().find_map(|name| {
+        input
+            .get(..name.len())
+            .filter(|prefix| prefix.eq_ignore_ascii_case(name))
+            .map(|_| &input[name.len()..])
+    })?;
+    if rest.trim_start().starts_with(['+', '-']) {
+        return Some(true);
+    }
+    if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+        return None; // "noonday", "midnightist"
+    }
+    let rest = rest.trim_start();
+    let keyword = rest.split_whitespace().find(|word| {
+        ["to", "in", "as"]
+            .iter()
+            .any(|keyword| word.eq_ignore_ascii_case(keyword))
+    });
+    // Byte offset of the keyword inside `rest`; it is a subslice of it.
+    let (place, target) = match keyword {
+        Some(word) => {
+            let start = word.as_ptr() as usize - rest.as_ptr() as usize;
+            (rest[..start].trim(), rest[start + word.len()..].trim())
+        }
+        None => (rest, ""),
+    };
+    if place.is_empty() {
+        return Some(!target.is_empty() && resolve_zone(target).is_some());
+    }
+    // A keyword still being typed ("noon utc t") keeps the place claimed.
+    let place = match place.rsplit_once(char::is_whitespace) {
+        Some((before, last))
+            if resolve_zone(place).is_none()
+                && ["t", "i", "a"].iter().any(|k| last.eq_ignore_ascii_case(k)) =>
+        {
+            before.trim_end()
+        }
+        _ => place,
+    };
+    Some(resolve_zone(place).is_some())
 }
 
 fn valid_date(year: i64, month: u32, day: u32) -> bool {
@@ -204,6 +334,8 @@ fn valid_date(year: i64, month: u32, day: u32) -> bool {
 pub fn is_time_query(input: &str) -> bool {
     let lower = input.trim().to_ascii_lowercase();
     parse_leading_clock(input).is_some()
+        || dates::is_date_query(&lower)
+        || current_time_zone(input).is_some()
         || (input.trim_start().starts_with(|c: char| c.is_ascii_digit()) && lower.contains(" at "))
         || lower
             .strip_prefix("in ")
@@ -214,25 +346,81 @@ pub fn is_time_query(input: &str) -> bool {
                 .any(|suffix| lower.ends_with(suffix)))
 }
 
+/// "25-12-26 9am utc to ist": up to three leading words that form a date,
+/// directly followed by a clock time.
+fn leading_date(input: &str, current_year: i64) -> Option<((i64, u32, u32), &str)> {
+    let mut word_ends = Vec::new();
+    let mut in_word = false;
+    for (index, character) in input.char_indices() {
+        if character.is_whitespace() && in_word {
+            word_ends.push(index);
+        }
+        in_word = !character.is_whitespace();
+    }
+    // Prefer the longest date: "25 dec 26 9am" includes the year.
+    word_ends.iter().take(3).rev().find_map(|&end| {
+        let date = dates::parse_date(&input[..end], current_year)?;
+        let rest = input[end..].trim_start();
+        parse_leading_clock(rest)?;
+        Some((date, rest))
+    })
+}
+
+/// "time in tokyo", "now in tokyo", or "tokyo time": the place whose current
+/// time is requested, if it is a known place or zone.
+fn current_time_zone(input: &str) -> Option<String> {
+    let lower = input.trim().to_ascii_lowercase();
+    let zone = ["current time in ", "time in ", "now in "]
+        .iter()
+        .find_map(|prefix| lower.strip_prefix(prefix))
+        .or_else(|| lower.strip_suffix(" time"))?
+        .trim();
+    (zone != SYSTEM_TIMEZONE && resolve_zone(zone).is_some()).then(|| zone.to_string())
+}
+
+fn utc_now() -> Option<CivilDateTime> {
+    let minutes = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() / 60;
+    Some(minutes_date_time(i64::try_from(minutes).ok()?))
+}
+
+/// The current time in a place, with a day note when its date differs from
+/// the local date. The subtitle is that place's full date.
+fn parse_current_time(input: &str) -> Option<EvalResult> {
+    let zone = resolve_zone(&current_time_zone(input)?)?;
+    let (local, offset) = zone_from_utc(&zone, utc_now()?)?;
+    let (year, month, day, _, _) = native::local_now();
+    let there = days_from_civil(i64::from(local.0), local.1, local.2);
+    let here = days_from_civil(i64::from(year), month, day);
+    Some(EvalResult {
+        expression: format_date(there),
+        value: format!(
+            "{}{} {}",
+            format_clock(i64::from(local.3) * 60 + i64::from(local.4)),
+            day_note(there - here),
+            zone.abbreviation(offset)
+        ),
+        copy_value: None,
+    })
+}
+
 fn parse_zoned_clock(input: &str) -> Option<ParsedZonedClock> {
     let input = input.trim();
     let lower = input.to_ascii_lowercase();
-    let (year, month, day, clock_input, explicit_date) = if let Some(at) = lower.find(" at ") {
-        let date = input[..at].split_whitespace().collect::<Vec<_>>();
-        if !(2..=3).contains(&date.len()) {
-            return None;
+    let (now_year, now_month, now_day, _, _) = native::local_now();
+    // Shares every date form with clockless dates ("dec 25", "25/12/26").
+    // The date may lead the clock with or without "at".
+    let dated = match lower.find(" at ") {
+        Some(at) => Some((
+            dates::parse_date(&input[..at], i64::from(now_year))?,
+            &input[at + 4..],
+        )),
+        None => leading_date(input, i64::from(now_year)),
+    };
+    let (year, month, day, clock_input, explicit_date) = match dated {
+        Some(((year, month, day), clock_input)) => {
+            (i32::try_from(year).ok()?, month, day, clock_input, true)
         }
-        let day = date[0].trim_end_matches([',', '.']).parse::<u32>().ok()?;
-        let month = month_number(date[1].trim_end_matches([',', '.']))?;
-        let year = if let Some(year) = date.get(2) {
-            year.trim_end_matches([',', '.']).parse::<i32>().ok()?
-        } else {
-            native::local_now().0
-        };
-        (year, month, day, &input[at + 4..], true)
-    } else {
-        let (year, month, day, _, _) = native::local_now();
-        (year, month, day, input, false)
+        None => (now_year, now_month, now_day, input, false),
     };
 
     if !valid_date(year as i64, month, day) {
@@ -241,6 +429,9 @@ fn parse_zoned_clock(input: &str) -> Option<ParsedZonedClock> {
     let ((hour, minute), rest) = parse_leading_clock(clock_input)?;
     let (from_token, to_token) = if let Some((from, to)) = grammar::split_conversion(rest) {
         (from.to_string(), to.to_string())
+    } else if let (target, true) = grammar::parse_keyword_then_target(rest) {
+        // "3pm in tokyo": the local clock, shown in another place.
+        (SYSTEM_TIMEZONE.to_string(), target)
     } else {
         (rest.to_string(), SYSTEM_TIMEZONE.to_string())
     };
@@ -307,6 +498,14 @@ fn parse_clock_arithmetic(input: &str) -> Option<EvalResult> {
     let rest = rest.trim();
     let offset_seconds = if let Ok(hours) = rest.parse::<f64>() {
         hours * 3600.0
+    } else if let Some((hours, minutes)) = rest.split_once(':') {
+        // "+ 1:30" is an hours:minutes duration, not a clock time.
+        let hours: u32 = hours.parse().ok()?;
+        let minutes: u32 = minutes.parse().ok()?;
+        if minutes >= 60 {
+            return None;
+        }
+        f64::from(hours) * 3600.0 + f64::from(minutes) * 60.0
     } else {
         let duration = parse_duration(rest)?;
         if duration.months != 0 {
@@ -418,7 +617,9 @@ pub fn convert(input: &str) -> Option<EvalResult> {
     parse_clock_arithmetic(input)
         .or_else(|| parse_timezone_difference(input))
         .or_else(|| parse_timezone_conversion(input))
+        .or_else(|| parse_current_time(input))
         .or_else(|| parse_date_arithmetic(input))
+        .or_else(|| dates::parse_date_math(input))
         .or_else(|| clock_literal(input))
 }
 
@@ -484,6 +685,170 @@ mod tests {
         assert_eq!(result.value, "11 hr 30 min behind");
         assert_eq!(convert("cst to ist").unwrap().value, "11 hr 30 min ahead");
         assert_eq!(convert("utc to gmt").unwrap().value, "Same UTC offset");
+    }
+
+    #[test]
+    fn converts_every_listed_abbreviation_and_utc_offsets() {
+        for (query, expected) in [
+            ("12pm hkt to ist", "9:30 AM IST"),
+            ("12pm eest to utc", "9:00 AM UTC"),
+            ("12pm nzdt to utc", "11:00 PM (-1 day) UTC"),
+            ("12pm hst to utc", "10:00 PM UTC"),
+            ("12pm akst to utc", "9:00 PM UTC"),
+            ("12pm ast to utc", "4:00 PM UTC"),
+            ("12pm nst to utc", "3:30 PM UTC"),
+            ("12pm awst to utc", "4:00 AM UTC"),
+            ("12pm acst to utc", "2:30 AM UTC"),
+            ("12pm pkt to ist", "12:30 PM IST"),
+            ("12pm npt to ist", "11:45 AM IST"),
+            ("12pm wib to utc", "5:00 AM UTC"),
+            ("12pm sast to utc", "10:00 AM UTC"),
+            ("12pm eat to utc", "9:00 AM UTC"),
+            ("12pm brt to utc", "3:00 PM UTC"),
+            ("12pm wet to utc", "12:00 PM UTC"),
+            ("12pm irst to utc", "8:30 AM UTC"),
+            ("12pm utc+3 to ist", "2:30 PM IST"),
+            ("12pm ist to gmt-8", "10:30 PM (-1 day) GMT-8"),
+            ("12pm utc+0530 to utc", "6:30 AM UTC"),
+            ("12pm utc+5:45 to utc", "6:15 AM UTC"),
+            ("12pm ist to utc + 3", "9:30 AM UTC+3"),
+            ("12:30 pm utc-3:30 to utc", "4:00 PM UTC"),
+            // The sign may also come before the zone name.
+            ("12pm +5:30 gmt to utc", "6:30 AM UTC"),
+            ("12pm +5:30 utc to utc", "6:30 AM UTC"),
+            ("12pm -4 utc to utc", "4:00 PM UTC"),
+            ("12pm utc to +3 gmt", "3:00 PM GMT+3"),
+        ] {
+            assert_eq!(convert(query).unwrap().value, expected, "{query}");
+        }
+        assert_eq!(
+            convert("12pm utc+5:30 to utc").unwrap().expression,
+            "12:00 PM UTC+5:30"
+        );
+        assert_eq!(
+            convert("12pm +5:30 GMT to utc").unwrap().expression,
+            "12:00 PM GMT+5:30"
+        );
+        // Without a zone name, "+5:30" stays an offset added to the clock.
+        assert_eq!(convert("11pm +5:30").unwrap().value, "4:30 AM (+1 day)");
+        assert_eq!(convert("utc+3 to ist").unwrap().value, "2 hr 30 min ahead");
+        for query in [
+            "12pm utc+15 to ist",
+            "12pm utc+3:60 to ist",
+            "12pm utc+ to ist",
+        ] {
+            assert!(convert(query).is_none(), "{query}");
+        }
+    }
+
+    #[test]
+    fn a_date_may_lead_the_clock_without_at() {
+        for query in [
+            "25-12-26 9am utc to ist",
+            "25/12/26 9am utc to ist",
+            "25 dec 26 9am utc to ist",
+            "25 dec 2026 9 am utc to ist",
+            "dec 25 9am utc to ist",
+            "25-12-26 at 9am utc to ist",
+        ] {
+            let result = convert(query).unwrap_or_else(|| panic!("{query}"));
+            assert!(result.value.ends_with("2:30 PM IST"), "{query}");
+            if !query.starts_with("dec 25 9am") {
+                assert_eq!(result.value, "December 25, 2026, 2:30 PM IST", "{query}");
+            }
+        }
+        // A plain clock keeps today's date.
+        assert_eq!(convert("12 pm ist to cst").unwrap().value, "12:30 AM CST");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn major_places_and_generic_us_zones_follow_windows_rules() {
+        for (place, expected) in [
+            ("pt", "5:00 AM PDT"),
+            ("pacific", "5:00 AM PDT"),
+            ("pacific time", "5:00 AM PDT"),
+            ("et", "8:00 AM EDT"),
+            ("eastern", "8:00 AM EDT"),
+            ("ct", "7:00 AM CDT"),
+            ("mt", "6:00 AM MDT"),
+            ("phoenix", "5:00 AM MST"),
+            ("usa", "8:00 AM EDT"),
+            ("uk", "1:00 PM BST"),
+            ("japan", "9:00 PM JST"),
+            ("new delhi", "5:30 PM IST"),
+            ("bengaluru", "5:30 PM IST"),
+            ("honolulu", "2:00 AM HST"),
+            ("sao paulo", "9:00 AM BRT"),
+            ("kathmandu", "5:45 PM NPT"),
+            ("perth", "8:00 PM AWST"),
+            ("adelaide", "9:30 PM ACST"),
+            ("johannesburg", "2:00 PM SAST"),
+            ("istanbul", "3:00 PM TRT"),
+            ("america", "8:00 AM EDT"),
+            ("australia", "10:00 PM AEST"),
+            ("lisbon", "1:00 PM WEST"),
+            ("dublin", "1:00 PM IST"),
+            ("aet", "10:00 PM AEST"),
+            ("akt", "4:00 AM AKDT"),
+            ("ht", "2:00 AM HST"),
+        ] {
+            assert_eq!(
+                convert(&format!("1 jul 2026 12pm utc to {place}"))
+                    .unwrap_or_else(|| panic!("{place}"))
+                    .value,
+                format!("July 1, 2026, {expected}"),
+                "{place}"
+            );
+        }
+        // Generic names switch to daylight time on their own.
+        for (query, expected) in [
+            (
+                "1 jan 2027 12pm utc to aet",
+                "January 1, 2027, 11:00 PM AEDT",
+            ),
+            (
+                "1 jan 2027 9am utc to nzt",
+                "January 1, 2027, 10:00 PM NZDT",
+            ),
+            ("1 jul 2026 9am utc to nzt", "July 1, 2026, 9:00 PM NZST"),
+            (
+                "1 jan 2027 12pm utc to akt",
+                "January 1, 2027, 3:00 AM AKST",
+            ),
+            ("1 jan 2027 12pm utc to ht", "January 1, 2027, 2:00 AM HST"),
+        ] {
+            assert_eq!(convert(query).unwrap().value, expected, "{query}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn shows_a_local_clock_or_the_current_time_elsewhere() {
+        let in_tokyo = convert("3pm in tokyo").unwrap();
+        assert!(in_tokyo.expression.starts_with("3:00 PM"));
+        assert!(in_tokyo.value.ends_with("JST"));
+        assert_eq!(
+            convert("3pm ist in tokyo").unwrap().value,
+            convert("3pm ist to tokyo").unwrap().value
+        );
+        for query in [
+            "time in tokyo",
+            "now in tokyo",
+            "current time in tokyo",
+            "tokyo time",
+            "Tokyo Time",
+            "japan time",
+        ] {
+            let result = convert(query).unwrap_or_else(|| panic!("{query}"));
+            assert!(result.value.ends_with(" JST"), "{query}: {}", result.value);
+            assert!(timezone_labels(query).is_some(), "{query}");
+        }
+        assert!(convert("time in utc").unwrap().value.ends_with(" UTC"));
+        for query in ["screen time", "time in narnia", "prime time"] {
+            assert!(!is_time_query(query), "{query}");
+            assert!(convert(query).is_none(), "{query}");
+        }
     }
 
     #[test]
@@ -657,6 +1022,7 @@ mod tests {
 
 mod calendar;
 use calendar::*;
+mod dates;
 mod zones;
 pub(super) use zones::target_prefix;
 use zones::*;

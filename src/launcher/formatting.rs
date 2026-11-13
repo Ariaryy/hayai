@@ -36,6 +36,15 @@ pub(super) fn format_expression_for_display(expression: &str) -> String {
             formatted.push(character);
             continue;
         }
+        // "UTC+5:30" is a timezone offset, not addition.
+        let zone: String = formatted.chars().rev().take(3).collect();
+        if matches!(character, '+' | '-')
+            && (zone.eq_ignore_ascii_case("CTU") || zone.eq_ignore_ascii_case("TMG"))
+            && characters.peek().is_some_and(char::is_ascii_digit)
+        {
+            formatted.push(character);
+            continue;
+        }
 
         let previous = formatted
             .chars()

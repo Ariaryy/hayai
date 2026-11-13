@@ -157,6 +157,53 @@ const UNITS: &[Unit] = &[
         symbol: "TiB",
         label: "Tebibyte",
     },
+    // Bit amounts and data rates. The engine reads a lowercase "mbps" as
+    // millibits per second; in practice it always means megabits.
+    Unit {
+        aliases: &["kbit", "Kbit", "kilobit", "kilobits"],
+        symbol: "kilobit",
+        label: "Kilobit",
+    },
+    Unit {
+        aliases: &["mbit", "Mbit", "megabit", "megabits"],
+        symbol: "megabit",
+        label: "Megabit",
+    },
+    Unit {
+        aliases: &["gbit", "Gbit", "gigabit", "gigabits"],
+        symbol: "gigabit",
+        label: "Gigabit",
+    },
+    Unit {
+        aliases: &["kbps", "Kbps", "kbit/s", "Kbit/s"],
+        symbol: "kbps",
+        label: "Kilobit per Second",
+    },
+    Unit {
+        aliases: &["mbps", "Mbps", "mbit/s", "Mbit/s"],
+        symbol: "Mbps",
+        label: "Megabit per Second",
+    },
+    Unit {
+        aliases: &["gbps", "Gbps", "gbit/s", "Gbit/s"],
+        symbol: "Gbps",
+        label: "Gigabit per Second",
+    },
+    Unit {
+        aliases: &["kBps", "KBps", "kB/s", "KB/s"],
+        symbol: "kB/s",
+        label: "Kilobyte per Second",
+    },
+    Unit {
+        aliases: &["MBps", "MB/s"],
+        symbol: "MB/s",
+        label: "Megabyte per Second",
+    },
+    Unit {
+        aliases: &["GBps", "GB/s"],
+        symbol: "GB/s",
+        label: "Gigabyte per Second",
+    },
     Unit {
         aliases: &["m/s", "meter/second", "meters/second"],
         symbol: "m/s",
@@ -267,7 +314,41 @@ pub(super) fn is_clock_collision(input: &str) -> bool {
     })
 }
 
+fn strip_word<'a>(input: &'a str, words: &[&str]) -> Option<&'a str> {
+    words.iter().find_map(|word| {
+        let rest = input.strip_prefix(word)?;
+        rest.starts_with(char::is_whitespace)
+            .then_some(rest.trim_start())
+    })
+}
+
+/// "5 ft 10 in to cm". `in` is both inches and a conversion keyword, so a
+/// height is recognized before the generic grammar splits on that keyword.
+/// Returns the engine expression, the height as written, and the
+/// case-preserved target.
+fn feet_and_inches(input: &str) -> Option<(String, String, &str)> {
+    let input = input.trim();
+    let (feet, feet_end) = grammar::amount_token(input)?;
+    let rest = strip_word(input[feet_end..].trim_start(), &["feet", "foot", "ft"])?;
+    let (inches, inches_end) = grammar::amount_token(rest)?;
+    let after = strip_word(rest[inches_end..].trim_start(), &["inches", "inch", "in"])?;
+    let target = strip_word(after, &["to", "in", "as"])?;
+    if target.is_empty() {
+        return None;
+    }
+    Some((
+        format!("({feet} ft + {inches} inch)"),
+        format!("{} ft {} in", &input[..feet_end], &rest[..inches_end]),
+        target,
+    ))
+}
+
 pub fn convert(input: &str) -> Option<EvalResult> {
+    if let Some((height, written, target)) = feet_and_inches(input) {
+        let mut result = engine::evaluate(&format!("{height} to {}", canonical(target)), None)?;
+        result.expression = written;
+        return Some(result);
+    }
     let (amount, from, to) = parsed(input)?;
     let compact_from: String = from.split_whitespace().collect();
     let compact_to: String = to.split_whitespace().collect();
@@ -303,6 +384,9 @@ fn label(token: &str) -> String {
 pub(super) fn conversion_detail(input: &str, result: &EvalResult) -> Option<(String, String)> {
     if super::currency::contains_currency(input) {
         return None;
+    }
+    if let Some((_, _, target)) = feet_and_inches(input) {
+        return Some(("Feet and Inches".into(), label(target)));
     }
     if let Some((_, from, to)) = parsed(input) {
         if let (Some(source), Some(target)) = (temperature(&from), temperature(&to)) {

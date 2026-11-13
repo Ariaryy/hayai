@@ -24,6 +24,10 @@ Word operators require a right operand, while completed postfix percentages
 and factorials remain valid. Unit completions use the engine's registry plus
 Hayai aliases, rather than another conversion-factor table. The
 picometer/PM collision is resolved by an explicit physical length target.
+A final plain percentage after `+`/`-` (`200 + 10%`) is rewritten as a change
+of its left side, as on common calculators; the engine alone reads `10%` as
+`0.1`. Other percentages (`10% of 200`, `20%`) keep the engine's meaning.
+Lowercase `mbps` is megabits per second, unlike the engine's millibits.
 Input length, nesting, output size, and a shared cooperative engine deadline
 bound evaluation. Recursive aggregates and comparisons share that deadline.
 
@@ -71,7 +75,33 @@ conversion back to local time. Seconds survive calculation and formatting.
 Windows round-trip validation rejects nonexistent local times; ambiguous
 local hours use Windows' selected offset.
 
-Explicit abbreviations remain fixed offsets. Named places, supported IANA
+Clockless calendar dates (`25 dec 2026 + 30 days`, `days until 25 dec`,
+date ranges) live in `time/dates.rs` and use whole calendar days without
+timezone rules. A date without a year is validated against the year it
+resolves to, so `days until 29 feb` finds the next leap year. Numeric dates
+are day first independent of the Windows region, falling back to month
+first only when day first is not a real date. Recognition requires a
+day-month pair, a valid numeric date, or an explicit `days until`/`since`/
+`between` prefix followed by a date, so app names such as `days gone` and
+arithmetic such as `45-12-26` are not claimed. Timezone phrases with
+`at` share the same date parser. The first-character gate rejects letters,
+so a month-first start (`nov 19 11pm ET`) is claimed only by a complete
+answer (not a preview of a half-typed word) or by a clock being typed after
+the date. A digit counts only after the longest date, so the year in
+`nov 19 2026 notes` is not read as a clock; file names stay in search.
+A leading `noon`/`midnight` is claimed only before an operator, a known
+place (which may have several words, up to `to`/`in`/`as`), or a keyword and
+a known place. That rule decides such queries alone, so `midnight commander`
+and `midnight in the garden` stay in search despite the generic ` in ` gate.
+
+Explicit abbreviations and `utc±H[:MM]` offsets (also written sign first,
+`+5:30 gmt`) remain fixed offsets; ambiguous abbreviations take their
+common English meaning (`IST` India,
+`CST`/`AST` North America, `BST` Britain). The city table holds only major
+places. Several cities may share a Windows key; the first one for a key
+labels the system timezone. Current-time phrases (`time in tokyo`) are
+claimed only when the place resolves, so app names such as `screen time`
+still reach the app provider. Named places, supported IANA
 identities, and matching Windows zone names use Windows rules. Native lookup
 keeps at most four resolved definitions per thread for 60 seconds, avoiding
 repeated enumeration without retaining the entire zone database or polling.

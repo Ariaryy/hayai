@@ -116,7 +116,8 @@ pub(super) fn parse_duration(input: &str) -> Option<DurationParts> {
                 parts.has_clock = true;
                 let factor = match unit.as_str() {
                     "hour" | "hours" | "hr" | "hrs" | "h" => 3600.0,
-                    "minute" | "minutes" | "min" | "mins" => 60.0,
+                    // Months are "mo"; a bare "m" in a duration ("1h30m") is minutes.
+                    "minute" | "minutes" | "min" | "mins" | "m" => 60.0,
                     "second" | "seconds" | "sec" | "secs" | "s" => 1.0,
                     _ => return None,
                 };
@@ -140,7 +141,7 @@ pub(super) fn days_in_month(year: i64, month: u32) -> u32 {
     (next - days_from_civil(year, month, 1)) as u32
 }
 
-fn add_months(year: i64, month: u32, day: u32, months: i64) -> Option<(i64, u32, u32)> {
+pub(super) fn add_months(year: i64, month: u32, day: u32, months: i64) -> Option<(i64, u32, u32)> {
     if !valid_date(year, month, day) {
         return None;
     }
@@ -181,7 +182,7 @@ pub(super) fn parse_date_arithmetic_with_zone(
     let trimmed = input.trim();
     let lower = trimmed.to_lowercase();
     let (relative, at_time) = match lower.rsplit_once(" at ") {
-        Some((relative, clock)) => (relative, Some(parse_clock(clock.trim())?)),
+        Some((relative, clock)) => (relative, Some(parse_standalone_clock(clock)?)),
         None => (lower.as_str(), None),
     };
     let (duration_text, sign) = if let Some(value) = relative.strip_suffix(" from now") {

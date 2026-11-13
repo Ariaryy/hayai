@@ -204,6 +204,10 @@ fn is_candidate(input: &str) -> bool {
             || constant_expression
             || lower.starts_with("in ")
             || lower.starts_with("now ")
+            || lower.starts_with("days ")
+            || lower.ends_with(" time")
+            || (matches!(c, 'n' | 'N' | 'm' | 'M')
+                && time::named_clock_syntax(&lower) == Some(true))
             || (c.is_ascii_alphabetic()
                 && (grammar::split_conversion(input).is_some()
                     || lower
@@ -317,7 +321,25 @@ impl CommandProvider for CalcProvider {
     /// names still fall through to the app provider.
     fn auto_claim(&self, query: &str) -> bool {
         let trimmed = query.trim();
-        if trimmed.is_empty() || !is_candidate(trimmed) {
+        if trimmed.is_empty() || time::named_clock_syntax(trimmed) == Some(false) {
+            return false;
+        }
+        if !is_candidate(trimmed) {
+            if trimmed.len() > 4096 {
+                return false;
+            }
+            // "nov 19 11pm et" reads like "19 nov 11pm et", but a leading
+            // month word is also common in file names ("june 2026 budget"),
+            // so only an answer claims it, or a clock being typed after the
+            // date ("nov 19 11:0"), which keeps the row from flickering.
+            // A preview of a half-typed word ("nov 19 2026 no") is not an
+            // answer, or file names would flash a result while being typed.
+            if time::starts_with_month_day(trimmed) {
+                return time::month_first_clock_started(trimmed) || {
+                    let evaluated = self.evaluated(trimmed);
+                    evaluated.result.is_some() && evaluated.source.is_none()
+                };
+            }
             return false;
         }
         let evaluated = self.evaluated(trimmed);
@@ -493,6 +515,14 @@ mod tests {
             ("1C", "1 C"),
             ("1c", "1 c"),
             ("4pm+2h30min", "4 pm + 2 hours 30 minutes"),
+            // "12:30" alone is a valid 24-hour clock; the separated
+            // meridiem must still apply instead of joining the timezone.
+            ("12:30PM IST to CST", "12:30 PM IST to CST"),
+            ("12:30am", "12:30 am"),
+            ("1:30pm+2", "1:30 pm + 2"),
+            ("9:15am-45mins", "9:15 am - 45 mins"),
+            ("2 months ago at 5pm", "2 months ago at 5 pm"),
+            ("2 months ago at 12:30pm", "2 months ago at 12:30 pm"),
         ] {
             assert!(provider.auto_claim(joined), "{joined}");
             assert!(provider.auto_claim(spaced), "{spaced}");
@@ -502,8 +532,268 @@ mod tests {
                 "{joined}"
             );
         }
+        let spaced_clock = &provider.search("12:30 PM IST to CST")[0];
+        assert_eq!(spaced_clock.title, "1:00 AM CST");
+        assert_eq!(spaced_clock.subtitle.as_deref(), Some("12:30 PM IST"));
+        assert_eq!(provider.search("12:30 am")[0].title, "12:30 AM");
         assert_eq!(provider.search("1Mb to MB")[0].title, "0.125 MB");
         assert_eq!(provider.search("1MB to Mb")[0].title, "8 Mb");
+    }
+
+    #[test]
+    fn everyday_units_and_percentages() {
+        let provider = isolated_provider();
+        for (query, expected) in [
+            // Lowercase "mbps" is how internet speeds are written: megabits.
+            ("100 mbps to MB/s", "12.5 MB / s"),
+            ("100 Mbps to MBps", "12.5 MB / s"),
+            ("100 MBps to Mbps", "800 Mbps"),
+            ("100 Mbit/s to MB/s", "12.5 MB / s"),
+            ("1 Gbit to Mbit", "1000 megabits"),
+            ("1 sq km to sq mi", "0.3861021585 mi^2"),
+            ("1 sq ft to sq m", "0.09290304 m^2"),
+            ("5 ft 10 in to cm", "177.8 cm"),
+            ("5ft 10in to cm", "177.8 cm"),
+            ("200 + 10%", "220"),
+            ("200 - 10%", "180"),
+            ("200+10%", "220"),
+            ("1 km + 10%", "1.1 km"),
+            ("15% off 200", "170"),
+            ("10% of 200", "20"),
+            ("6 x 7", "42"),
+            ("2 X (3 + 4)", "14"),
+        ] {
+            assert!(provider.auto_claim(query), "{query}");
+            assert_eq!(provider.search(query)[0].title, expected, "{query}");
+        }
+        assert_eq!(
+            provider.search("5 ft 10 in to cm")[0].subtitle.as_deref(),
+            Some("5 ft 10 in")
+        );
+        assert_eq!(provider.search("0x7 + 1")[0].title, "0x8");
+    }
+
+    #[test]
+    fn calendar_dates_and_named_clocks() {
+        let provider = isolated_provider();
+        for (query, expected) in [
+            ("1 jan 2000 + 30 days", "Monday, January 31, 2000"),
+            ("30 days after 1 jan 2026", "Saturday, January 31, 2026"),
+            ("1 jan 2026 to 10 nov 2026", "313 days"),
+            // 25 cannot be a month, so these read the same in any region.
+            ("25-12-26", "Friday, December 25, 2026"),
+            ("25/12/26 + 7 days", "Friday, January 1, 2027"),
+            ("25 dec 26", "Friday, December 25, 2026"),
+            (
+                "dec 25 26 at 9am utc to ist",
+                "December 25, 2026, 2:30 PM IST",
+            ),
+            (
+                "25/12/26 at 9am utc to ist",
+                "December 25, 2026, 2:30 PM IST",
+            ),
+            ("noon ist to cst", "12:30 AM CST"),
+            ("midnight utc to ist", "5:30 AM IST"),
+            ("12:30pm + 1:30", "2:00 PM"),
+            ("12:30pm + 1h30m", "2:00 PM"),
+        ] {
+            assert!(provider.auto_claim(query), "{query}");
+            assert_eq!(provider.search(query)[0].title, expected, "{query}");
+        }
+        // The exact count depends on today; dates.rs tests a fixed clock.
+        assert!(provider.auto_claim("days until 25 december"));
+        let countdown = provider.search("days until 25 december")[0]
+            .title
+            .to_string();
+        assert!(
+            countdown == "Today" || countdown.ends_with(" day") || countdown.ends_with(" days"),
+            "{countdown}"
+        );
+        for query in ["days until 31 feb", "31 feb 2026 + 3 days"] {
+            assert!(provider.auto_claim(query), "{query}");
+            assert_eq!(
+                provider.search(query)[0].title,
+                "Invalid date or time. Try another expression.",
+                "{query}"
+            );
+        }
+        // App names are not claimed as calculations.
+        for query in ["days gone", "noon", "midnight commander"] {
+            assert!(!provider.auto_claim(query), "{query}");
+        }
+    }
+
+    #[test]
+    fn month_first_dates_are_claimed_like_day_first_ones() {
+        let provider = isolated_provider();
+        for query in [
+            "dec 25 9am utc to ist",
+            "Dec 25 9am UTC",
+            "nov 19",
+            "november 19 2026",
+        ] {
+            assert!(provider.auto_claim(query), "{query}");
+        }
+        assert_eq!(
+            provider.search("dec 25 2026 9am utc to ist")[0].title,
+            "December 25, 2026, 2:30 PM IST"
+        );
+        assert_eq!(
+            provider.search("nov 19 2026 11pm +5:30 GMT to utc")[0].title,
+            "November 19, 2026, 5:30 PM UTC"
+        );
+        // File and app names that start with a month stay a search.
+        for query in [
+            "may",
+            "march of the penguins",
+            "june notes 2",
+            "mayday 5",
+            "october 2 notes",
+            "june 2026 budget",
+            "nov 31",
+            // The year is part of the date, not the start of a clock.
+            "nov 19 2026 notes",
+            "dec 25 2026 photos",
+        ] {
+            assert!(!provider.auto_claim(query), "{query}");
+        }
+        // A clock being typed after a dated prefix still keeps the row.
+        for query in ["nov 19 2026 1", "nov 19 2026 11:0", "nov 19 11:0"] {
+            assert!(provider.auto_claim(query), "{query}");
+        }
+    }
+
+    /// Detection and search must both return for malformed input, never panic.
+    fn assert_empty_state(provider: &CalcProvider, query: &str) {
+        provider.auto_claim(query);
+        let items = provider.search(query);
+        assert!(
+            items
+                .first()
+                .is_none_or(|item| matches!(item.action, CommandAction::EmptyState)),
+            "{query}: {items:?}"
+        );
+    }
+
+    #[test]
+    fn percentages_after_multibyte_characters_never_panic() {
+        let provider = isolated_provider();
+        // The engine reads "×" as multiplication, so these are answers.
+        for query in ["2×10%", "2 × 10%", "2×+10%"] {
+            assert!(provider.auto_claim(query), "{query}");
+            assert_eq!(provider.search(query)[0].title, "20%", "{query}");
+        }
+        for query in ["é10%", "100 + é10%", "100 - ×10%"] {
+            assert_empty_state(&provider, query);
+        }
+    }
+
+    #[test]
+    fn malformed_utc_offsets_report_invalid_time() {
+        let provider = isolated_provider();
+        for query in [
+            "12pm utc+é1 to ist",
+            "12pm gmt-é to ist",
+            "12pm utc+1é to ist",
+            "12pm utc+é:30 to ist",
+            "12pm é+5:30 gmt to ist",
+        ] {
+            assert_empty_state(&provider, query);
+        }
+        assert!(provider.auto_claim("12pm utc+é1 to ist"));
+        assert_eq!(
+            provider.search("12pm utc+é1 to ist")[0].title,
+            "Invalid date or time. Try another expression."
+        );
+    }
+
+    #[test]
+    fn named_clocks_are_claimed_with_clock_syntax() {
+        let provider = isolated_provider();
+        for (query, expected) in [
+            ("noon + 1", "1:00 PM"),
+            ("noon+1", "1:00 PM"),
+            ("midnight + 1h30m", "1:30 AM"),
+            ("Midnight+1h30m", "1:30 AM"),
+            ("noon - 30 min", "11:30 AM"),
+            ("noon utc to ist", "5:30 PM IST"),
+        ] {
+            assert!(provider.auto_claim(query), "{query}");
+            assert_eq!(provider.search(query)[0].title, expected, "{query}");
+        }
+        assert!(provider.auto_claim("noon ist"));
+        assert!(provider.auto_claim("Midnight UTC"));
+        // Multiword places keep their spaces, as everywhere else.
+        for (spaced, compact) in [
+            ("noon new delhi", "noon newdelhi"),
+            ("Noon New Delhi", "noon newdelhi"),
+            ("midnight sao paulo", "midnight saopaulo"),
+            ("noon new york to london", "noon newyork to london"),
+        ] {
+            assert!(provider.auto_claim(spaced), "{spaced}");
+            assert!(provider.auto_claim(compact), "{compact}");
+            assert_eq!(
+                provider.search(spaced)[0].title,
+                provider.search(compact)[0].title,
+                "{spaced}"
+            );
+        }
+        // A keyword being typed after the place keeps the row steady.
+        for query in [
+            "noon in tokyo",
+            "midnight in new york",
+            "noon to ist",
+            "noon utc t",
+            "midnight sao paulo t",
+        ] {
+            assert!(provider.auto_claim(query), "{query}");
+        }
+        // Names that only start like a clock stay searches.
+        for query in [
+            "noon",
+            "midnight",
+            "midnight commander",
+            "noon notes 2",
+            "noonday 5",
+            "midnightist",
+            "noon new music",
+            "midnight in the garden",
+            "noon to the moon",
+        ] {
+            assert!(!provider.auto_claim(query), "{query}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn month_first_dates_with_a_generic_zone() {
+        let provider = isolated_provider();
+        for query in [
+            "nov 19 11pm ET",
+            "nov 19 11:00pm ET",
+            "nov 19 11:00 PM ET",
+            "nov 19 11PM ET",
+            "nov 19 11pm +5:30 GMT",
+            "nov 19 11pm +5:30 UTC",
+            "nov 19 11pm GMT+5:30",
+        ] {
+            assert!(provider.auto_claim(query), "{query}");
+            let result = &provider.search(query)[0];
+            assert!(
+                !matches!(result.action, CommandAction::EmptyState),
+                "{query}: {}",
+                result.title
+            );
+        }
+        assert_eq!(
+            provider.search("nov 19 11pm ET")[0].subtitle.as_deref(),
+            Some("11:00 PM EST")
+        );
+        assert!(
+            provider.search("nov 19 11pm ET to IST")[0]
+                .title
+                .ends_with("9:30 AM IST")
+        );
     }
 
     #[test]
