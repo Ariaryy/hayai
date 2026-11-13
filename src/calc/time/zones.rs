@@ -553,6 +553,10 @@ fn utc_offset(compact: &str) -> Option<(i32, String)> {
         _ => return None,
     };
     let digits = &rest[1..];
+    // Byte slicing below is only safe on ASCII ("utc+é1" must not panic).
+    if !digits.is_ascii() {
+        return None;
+    }
     let (hours, minutes) = match digits.split_once(':') {
         Some(parts) => parts,
         None if digits.len() > 2 => digits.split_at(digits.len() - 2),

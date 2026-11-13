@@ -674,6 +674,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn malformed_utc_offsets_report_invalid_time() {
+        let provider = isolated_provider();
+        for query in [
+            "12pm utc+é1 to ist",
+            "12pm gmt-é to ist",
+            "12pm utc+1é to ist",
+            "12pm utc+é:30 to ist",
+            "12pm é+5:30 gmt to ist",
+        ] {
+            assert_empty_state(&provider, query);
+        }
+        assert!(provider.auto_claim("12pm utc+é1 to ist"));
+        assert_eq!(
+            provider.search("12pm utc+é1 to ist")[0].title,
+            "Invalid date or time. Try another expression."
+        );
+    }
+
     #[cfg(windows)]
     #[test]
     fn month_first_dates_with_a_generic_zone() {
