@@ -323,9 +323,14 @@ fn percentage_change(input: &str) -> Option<String> {
         });
     }
     let body = input.strip_suffix('%')?.trim_end();
-    let start = body
-        .rfind(|c: char| !(c.is_ascii_digit() || c == '.'))
-        .map_or(0, |index| index + 1);
+    // Count back over ASCII bytes only, so the cut never lands inside a
+    // multibyte character such as "×" in "2×10%".
+    let start = body.len()
+        - body
+            .bytes()
+            .rev()
+            .take_while(|byte| byte.is_ascii_digit() || *byte == b'.')
+            .count();
     let percent = &body[start..];
     if !plain_number(percent) {
         return None;

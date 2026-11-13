@@ -649,6 +649,31 @@ mod tests {
         }
     }
 
+    /// Detection and search must both return for malformed input, never panic.
+    fn assert_empty_state(provider: &CalcProvider, query: &str) {
+        provider.auto_claim(query);
+        let items = provider.search(query);
+        assert!(
+            items
+                .first()
+                .is_none_or(|item| matches!(item.action, CommandAction::EmptyState)),
+            "{query}: {items:?}"
+        );
+    }
+
+    #[test]
+    fn percentages_after_multibyte_characters_never_panic() {
+        let provider = isolated_provider();
+        // The engine reads "×" as multiplication, so these are answers.
+        for query in ["2×10%", "2 × 10%", "2×+10%"] {
+            assert!(provider.auto_claim(query), "{query}");
+            assert_eq!(provider.search(query)[0].title, "20%", "{query}");
+        }
+        for query in ["é10%", "100 + é10%", "100 - ×10%"] {
+            assert_empty_state(&provider, query);
+        }
+    }
+
     #[cfg(windows)]
     #[test]
     fn month_first_dates_with_a_generic_zone() {
