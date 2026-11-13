@@ -272,6 +272,27 @@ pub fn month_first_clock_started(input: &str) -> bool {
         })
 }
 
+/// "noon + 1", "midnight utc": a named clock followed by clock syntax, an
+/// operator or a known zone. App names such as "midnight commander" are not.
+pub fn named_clock_with_syntax(input: &str) -> bool {
+    let input = input.trim();
+    let Some(rest) = ["noon", "midnight"].iter().find_map(|name| {
+        input
+            .get(..name.len())
+            .filter(|prefix| prefix.eq_ignore_ascii_case(name))
+            .map(|_| &input[name.len()..])
+    }) else {
+        return false;
+    };
+    // Operators may touch the name ("noon+1"); a zone is a separate word.
+    rest.trim_start().starts_with(['+', '-'])
+        || (rest.starts_with(char::is_whitespace)
+            && rest
+                .split_whitespace()
+                .next()
+                .is_some_and(|zone| resolve_zone(zone).is_some()))
+}
+
 fn valid_date(year: i64, month: u32, day: u32) -> bool {
     (1..=9999).contains(&year)
         && (1..=12).contains(&month)

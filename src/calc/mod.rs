@@ -206,6 +206,7 @@ fn is_candidate(input: &str) -> bool {
             || lower.starts_with("now ")
             || lower.starts_with("days ")
             || lower.ends_with(" time")
+            || (matches!(c, 'n' | 'N' | 'm' | 'M') && time::named_clock_with_syntax(&lower))
             || (c.is_ascii_alphabetic()
                 && (grammar::split_conversion(input).is_some()
                     || lower
@@ -703,6 +704,34 @@ mod tests {
             provider.search("12pm utc+é1 to ist")[0].title,
             "Invalid date or time. Try another expression."
         );
+    }
+
+    #[test]
+    fn named_clocks_are_claimed_with_clock_syntax() {
+        let provider = isolated_provider();
+        for (query, expected) in [
+            ("noon + 1", "1:00 PM"),
+            ("noon+1", "1:00 PM"),
+            ("midnight + 1h30m", "1:30 AM"),
+            ("Midnight+1h30m", "1:30 AM"),
+            ("noon - 30 min", "11:30 AM"),
+            ("noon utc to ist", "5:30 PM IST"),
+        ] {
+            assert!(provider.auto_claim(query), "{query}");
+            assert_eq!(provider.search(query)[0].title, expected, "{query}");
+        }
+        assert!(provider.auto_claim("noon ist"));
+        assert!(provider.auto_claim("Midnight UTC"));
+        for query in [
+            "noon",
+            "midnight",
+            "midnight commander",
+            "noon notes 2",
+            "noonday 5",
+            "midnightist",
+        ] {
+            assert!(!provider.auto_claim(query), "{query}");
+        }
     }
 
     #[cfg(windows)]
