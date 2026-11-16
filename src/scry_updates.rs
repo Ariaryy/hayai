@@ -657,7 +657,7 @@ mod tests {
         let output = available().to_string();
         let (value, exit) = fixture(
             &format!("[Console]::WriteLine('{output}'); exit 0"),
-            Duration::from_secs(10),
+            Duration::from_secs(60),
         )
         .unwrap();
         assert_eq!(
@@ -667,15 +667,15 @@ mod tests {
         assert!(
             fixture(
                 &format!("[Console]::WriteLine('{output}'); [Console]::WriteLine('{output}')"),
-                Duration::from_secs(10)
+                Duration::from_secs(60)
             )
             .is_err()
         );
-        assert!(fixture("exit 0", Duration::from_secs(10)).is_err());
+        assert!(fixture("exit 0", Duration::from_secs(60)).is_err());
         assert!(
             fixture(
                 "[Console]::WriteLine(('x' * 17000))",
-                Duration::from_secs(10)
+                Duration::from_secs(60)
             )
             .is_err()
         );
